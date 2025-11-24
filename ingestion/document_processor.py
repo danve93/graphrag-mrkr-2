@@ -155,7 +155,7 @@ class DocumentProcessor:
         referenced_chunks = {
             cid
             for entity in entity_dict.values()
-            for cid in (entity.source_chunks or [])
+            for cid in (entity.source_text_units or entity.source_chunks or [])
             if cid
         }
         relationships_requested = sum(len(rels) for rels in relationship_dict.values())
@@ -445,11 +445,14 @@ class DocumentProcessor:
                         entity.type,
                         entity.description,
                         entity.importance_score,
-                        entity.source_chunks or [],
+                        entity.source_text_units or entity.source_chunks or [],
+                        entity.source_text_units or entity.source_chunks or [],
                     )
                     # Link chunks to entity (run in executor to avoid blocking)
                     loop = asyncio.get_running_loop()
-                    for chunk_id in entity.source_chunks or []:
+                    for chunk_id in (
+                        entity.source_text_units or entity.source_chunks or []
+                    ):
                         try:
                             await loop.run_in_executor(
                                 None,
@@ -492,10 +495,15 @@ class DocumentProcessor:
                     graph_db.create_entity_relationship(
                         entity_id1=source_id,
                         entity_id2=target_id,
-                        relationship_type="RELATED_TO",
+                        relationship_type=relationship.relationship_type
+                        or "RELATED_TO",
                         description=relationship.description,
                         strength=relationship.strength,
-                        source_chunks=relationship.source_chunks or [],
+                        source_chunks=(
+                            relationship.source_text_units
+                            or relationship.source_chunks
+                            or []
+                        ),
                     )
                     created_relationships += 1
                 except Exception as e:

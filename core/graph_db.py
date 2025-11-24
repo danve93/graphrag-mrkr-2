@@ -40,6 +40,7 @@ class Relationship:
     description: str = ""
     strength: float = 0.5
     source_chunks: List[str] = field(default_factory=list)
+    source_text_units: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -886,10 +887,13 @@ class GraphDB:
         description: str,
         importance_score: float = 0.5,
         source_chunks: Optional[List[str]] = None,
+        source_text_units: Optional[List[str]] = None,
     ) -> None:
         """Create an entity node in the graph with embedding (async version)."""
         if source_chunks is None:
             source_chunks = []
+        if source_text_units is None:
+            source_text_units = list(source_chunks)
 
         # Generate embedding for the entity using name and description
         entity_text = f"{name}: {description}"
@@ -905,6 +909,7 @@ class GraphDB:
             description,
             importance_score,
             source_chunks,
+            source_text_units,
             embedding,
         )
 
@@ -916,6 +921,7 @@ class GraphDB:
         description: str,
         importance_score: float,
         source_chunks: List[str],
+        source_text_units: List[str],
         embedding: List[float],
     ) -> None:
         """Synchronous helper for creating entity node in database."""
@@ -928,6 +934,7 @@ class GraphDB:
                     e.description = $description,
                     e.importance_score = $importance_score,
                     e.source_chunks = $source_chunks,
+                    e.source_text_units = $source_text_units,
                     e.embedding = $embedding,
                     e.updated_at = timestamp()
                 """,
@@ -937,6 +944,7 @@ class GraphDB:
                 description=description,
                 importance_score=importance_score,
                 source_chunks=source_chunks,
+                source_text_units=source_text_units,
                 embedding=embedding,
             )
 
@@ -948,10 +956,13 @@ class GraphDB:
         description: str,
         importance_score: float = 0.5,
         source_chunks: Optional[List[str]] = None,
+        source_text_units: Optional[List[str]] = None,
     ) -> None:
         """Create an entity node in the graph with embedding (sync version kept for compatibility)."""
         if source_chunks is None:
             source_chunks = []
+        if source_text_units is None:
+            source_text_units = list(source_chunks)
 
         # Generate embedding for the entity using name and description
         entity_text = f"{name}: {description}"
@@ -964,6 +975,7 @@ class GraphDB:
             description,
             importance_score,
             source_chunks,
+            source_text_units,
             embedding,
         )
 
@@ -1122,10 +1134,13 @@ class GraphDB:
         description: str,
         strength: float = 0.5,
         source_chunks: Optional[List[str]] = None,
+        source_text_units: Optional[List[str]] = None,
     ) -> None:
         """Create a relationship between two entities."""
         if source_chunks is None:
             source_chunks = []
+        if source_text_units is None:
+            source_text_units = list(source_chunks)
 
         with self.driver.session() as session:  # type: ignore
             session.run(
@@ -1137,6 +1152,7 @@ class GraphDB:
                     r.description = $description,
                     r.strength = $strength,
                     r.source_chunks = $source_chunks,
+                    r.source_text_units = $source_text_units,
                     r.updated_at = timestamp()
                 """,
                 entity_id1=entity_id1,
@@ -1145,6 +1161,7 @@ class GraphDB:
                 description=description,
                 strength=strength,
                 source_chunks=source_chunks,
+                source_text_units=source_text_units,
             )
 
     def create_chunk_entity_relationship(self, chunk_id: str, entity_id: str) -> None:
@@ -1873,6 +1890,10 @@ class GraphDB:
                                 description=rel_data.get("rel_description", ""),
                                 strength=rel_data.get("rel_strength", 0.5),
                                 source_chunks=rel_data.get("source_chunks", []),
+                                source_text_units=rel_data.get(
+                                    "source_text_units",
+                                    rel_data.get("source_chunks", []),
+                                ),
                             )
 
                             # Calculate new path score
