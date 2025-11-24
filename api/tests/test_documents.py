@@ -94,3 +94,44 @@ def test_get_document_preview_redirect(client: TestClient, monkeypatch: pytest.M
     response = client.get("/api/documents/doc-123/preview", follow_redirects=False)
     assert response.status_code in (302, 303, 307)
     assert response.headers["location"] == preview_url
+
+
+def test_get_document_preview_by_chunk_id(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Simulate no chunk in document chunk list, but low-level content getter returns the chunk
+    chunk_id = "chunk-42"
+
+    def fake_get_document_chunks(doc_id: str):
+        return []
+
+    def fake_get_chunk_content_sync(cid: str):
+        assert cid == chunk_id
+        return "Chunk content by id"
+
+    monkeypatch.setattr(graph_db, "get_document_chunks", fake_get_document_chunks)
+    monkeypatch.setattr(graph_db, "_get_chunk_content_sync", fake_get_chunk_content_sync)
+
+    response = client.get(f"/api/documents/doc-123/preview?chunk_id={chunk_id}")
+    assert response.status_code == 200
+    j = response.json()
+    assert j["document_id"] == "doc-123"
+    assert j["chunk_id"] == chunk_id
+    assert j["content"] == "Chunk content by id"
+
+
+def test_get_document_preview_by_chunk_index(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Simulate a document with chunks and verify index lookup
+    def fake_get_document_chunks(doc_id: str):
+        return [
+            {"chunk_id": "c0", "content": "First", "index": 0},
+            {"chunk_id": "c1", "content": "Second", "index": 1},
+        ]
+
+    monkeypatch.setattr(graph_db, "get_document_chunks", fake_get_document_chunks)
+
+    response = client.get("/api/documents/doc-123/preview?chunk_index=1")
+    assert response.status_code == 200
+    j = response.json()
+    assert j["document_id"] == "doc-123"
+    assert j["chunk_id"] == "c1"
+    assert j["chunk_index"] == 1
+    assert j["content"] == "Second"

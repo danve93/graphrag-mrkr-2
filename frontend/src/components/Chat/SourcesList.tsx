@@ -165,11 +165,29 @@ export default function SourcesList({ sources }: SourcesListProps) {
                   {doc.chunks.map((chunk, chunkIndex) => {
                     const similarity = chunk.similarity || chunk.relevance_score || 0
                     const handleChunkClick = () => {
+                      // Push a deep-link URL so the document view can be shared/bookmarked
+                      try {
+                        const params = new URLSearchParams(window.location.search)
+                        params.set('doc', doc.documentId)
+                        if (chunk.chunk_index !== undefined) {
+                          params.set('chunk', String(chunk.chunk_index))
+                        } else if (chunk.chunk_id) {
+                          params.set('chunk_id', String(chunk.chunk_id))
+                        }
+                        const newUrl = `${window.location.pathname}?${params.toString()}`
+                        window.history.pushState({}, '', newUrl)
+                      } catch (e) {
+                        // ignore if not available
+                      }
+
                       if (chunk.chunk_index !== undefined) {
                         // Regular chunk - navigate to specific chunk
                         selectDocumentChunk(doc.documentId, chunk.chunk_index)
+                      } else if (chunk.chunk_id) {
+                        // Use chunk id when index not available
+                        selectDocumentChunk(doc.documentId, chunk.chunk_id)
                       } else {
-                        // Entity source - just navigate to the document
+                        // Fallback: open document
                         selectDocumentChunk(doc.documentId, 0)
                       }
                     }

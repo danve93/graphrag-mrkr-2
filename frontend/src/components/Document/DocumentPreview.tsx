@@ -4,20 +4,22 @@
 
 import { useEffect, useState } from 'react'
 import { XMarkIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 type DocumentPreviewProps = {
-  previewUrl: string
+  previewUrl?: string | null
   mimeType?: string
+  content?: string | null
   onClose?: () => void
 }
 
 const isPdf = (mimeType?: string) => mimeType?.includes('pdf') ?? false
 const isImage = (mimeType?: string) => mimeType?.startsWith('image/') ?? false
 const isMarkdown = (mimeType?: string) => 
-  (mimeType?.includes('markdown') || mimeType?.includes('text/markdown')) ?? false
+  (mimeType?.includes('markdown') || mimeType?.includes('text/markdown') || mimeType?.includes('text/x-markdown')) ?? false
+const isPlainText = (mimeType?: string) => !mimeType ? false : mimeType === 'text/plain'
+const isTextPreviewable = (mimeType?: string) => isMarkdown(mimeType) || isPlainText(mimeType)
 const isOfficeDoc = (mimeType?: string) => {
   if (!mimeType) return false
   return (
@@ -33,9 +35,9 @@ const isOfficeDoc = (mimeType?: string) => {
   )
 }
 
-export default function DocumentPreview({ previewUrl, mimeType, onClose }: DocumentPreviewProps) {
-  const [markdownContent, setMarkdownContent] = useState<string>('')
-  const [isLoadingMarkdown, setIsLoadingMarkdown] = useState(false)
+export default function DocumentPreview({ previewUrl, mimeType, content, onClose }: DocumentPreviewProps) {
+  const [htmlContent, setHtmlContent] = useState<string>('')
+  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
     const handleEsc = (event: KeyboardEvent) => {
@@ -48,23 +50,229 @@ export default function DocumentPreview({ previewUrl, mimeType, onClose }: Docum
     return () => document.removeEventListener('keydown', handleEsc)
   }, [onClose])
 
-  // Fetch markdown content if it's a markdown file
+  // Convert markdown content to HTML and wrap in a complete HTML document
   useEffect(() => {
-    if (isMarkdown(mimeType)) {
-      setIsLoadingMarkdown(true)
-      fetch(previewUrl)
-        .then(res => res.text())
-        .then(text => {
-          setMarkdownContent(text)
-          setIsLoadingMarkdown(false)
-        })
-        .catch(err => {
-          console.error('Failed to load markdown:', err)
-          setMarkdownContent('Failed to load markdown content')
-          setIsLoadingMarkdown(false)
-        })
+    if (!content && !previewUrl) return
+
+    setIsLoading(true)
+
+    const processMarkdown = async () => {
+      try {
+        let markdownText = content
+
+        // If no content but we have a URL, fetch it
+        if (!markdownText && previewUrl) {
+          const res = await fetch(previewUrl)
+          if (!res.ok) throw new Error('Failed to fetch content')
+          markdownText = await res.text()
+        }
+
+        if (!markdownText) {
+          setHtmlContent('<p>No content available</p>')
+          setIsLoading(false)
+          return
+        }
+
+        // Convert markdown to HTML
+        const rawHtml = await marked(markdownText)
+
+        // Sanitize HTML to prevent XSS
+        const cleanHtml = DOMPurify.sanitize(rawHtml)
+
+        // Wrap in a complete HTML document with styling
+        const fullHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document Preview</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
     }
-  }, [previewUrl, mimeType])
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+      line-height: 1.6;
+      color: #1f2937;
+      background: #fff;
+      padding: 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #1f2937;
+        color: #f3f4f6;
+      }
+      
+      a {
+        color: #60a5fa;
+      }
+      
+      a:visited {
+        color: #a78bfa;
+      }
+      
+      code {
+        background: #111827 !important;
+        color: #e5e7eb;
+      }
+      
+      pre {
+        background: #111827 !important;
+        color: #e5e7eb;
+      }
+      
+      blockquote {
+        border-left-color: #4b5563;
+        color: #d1d5db;
+      }
+      
+      table {
+        border-color: #4b5563;
+      }
+      
+      th, td {
+        border-color: #4b5563;
+      }
+    }
+    
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.5rem;
+      margin-bottom: 1rem;
+      font-weight: 600;
+    }
+    
+    h1 {
+      font-size: 2rem;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 0.5rem;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      h1 {
+        border-bottom-color: #4b5563;
+      }
+    }
+    
+    h2 {
+      font-size: 1.5rem;
+    }
+    
+    h3 {
+      font-size: 1.25rem;
+    }
+    
+    p {
+      margin-bottom: 1rem;
+    }
+    
+    a {
+      color: #2563eb;
+      text-decoration: none;
+    }
+    
+    a:hover {
+      text-decoration: underline;
+    }
+    
+    code {
+      background: #f3f4f6;
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+    
+    pre {
+      background: #f3f4f6;
+      padding: 1rem;
+      border-radius: 5px;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      font-family: 'Monaco', 'Courier New', monospace;
+    }
+    
+    pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+    }
+    
+    blockquote {
+      border-left: 4px solid #e5e7eb;
+      padding-left: 1rem;
+      margin-left: 0;
+      margin-bottom: 1rem;
+      color: #6b7280;
+    }
+    
+    ul, ol {
+      margin-left: 2rem;
+      margin-bottom: 1rem;
+    }
+    
+    li {
+      margin-bottom: 0.5rem;
+    }
+    
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 1rem;
+      border: 1px solid #e5e7eb;
+    }
+    
+    th, td {
+      border: 1px solid #e5e7eb;
+      padding: 0.75rem;
+      text-align: left;
+    }
+    
+    th {
+      background: #f9fafb;
+      font-weight: 600;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      th {
+        background: #111827;
+      }
+    }
+    
+    img {
+      max-width: 100%;
+      height: auto;
+      margin: 1rem 0;
+    }
+    
+    hr {
+      border: none;
+      border-top: 1px solid #e5e7eb;
+      margin: 2rem 0;
+    }
+  </style>
+</head>
+<body>
+${cleanHtml}
+</body>
+</html>`
+
+        setHtmlContent(fullHtml)
+      } catch (error) {
+        console.error('Failed to process markdown:', error)
+        setHtmlContent('<p>Failed to process markdown content</p>')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    processMarkdown()
+  }, [content, previewUrl])
 
   // Generate Office Online viewer URL for Office documents
   const getOfficeViewerUrl = (url: string) => {
@@ -73,130 +281,93 @@ export default function DocumentPreview({ previewUrl, mimeType, onClose }: Docum
   }
 
   const renderPreviewContent = () => {
-    if (isPdf(mimeType)) {
+    if (isLoading) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-secondary-600 dark:text-secondary-400">Processing markdown...</div>
+        </div>
+      )
+    }
+
+    if (!htmlContent) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-secondary-600 dark:text-secondary-400">No content available</div>
+        </div>
+      )
+    }
+
+    // For markdown and text, render as HTML in iframe using srcdoc
+    if (isMarkdown(mimeType) || isPlainText(mimeType)) {
       return (
         <iframe
-          src={previewUrl}
-          title="Document preview"
-          className="w-full h-full rounded-lg border border-secondary-200"
+          srcDoc={htmlContent}
+          title="Markdown preview"
+          className="w-full h-full border-none rounded-lg"
+          sandbox="allow-same-origin"
         />
       )
     }
 
-    if (isImage(mimeType)) {
-      return (
-        <div className="flex items-center justify-center h-full">
-          <img
-            src={previewUrl}
-            alt="Document preview"
-            className="max-h-full max-w-full rounded-lg shadow"
-          />
-        </div>
-      )
-    }
-
-    if (isMarkdown(mimeType)) {
-      if (isLoadingMarkdown) {
+    // If we have a previewUrl for other file types
+    if (previewUrl) {
+      if (isPdf(mimeType)) {
         return (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-secondary-600 dark:text-secondary-400">Loading markdown...</div>
-          </div>
+          <iframe
+            src={previewUrl}
+            title="PDF preview"
+            className="w-full h-full rounded-lg border border-secondary-200"
+          />
         )
       }
-      return (
-        <div className="prose prose-secondary max-w-none p-6 bg-white dark:bg-secondary-800 rounded-lg">
-          <ReactMarkdown 
-            remarkPlugins={[remarkGfm, remarkBreaks]}
-            components={{
-              // Customize code blocks
-              code({ className, children, ...props }) {
-                const isInline = !className?.includes('language-')
-                return isInline ? (
-                  <code className="px-1.5 py-0.5 rounded bg-secondary-100 dark:bg-secondary-700 text-secondary-800 dark:text-secondary-200 text-sm font-mono" {...props}>
-                    {children}
-                  </code>
-                ) : (
-                  <code className={`block p-4 rounded bg-secondary-900 text-secondary-100 text-sm font-mono overflow-x-auto ${className}`} {...props}>
-                    {children}
-                  </code>
-                )
-              },
-              // Customize links to open in new tab
-              a({ children, href, ...props }) {
-                return (
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:text-primary-700 underline" {...props}>
-                    {children}
-                  </a>
-                )
-              }
-            }}
-          >
-            {markdownContent}
-          </ReactMarkdown>
-        </div>
-      )
-    }
 
-    if (isOfficeDoc(mimeType)) {
-      // For Office documents, we'll try multiple approaches
-      // First attempt: Microsoft Office Online viewer (requires publicly accessible URL)
-      // Second attempt: Direct iframe (may work for some browsers/formats)
-      
-      // Check if URL is absolute (publicly accessible)
-      const isAbsoluteUrl = previewUrl.startsWith('http://') || previewUrl.startsWith('https://')
-      
-      if (isAbsoluteUrl) {
-        // Use Office Online viewer for publicly accessible files
+      if (isImage(mimeType)) {
         return (
-          <div className="w-full h-full space-y-4">
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
-              <p className="font-medium">Office Document Viewer</p>
-              <p className="text-xs mt-1">
-                Using Microsoft Office Online viewer. If the document doesn&apos;t load, 
-                try opening it in a new tab or downloading it.
-              </p>
-            </div>
-            <iframe
-              src={getOfficeViewerUrl(previewUrl)}
-              title="Office document preview"
-              className="w-full h-[calc(100%-5rem)] rounded-lg border border-secondary-200"
+          <div className="flex items-center justify-center h-full">
+            <img
+              src={previewUrl}
+              alt="Document preview"
+              className="max-h-full max-w-full rounded-lg shadow"
             />
           </div>
         )
-      } else {
-        // For local files, show a message and download option
-        return (
-          <div className="flex flex-col items-center justify-center h-full space-y-4 p-8">
-            <div className="text-center space-y-2">
-              <div className="text-4xl">📄</div>
-              <h3 className="text-lg font-medium text-secondary-900">
-                Microsoft Office Document
-              </h3>
-              <p className="text-sm text-secondary-600 dark:text-secondary-400 max-w-md">
-                Office documents (Word, Excel, PowerPoint) cannot be previewed directly in the browser 
-                for local files. Please download the file to view it.
-              </p>
-            </div>
-            <a
-              href={previewUrl}
-              download
-              className="button-primary flex items-center gap-2"
-            >
-              <ArrowTopRightOnSquareIcon className="w-5 h-5" />
-              Download Document
-            </a>
-          </div>
-        )
       }
+
+      if (isOfficeDoc(mimeType)) {
+        const isAbsoluteUrl = previewUrl.startsWith('http://') || previewUrl.startsWith('https://')
+        if (isAbsoluteUrl) {
+          return (
+            <div className="w-full h-full space-y-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
+                <p className="font-medium">Office Document Viewer</p>
+                <p className="text-xs mt-1">
+                  Using Microsoft Office Online viewer. If the document doesn&apos;t load, 
+                  try opening it in a new tab or downloading it.
+                </p>
+              </div>
+              <iframe
+                src={getOfficeViewerUrl(previewUrl)}
+                title="Office document preview"
+                className="w-full h-[calc(100%-5rem)] rounded-lg border border-secondary-200"
+              />
+            </div>
+          )
+        }
+      }
+
+      return (
+        <iframe
+          src={previewUrl}
+          title="Document preview"
+          className="w-full h-full rounded-lg border border-secondary-200 dark:border-secondary-600 bg-white dark:bg-secondary-800"
+        />
+      )
     }
 
-    // Default fallback
     return (
-      <iframe
-        src={previewUrl}
-        title="Document preview"
-        className="w-full h-full rounded-lg border border-secondary-200 dark:border-secondary-600 bg-white dark:bg-secondary-800"
-      />
+      <div className="flex items-center justify-center h-full">
+        <div className="text-secondary-600 dark:text-secondary-400">Unable to preview this document</div>
+      </div>
     )
   }
 
@@ -209,15 +380,17 @@ export default function DocumentPreview({ previewUrl, mimeType, onClose }: Docum
             <p className="text-xs text-secondary-500 dark:text-secondary-400">Press Escape to close</p>
           </div>
           <div className="flex items-center gap-2">
-            <a
-              href={previewUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="button-ghost text-xs flex items-center gap-1"
-            >
-              <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-              Open in new tab
-            </a>
+            {previewUrl && (
+              <a
+                href={previewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="button-ghost text-xs flex items-center gap-1"
+              >
+                <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                Open in new tab
+              </a>
+            )}
             <button
               type="button"
               onClick={onClose}

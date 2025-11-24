@@ -90,6 +90,24 @@ def generate_response(
                 f"{chunk.get('chunk_index', i)}",
             }
 
+            # Build a preview URL that the frontend can deep-link to.
+            # Prefer chunk_index when available, otherwise fall back to chunk_id.
+            preview_url = None
+            try:
+                doc_id = source_info.get("document_id")
+                cidx = source_info.get("chunk_index")
+                cid = source_info.get("chunk_id")
+                if doc_id:
+                    if cidx is not None:
+                        preview_url = f"/api/documents/{doc_id}/preview?chunk_index={cidx}"
+                    elif cid:
+                        preview_url = f"/api/documents/{doc_id}/preview?chunk_id={cid}"
+            except Exception:
+                preview_url = None
+
+            if preview_url:
+                source_info["preview_url"] = preview_url
+
             # Add entity information if available
             retrieval_mode = chunk.get("retrieval_mode", "")
             retrieval_source = chunk.get("retrieval_source", "")
@@ -123,6 +141,11 @@ def generate_response(
                             "citation": source_info["citation"],
                             "similarity": source_info["similarity"],
                         }
+
+                        # Propagate preview_url to entity-level sources as well
+                        if source_info.get("preview_url"):
+                            entity_source["preview_url"] = source_info.get("preview_url")
+
                         if entity_source["citation"] not in seen_citations:
                             seen_citations.add(entity_source["citation"])
                             sources.append(entity_source)

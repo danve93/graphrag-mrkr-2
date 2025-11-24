@@ -268,7 +268,8 @@ export const api = {
       throw new Error(`API error: ${response.statusText}`)
     }
 
-    const contentType = response.headers.get('Content-Type') || ''
+    // headers may be unavailable for opaque cross-origin responses; guard access
+    const contentType = (response.headers && typeof response.headers.get === 'function') ? response.headers.get('Content-Type') || '' : ''
     if (contentType.includes('application/json')) {
       return response.json()
     }

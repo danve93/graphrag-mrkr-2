@@ -31,6 +31,7 @@ interface PreviewState {
   isLoading: boolean
   error?: string | null
   objectUrl?: string | null
+  content?: string | null
 }
 
 const initialPreviewState: PreviewState = {
@@ -39,6 +40,7 @@ const initialPreviewState: PreviewState = {
   mimeType: undefined,
   error: null,
   objectUrl: null,
+  content: null,
 }
 
 export default function DocumentView() {
@@ -88,6 +90,37 @@ export default function DocumentView() {
 
   const CHUNKS_LIMIT = 10
   const ENTITIES_PER_TYPE_LIMIT = 5
+
+  // On mount, support deep-linking via URL query params: ?doc=<id>&chunk=<index|id>
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const docParam = params.get('doc')
+      const chunkParam = params.get('chunk')
+      const chunkIdParam = params.get('chunk_id')
+      if (docParam) {
+        // Select document and optional chunk from URL
+        if (!selectedDocumentId || selectedDocumentId !== docParam) {
+          selectDocument(docParam)
+        }
+        if (chunkParam) {
+          const parsed = Number(chunkParam)
+          if (!Number.isNaN(parsed)) {
+            // chunk interpreted as index
+            // Use store action directly
+            const selectChunk = (useChatStore.getState && (useChatStore.getState() as any).selectDocumentChunk) || null
+            if (selectChunk) selectChunk(docParam, parsed)
+          }
+        } else if (chunkIdParam) {
+          const selectChunk = (useChatStore.getState && (useChatStore.getState() as any).selectDocumentChunk) || null
+          if (selectChunk) selectChunk(docParam, chunkIdParam)
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [])
 
   useEffect(() => {
     let isSubscribed = true
@@ -254,20 +287,48 @@ export default function DocumentView() {
       return
     }
 
-    setPreviewState({ url: null, mimeType: undefined, isLoading: true, error: null, objectUrl: null })
+    setPreviewState({ url: null, mimeType: undefined, isLoading: true, error: null, objectUrl: null, content: null })
 
     try {
       const response = await api.getDocumentPreview(selectedDocumentId)
 
+      // Handle various response formats from getDocumentPreview
       if ('preview_url' in response) {
+        // External preview URL (redirect)
         setPreviewState({ url: response.preview_url, mimeType: documentData?.mime_type, isLoading: false, error: null })
         return
       }
 
-      const mimeType = response.headers.get('Content-Type') || undefined
-      const blob = await response.blob()
-      const objectUrl = URL.createObjectURL(blob)
-      setPreviewState({ url: objectUrl, mimeType, isLoading: false, error: null, objectUrl })
+      if ('content' in response) {
+        // JSON response with inline content (markdown/text)
+        const mimeType = (response as any).mime_type || documentData?.mime_type
+        const content = (response as any).content
+        
+        // For markdown, we'll render it on the frontend and pass to DocumentPreview
+        setPreviewState({ 
+          url: null, 
+          mimeType, 
+          isLoading: false, 
+          error: null, 
+          objectUrl: null,
+          content
+        })
+        return
+      }
+
+      if ('object_url' in response) {
+        // Blob converted to object URL (non-JSON files)
+        setPreviewState({ 
+          url: (response as any).object_url, 
+          mimeType: (response as any).mime_type, 
+          isLoading: false, 
+          error: null, 
+          objectUrl: (response as any).object_url 
+        })
+        return
+      }
+
+      throw new Error('Unexpected response format from preview endpoint')
     } catch (previewError) {
       const errorMessage = previewError instanceof Error ? previewError.message : 'Unable to load preview'
       setPreviewState({ url: null, mimeType: undefined, isLoading: false, error: errorMessage, objectUrl: null })
@@ -1023,10 +1084,11 @@ export default function DocumentView() {
         )}
       </div>
 
-      {previewState.url && (
+      {(previewState.url || previewState.content) && (
         <DocumentPreview
           previewUrl={previewState.url}
           mimeType={previewState.mimeType}
+          content={previewState.content}
           onClose={handleClosePreview}
         />
       )}
