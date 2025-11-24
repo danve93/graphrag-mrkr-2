@@ -14,6 +14,7 @@ class ChatMessage(BaseModel):
     role: str = Field(..., description="Role of the message sender (user/assistant)")
     content: str = Field(..., description="Content of the message")
     timestamp: Optional[str] = None
+    message_id: Optional[str] = None
     sources: Optional[List[Dict[str, Any]]] = None
     quality_score: Optional[Dict[str, Any]] = None
     follow_up_questions: Optional[List[str]] = None
@@ -223,6 +224,7 @@ class ConversationSession(BaseModel):
     updated_at: str
     message_count: int
     preview: Optional[str] = None
+    deleted_at: Optional[str] = None
 
 
 class UpdateHashtagsRequest(BaseModel):
@@ -241,3 +243,47 @@ class ConversationHistory(BaseModel):
     messages: List[ChatMessage]
     created_at: str
     updated_at: str
+    deleted_at: Optional[str] = None
+
+
+class SessionCreateRequest(BaseModel):
+    """Request model for creating a session explicitly."""
+
+    session_id: Optional[str] = Field(
+        default=None, description="Optional session id to use for the new conversation"
+    )
+    title: Optional[str] = Field(
+        default=None, description="Optional human friendly title for the session"
+    )
+
+
+class MessageCreateRequest(BaseModel):
+    """Request model for adding a message to a session."""
+
+    role: str = Field(..., description="Role of the message sender")
+    content: str = Field(..., description="Raw message content")
+    sources: Optional[List[Dict[str, Any]]] = None
+    quality_score: Optional[Dict[str, Any]] = None
+    follow_up_questions: Optional[List[str]] = None
+    context_documents: Optional[List[str]] = None
+    context_document_labels: Optional[List[str]] = None
+    context_hashtags: Optional[List[str]] = None
+
+
+class MessageSearchResult(BaseModel):
+    """Result model for message search operations."""
+
+    session_id: str
+    message_id: str
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+    quality_score: Optional[Dict[str, Any]] = None
+    context_documents: List[str] = Field(default_factory=list)
+
+
+class MessageSearchResponse(BaseModel):
+    """Envelope for message search responses."""
+
+    query: str
+    results: List[MessageSearchResult]
