@@ -84,6 +84,8 @@ class DocumentUploadResponse(BaseModel):
     status: str
     chunks_created: int
     document_id: Optional[str] = None
+    processing_status: Optional[str] = None
+    processing_stage: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -108,6 +110,8 @@ class StageDocumentResponse(BaseModel):
     filename: str
     document_id: Optional[str] = None
     status: str
+    processing_status: Optional[str] = None
+    processing_stage: Optional[str] = None
     error: Optional[str] = None
 
 
