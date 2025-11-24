@@ -222,6 +222,10 @@ NEO4J_PASSWORD=your_password
 # Features
 ENABLE_ENTITY_EXTRACTION=true
 ENABLE_QUALITY_SCORING=true
+# Clustering & summaries
+ENABLE_CLUSTERING=true
+ENABLE_GRAPH_CLUSTERING=true
+SUMMARIZATION_BATCH_SIZE=20
 ```
 
 ### Advanced Configuration
@@ -231,6 +235,17 @@ Edit `config/settings.py` for fine-tuning:
 - Similarity thresholds
 - Graph expansion parameters
 - Multi-hop reasoning settings
+- Clustering toggles and summarization batch sizes
+
+### Operational Runbooks
+
+- **Ingestion → clustering → summaries**
+  1. Start dependencies: Neo4j (`docker compose up neo4j` or system service), your LLM provider (OpenAI key or local Ollama), and ensure the clustering worker can reach Neo4j.
+  2. Activate the backend virtualenv (`source .venv/bin/activate`) and run `python scripts/ingest_documents.py --input-dir <folder>` to push a small corpus.
+  3. Populate graph communities with `python scripts/run_clustering.py`; clustering is skipped when `ENABLE_CLUSTERING` or `ENABLE_GRAPH_CLUSTERING` is false.
+  4. Generate community summaries from ingested text units with `python -c "from core.community_summarizer import community_summarizer; community_summarizer.summarize_levels()"`.
+  5. Validate storage by checking Neo4j node properties (documents have summaries/types/hashtags; chunks and entities have community labels) and call the API (e.g., `/api/documents` or `/api/health`) to confirm responses include summary metadata.
+- **Required services**: Neo4j (with GDS), an LLM backend (OpenAI or Ollama), and the clustering job; ingestion and summarization will stall without them.
 
 ## 📚 Documentation
 

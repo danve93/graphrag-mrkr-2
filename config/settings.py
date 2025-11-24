@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     )
 
     # Graph Clustering Configuration
+    enable_clustering: bool = Field(
+        default=True,
+        description="High-level toggle for graph clustering and downstream summaries",
+    )
     enable_graph_clustering: bool = Field(
         default=True, description="Enable Leiden clustering jobs"
     )
@@ -132,6 +136,12 @@ class Settings(BaseSettings):
     default_edge_weight: float = Field(
         default=1.0,
         description="Fallback edge weight when no unit-level weight is present",
+    )
+
+    # Summarization Configuration
+    summarization_batch_size: int = Field(
+        default=20,
+        description="Number of chunks to include when building document summaries",
     )
 
     # Multi-hop Reasoning Configuration
