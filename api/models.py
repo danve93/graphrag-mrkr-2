@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from config.settings import settings
+
 
 class ChatMessage(BaseModel):
     """Chat message model."""
@@ -32,6 +34,34 @@ class ChatRequest(BaseModel):
     top_k: int = Field(5, description="Number of chunks to retrieve")
     temperature: float = Field(0.7, description="LLM temperature")
     use_multi_hop: bool = Field(False, description="Enable multi-hop reasoning")
+    chunk_weight: float = Field(
+        default=settings.hybrid_chunk_weight,
+        description="Weight to allocate to vector chunks",
+    )
+    entity_weight: Optional[float] = Field(
+        default=settings.hybrid_entity_weight,
+        description="Weight to allocate to entity-filtered chunks",
+    )
+    path_weight: Optional[float] = Field(
+        default=settings.hybrid_path_weight,
+        description="Weight to allocate to multi-hop path chunks",
+    )
+    max_hops: Optional[int] = Field(
+        default=settings.multi_hop_max_hops,
+        description="Depth limit for multi-hop traversal",
+    )
+    beam_size: Optional[int] = Field(
+        default=settings.multi_hop_beam_size,
+        description="Beam width for multi-hop traversal",
+    )
+    graph_expansion_depth: Optional[int] = Field(
+        default=settings.max_expansion_depth,
+        description="Depth limit for graph expansion",
+    )
+    restrict_to_context: bool = Field(
+        default=settings.default_context_restriction,
+        description="Restrict retrieval to provided context documents",
+    )
     stream: bool = Field(True, description="Enable streaming response")
     context_documents: List[str] = Field(
         default_factory=list,

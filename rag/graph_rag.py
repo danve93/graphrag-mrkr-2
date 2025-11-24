@@ -100,8 +100,14 @@ class GraphRAG:
             
             # Pass additional retrieval tuning parameters from state
             chunk_weight = state.get("chunk_weight", 0.5)
+            entity_weight = state.get("entity_weight", None)
+            path_weight = state.get("path_weight", None)
             graph_expansion = state.get("graph_expansion", True)
             use_multi_hop = state.get("use_multi_hop", False)
+            max_hops = state.get("max_hops", None)
+            beam_size = state.get("beam_size", None)
+            restrict_to_context = state.get("restrict_to_context", True)
+            expansion_depth = state.get("graph_expansion_depth", None)
 
             state["retrieved_chunks"] = retrieve_documents(
                 state.get("query", ""),
@@ -109,8 +115,14 @@ class GraphRAG:
                 state.get("retrieval_mode", "graph_enhanced"),
                 state.get("top_k", 5),
                 chunk_weight=chunk_weight,
+                entity_weight=entity_weight,
+                path_weight=path_weight,
                 graph_expansion=graph_expansion,
                 use_multi_hop=use_multi_hop,
+                max_hops=max_hops,
+                beam_size=beam_size,
+                restrict_to_context=restrict_to_context,
+                expansion_depth=expansion_depth,
                 context_documents=state.get("context_documents", []),
             )
             
@@ -187,8 +199,14 @@ class GraphRAG:
         top_k: int = 5,
         temperature: float = 0.7,
         chunk_weight: float = 0.5,
+        entity_weight: Optional[float] = None,
+        path_weight: Optional[float] = None,
         graph_expansion: bool = True,
         use_multi_hop: bool = False,
+        max_hops: Optional[int] = None,
+        beam_size: Optional[int] = None,
+        restrict_to_context: bool = True,
+        graph_expansion_depth: Optional[int] = None,
         chat_history: Optional[List[Dict[str, Any]]] = None,
         context_documents: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
@@ -201,8 +219,14 @@ class GraphRAG:
             top_k: Number of chunks to retrieve
             temperature: LLM temperature for response generation
             chunk_weight: Weight for chunk-based results in hybrid mode
+            entity_weight: Weight for entity-filtered results in hybrid mode
+            path_weight: Weight for path-based results in hybrid mode
             graph_expansion: Whether to use graph expansion
             use_multi_hop: Whether to use multi-hop reasoning
+            max_hops: Depth limit for multi-hop traversal
+            beam_size: Beam size for multi-hop traversal
+            restrict_to_context: Whether to restrict retrieval to provided context documents
+            graph_expansion_depth: Optional override for graph expansion depth
             chat_history: Optional conversation history for follow-up questions
 
         Returns:
@@ -220,8 +244,14 @@ class GraphRAG:
             state["temperature"] = temperature
             # Include hybrid tuning options provided by caller
             state["chunk_weight"] = chunk_weight
+            state["entity_weight"] = entity_weight
+            state["path_weight"] = path_weight
             state["graph_expansion"] = graph_expansion
             state["use_multi_hop"] = use_multi_hop
+            state["max_hops"] = max_hops
+            state["beam_size"] = beam_size
+            state["restrict_to_context"] = restrict_to_context
+            state["graph_expansion_depth"] = graph_expansion_depth
             # Add chat history for follow-up questions
             state["chat_history"] = chat_history or []
             state["context_documents"] = context_documents or []

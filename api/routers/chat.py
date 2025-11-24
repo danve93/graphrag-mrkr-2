@@ -231,6 +231,13 @@ async def _prepare_chat_context(
         top_k=request.top_k,
         temperature=request.temperature,
         use_multi_hop=request.use_multi_hop,
+        chunk_weight=request.chunk_weight,
+        entity_weight=request.entity_weight,
+        path_weight=request.path_weight,
+        max_hops=request.max_hops,
+        beam_size=request.beam_size,
+        restrict_to_context=request.restrict_to_context,
+        graph_expansion_depth=request.graph_expansion_depth,
         chat_history=chat_history,
         context_documents=context_documents,
     )
@@ -238,6 +245,15 @@ async def _prepare_chat_context(
     metadata = result.get("metadata", {}) or {}
     metadata["chat_history_turns"] = len(chat_history)
     metadata.setdefault("context_documents", context_documents)
+    metadata["retrieval_tuning"] = {
+        "chunk_weight": request.chunk_weight,
+        "entity_weight": request.entity_weight,
+        "path_weight": request.path_weight,
+        "max_hops": request.max_hops,
+        "beam_size": request.beam_size,
+        "graph_expansion_depth": request.graph_expansion_depth,
+        "restrict_to_context": request.restrict_to_context,
+    }
 
     quality_score = result.get("quality_score")
     if not quality_score:

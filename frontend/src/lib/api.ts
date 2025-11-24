@@ -19,6 +19,13 @@ export const api = {
       context_documents?: string[]
       context_document_labels?: string[]
       context_hashtags?: string[]
+      chunk_weight?: number
+      entity_weight?: number
+      path_weight?: number
+      max_hops?: number
+      beam_size?: number
+      graph_expansion_depth?: number
+      restrict_to_context?: boolean
       llm_overrides?: {
         model?: string
         temperature?: number

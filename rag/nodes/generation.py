@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List
 
 from core.llm import llm_manager
+from core.quality_scorer import quality_scorer
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,21 @@ def generate_response(
                 "quality_score": None,
             }
 
+        # Deduplicate chunks by chunk_id while keeping the best scoring version
+        deduped_chunks = {}
+        for chunk in context_chunks:
+            chunk_id = chunk.get("chunk_id") or chunk.get("id")
+            score = chunk.get("similarity", chunk.get("hybrid_score", 0.0))
+            if not chunk_id:
+                chunk_id = f"anon_{hash(chunk.get('content', ''))}"
+            current = deduped_chunks.get(chunk_id)
+            if not current or score > current.get("similarity", current.get("hybrid_score", 0.0)):
+                deduped_chunks[chunk_id] = chunk
+
         # Filter out chunks with 0.000 similarity before processing sources
         relevant_chunks = [
             chunk
-            for chunk in context_chunks
+            for chunk in deduped_chunks.values()
             if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
         ]
 
@@ -61,6 +73,7 @@ def generate_response(
 
         # Prepare sources information with entity support
         sources = []
+        seen_citations = set()
         for i, chunk in enumerate(relevant_chunks):
             source_info = {
                 "chunk_id": chunk.get("chunk_id", f"chunk_{i}"),
@@ -73,6 +86,8 @@ def generate_response(
                 ),
                 "metadata": chunk.get("metadata", {}),
                 "chunk_index": chunk.get("chunk_index"),
+                "citation": f"{chunk.get('document_name', 'Unknown Document')}#"
+                f"{chunk.get('chunk_index', i)}",
             }
 
             # Add entity information if available
@@ -105,18 +120,26 @@ def generate_response(
                             ],
                             "document_name": source_info["document_name"],
                             "filename": source_info["filename"],
+                            "citation": source_info["citation"],
+                            "similarity": source_info["similarity"],
                         }
-                        sources.append(entity_source)
+                        if entity_source["citation"] not in seen_citations:
+                            seen_citations.add(entity_source["citation"])
+                            sources.append(entity_source)
                 else:
                     # No entities, add as regular chunk
-                    sources.append(source_info)
+                    if source_info["citation"] not in seen_citations:
+                        seen_citations.add(source_info["citation"])
+                        sources.append(source_info)
             else:
                 # For chunk-based or hybrid mode, add entity info to chunk source
                 if entities:
                     source_info["contained_entities"] = entities
                     source_info["entity_enhanced"] = True
 
-                sources.append(source_info)
+                if source_info["citation"] not in seen_citations:
+                    seen_citations.add(source_info["citation"])
+                    sources.append(source_info)
 
         # Enhance response with analysis insights
         query_type = query_analysis.get("query_type", "factual")
@@ -137,13 +160,18 @@ def generate_response(
             )
         logger.info(f"Generated response using {len(relevant_chunks)} relevant chunks")
 
-        # Don't calculate quality score here - let it be done asynchronously
-        # during response streaming to reduce wait time for users
+        quality_score = quality_scorer.calculate_quality_score(
+            answer=response_data.get("answer", ""),
+            query=query,
+            context_chunks=relevant_chunks,
+            sources=sources,
+        )
+
         return {
             "response": response_data.get("answer", ""),
             "sources": sources,
             "metadata": metadata,
-            "quality_score": None,  # Will be calculated asynchronously
+            "quality_score": quality_score,
         }
 
     except Exception as e:

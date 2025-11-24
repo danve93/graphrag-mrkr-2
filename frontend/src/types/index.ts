@@ -27,6 +27,7 @@ export interface Source {
   chunk_index?: number
   contained_entities?: string[]
   metadata?: Record<string, any>
+  citation?: string
 }
 
 export interface QualityScore {
@@ -149,4 +150,11 @@ export interface ChatRequest {
   use_multi_hop?: boolean
   stream?: boolean
   context_documents?: string[]
+  chunk_weight?: number
+  entity_weight?: number
+  path_weight?: number
+  max_hops?: number
+  beam_size?: number
+  graph_expansion_depth?: number
+  restrict_to_context?: boolean
 }

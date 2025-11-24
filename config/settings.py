@@ -86,8 +86,15 @@ class Settings(BaseSettings):
     hybrid_chunk_weight: float = Field(
         default=0.6, description="Weight for chunk-based results"
     )
+    hybrid_entity_weight: float = Field(
+        default=0.4, description="Weight for entity-filtered results"
+    )
     enable_graph_expansion: bool = Field(
         default=True, description="Enable graph expansion"
+    )
+    default_context_restriction: bool = Field(
+        default=True,
+        description="Restrict retrieval to the provided context document set when available"
     )
 
     # Graph Expansion Limits
