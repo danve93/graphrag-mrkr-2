@@ -6,16 +6,10 @@
 
 version: '3.8'
 
-x-environment: &default-env
-  env_file:
-    - ./.env.docker
-
 services:
   neo4j:
     image: neo4j:5.21
     container_name: neo4j
-    env_file:
-      - ./.env.docker
     environment:
       - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
       - NEO4J_PLUGINS=["graph-data-science"]
@@ -41,7 +35,6 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: graphrag-backend
-    <<: *default-env
     environment:
       # LLM provider selection: 'openai' or 'ollama'
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
