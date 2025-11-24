@@ -915,6 +915,122 @@ class GraphDB:
                     "chunk_entity_relations": 0,
                 }
 
+    def get_clustered_graph(
+        self,
+        community_id: Optional[int] = None,
+        node_type: Optional[str] = None,
+        level: Optional[int] = None,
+        limit: int = 300,
+    ) -> Dict[str, Any]:
+        """Return clustered graph data with community and degree metadata."""
+
+        filters = []
+        params: Dict[str, Any] = {
+            "limit": max(1, min(limit, 1000)),
+        }
+
+        if community_id is not None:
+            filters.append("e.community_id = $community_id")
+            params["community_id"] = community_id
+        if node_type:
+            filters.append("e.type = $node_type")
+            params["node_type"] = node_type
+        if level is not None:
+            filters.append("e.level = $community_level")
+            params["community_level"] = level
+
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+
+        query = f"""
+            MATCH (e:Entity)
+            {where_clause}
+            WITH collect(e)[0..$limit] AS selected
+            UNWIND selected AS e
+            OPTIONAL MATCH (e)-[r:RELATED_TO]-(n:Entity)
+            WITH collect(DISTINCT e) AS selectedNodes,
+                 collect(DISTINCT n) AS neighborNodes,
+                 collect(DISTINCT r) AS relatedEdges
+            WITH selectedNodes + neighborNodes AS rawNodes, relatedEdges
+            UNWIND rawNodes AS node
+            WITH collect(DISTINCT node) AS allNodes, relatedEdges
+            UNWIND allNodes AS node
+            OPTIONAL MATCH (node)-[rel:RELATED_TO]-()
+            WITH allNodes, relatedEdges, node, count(DISTINCT rel) AS degree
+            OPTIONAL MATCH (node)<-[:CONTAINS_ENTITY]-(c:Chunk)<-[:HAS_CHUNK]-(d:Document)
+            WITH
+                allNodes,
+                relatedEdges,
+                node,
+                degree,
+                collect(DISTINCT {document_id: d.id, document_name: coalesce(d.original_filename, d.filename)}) AS docs
+            WITH
+                allNodes,
+                relatedEdges,
+                collect(DISTINCT {
+                    id: node.id,
+                    label: node.name,
+                    type: node.type,
+                    community_id: node.community_id,
+                    level: node.level,
+                    degree: degree,
+                    documents: [doc IN docs WHERE doc.document_id IS NOT NULL]
+                }) AS nodes
+            WITH nodes, relatedEdges, [n IN nodes | n.id] AS nodeIds
+            UNWIND relatedEdges AS rel
+            WITH nodes, nodeIds, rel
+            MATCH (s:Entity)-[rel]-(t:Entity)
+            WHERE s.id IN nodeIds AND t.id IN nodeIds
+            WITH nodes, rel, coalesce(rel.source_text_units, []) AS tus
+            WITH nodes, rel, CASE WHEN size(tus) = 0 THEN [NULL] ELSE tus END AS textUnitIds
+            UNWIND textUnitIds AS tu
+            OPTIONAL MATCH (c:Chunk {id: tu})<-[:HAS_CHUNK]-(d:Document)
+            WITH
+                nodes,
+                rel,
+                collect(DISTINCT CASE WHEN tu IS NULL THEN NULL ELSE {id: tu, document_id: d.id, document_name: coalesce(d.original_filename, d.filename)} END) AS textUnits
+            RETURN
+                nodes,
+                collect(DISTINCT {
+                    source: startNode(rel).id,
+                    target: endNode(rel).id,
+                    type: rel.type,
+                    weight: coalesce(rel.strength, 0.5),
+                    description: rel.description,
+                    text_units: [tu IN textUnits WHERE tu IS NOT NULL]
+                }) AS edges
+        """
+
+        with self.driver.session() as session:  # type: ignore
+            graph_result = session.run(query, **params).single()
+            nodes = graph_result["nodes"] if graph_result else []
+            edges = graph_result["edges"] if graph_result else []
+
+            community_result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE e.community_id IS NOT NULL AND e.level IS NOT NULL
+                RETURN DISTINCT e.community_id AS community_id, e.level AS level
+                ORDER BY community_id ASC
+                """
+            ).data()
+
+            node_types_result = session.run(
+                """
+                MATCH (e:Entity)
+                RETURN DISTINCT e.type AS type
+                ORDER BY type ASC
+                """
+            ).data()
+
+            node_types = [record["type"] for record in node_types_result if record.get("type")]
+
+        return {
+            "nodes": nodes or [],
+            "edges": edges or [],
+            "communities": community_result or [],
+            "node_types": node_types,
+        }
+
     def get_entity_extraction_status(self) -> Dict[str, Any]:
         """Get entity extraction status for all documents."""
         with self.driver.session() as session:  # type: ignore

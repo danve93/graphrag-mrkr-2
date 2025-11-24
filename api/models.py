@@ -321,3 +321,57 @@ class MessageSearchResponse(BaseModel):
 
     query: str
     results: List[MessageSearchResult]
+
+
+class GraphDocumentRef(BaseModel):
+    """Reference to a document connected to an entity or text unit."""
+
+    document_id: Optional[str] = None
+    document_name: Optional[str] = None
+
+
+class GraphTextUnit(BaseModel):
+    """TextUnit or chunk provenance for relationships."""
+
+    id: str
+    document_id: Optional[str] = None
+    document_name: Optional[str] = None
+
+
+class GraphNode(BaseModel):
+    """Graph node enriched with clustering metadata."""
+
+    id: str
+    label: str
+    type: Optional[str] = None
+    community_id: Optional[int] = None
+    level: Optional[int] = None
+    degree: int = 0
+    documents: List[GraphDocumentRef] = Field(default_factory=list)
+
+
+class GraphEdge(BaseModel):
+    """Graph edge with strength and provenance."""
+
+    source: str
+    target: str
+    type: Optional[str] = None
+    weight: float = Field(0.5, description="Relationship strength or weight")
+    description: Optional[str] = None
+    text_units: List[GraphTextUnit] = Field(default_factory=list)
+
+
+class GraphCommunity(BaseModel):
+    """Community metadata."""
+
+    community_id: int
+    level: Optional[int] = None
+
+
+class GraphResponse(BaseModel):
+    """Clustered graph payload with nodes, edges, and filter metadata."""
+
+    nodes: List[GraphNode]
+    edges: List[GraphEdge]
+    communities: List[GraphCommunity]
+    node_types: List[str]
