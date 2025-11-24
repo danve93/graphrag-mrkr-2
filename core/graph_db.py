@@ -778,6 +778,108 @@ class GraphDB:
             )
             return [record.data() for record in result]
 
+    def get_community_levels(self) -> List[int]:
+        """Return sorted community levels that have assignments."""
+
+        with self.driver.session() as session:  # type: ignore
+            result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE e.community_id IS NOT NULL AND e.level IS NOT NULL
+                RETURN DISTINCT e.level as level
+                ORDER BY level ASC
+                """
+            )
+
+            return [record["level"] for record in result if record["level"] is not None]
+
+    def get_communities_for_level(self, level: int) -> List[Dict[str, Any]]:
+        """Return community assignments and entity metadata for a given level."""
+
+        with self.driver.session() as session:  # type: ignore
+            result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE e.community_id IS NOT NULL AND e.level = $level
+                RETURN e.community_id AS community_id,
+                       collect({
+                           id: e.id,
+                           name: coalesce(e.name, ""),
+                           type: coalesce(e.type, ""),
+                           description: coalesce(e.description, ""),
+                           importance_score: coalesce(e.importance_score, 0.0)
+                       }) AS entities
+                ORDER BY community_id
+                """,
+                level=level,
+            )
+
+            communities = []
+            for record in result:
+                entities: List[Dict[str, Any]] = record.get("entities", [])
+                communities.append(
+                    {
+                        "community_id": record.get("community_id"),
+                        "entities": entities,
+                        "entity_count": len(entities),
+                    }
+                )
+            return communities
+
+    def get_text_units_for_entities(
+        self, entity_ids: List[str], limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Fetch exemplar TextUnits linked to the provided entities."""
+
+        if not entity_ids:
+            return []
+
+        with self.driver.session() as session:  # type: ignore
+            result = session.run(
+                """
+                MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
+                WHERE e.id IN $entity_ids
+                WITH DISTINCT c, d
+                RETURN c.id AS id,
+                       coalesce(c.content, "") AS content,
+                       coalesce(c.metadata, {}) AS metadata,
+                       d.id AS document_id
+                ORDER BY coalesce(c.metadata.quality_score, 1.0) DESC,
+                         size(c.content) DESC
+                LIMIT $limit
+                """,
+                entity_ids=entity_ids,
+                limit=limit,
+            )
+
+            return [record.data() for record in result]
+
+    def upsert_community_summary(
+        self,
+        community_id: int,
+        level: int,
+        summary: str,
+        member_entities: List[Dict[str, Any]],
+        exemplar_text_units: List[Dict[str, Any]],
+    ) -> None:
+        """Persist or update a community summary node."""
+
+        with self.driver.session() as session:  # type: ignore
+            session.run(
+                """
+                MERGE (s:CommunitySummary {community_id: $community_id, level: $level})
+                SET s.summary = $summary,
+                    s.member_entities = $member_entities,
+                    s.exemplar_text_units = $exemplar_text_units,
+                    s.generated_at = datetime()
+                """,
+                community_id=community_id,
+                level=level,
+                summary=summary,
+                member_entities=member_entities,
+                exemplar_text_units=exemplar_text_units,
+            )
+
     def get_graph_stats(self) -> Dict[str, int]:
         """Get basic statistics about the graph database."""
         with self.driver.session() as session:  # type: ignore
