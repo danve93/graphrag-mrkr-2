@@ -86,11 +86,13 @@ class Entity:
     type: str
     description: str
     importance_score: float = 0.5
+    source_text_units: Optional[List[str]] = None
     source_chunks: Optional[List[str]] = None
 
     def __post_init__(self):
-        if self.source_chunks is None:
-            self.source_chunks = []
+        resolved_text_units = self.source_text_units or self.source_chunks or []
+        self.source_text_units = list(resolved_text_units)
+        self.source_chunks = list(self.source_chunks or self.source_text_units or [])
 
 
 @dataclass
@@ -99,55 +101,54 @@ class Relationship:
 
     source_entity: str
     target_entity: str
+    relationship_type: str
     description: str
     strength: float = 0.5
+    source_text_units: Optional[List[str]] = None
     source_chunks: Optional[List[str]] = None
 
     def __post_init__(self):
-        if self.source_chunks is None:
-            self.source_chunks = []
+        resolved_text_units = self.source_text_units or self.source_chunks or []
+        self.source_text_units = list(resolved_text_units)
+        self.source_chunks = list(self.source_chunks or self.source_text_units or [])
 
 
 class EntityExtractor:
     """Extracts entities and relationships from text using LLM."""
 
-    # Default entity types tailored for Carbonio use cases
+    # Default entity types aligned with the canonical ontology
     DEFAULT_ENTITY_TYPES = [
-        # Infrastruttura e architettura
         "COMPONENT",
         "SERVICE",
         "NODE",
-
-        # Provisioning e oggetti utente
         "DOMAIN",
         "CLASS_OF_SERVICE",
         "ACCOUNT",
         "ACCOUNT_TYPE",
         "ROLE",
-
         "RESOURCE",
-
-        # Quota e gestione utilizzo
         "QUOTA_OBJECT",
-
-        # Backup, storage, migrazione
         "BACKUP_OBJECT",
         "ITEM",
         "STORAGE_OBJECT",
         "MIGRATION_PROCEDURE",
-
-        # Configurazione, sicurezza, certificati
         "CERTIFICATE",
         "CONFIG_OPTION",
         "SECURITY_FEATURE",
-
-        # CLI, API, procedure operative
         "CLI_COMMAND",
         "API_OBJECT",
         "TASK",
         "PROCEDURE",
-
-        # Articoli Zendesk
+        "CONCEPT",
+        "DOCUMENT",
+        "PERSON",
+        "ORGANIZATION",
+        "LOCATION",
+        "EVENT",
+        "TECHNOLOGY",
+        "PRODUCT",
+        "DATE",
+        "MONEY",
         "ARTICLE",
     ]
 
@@ -306,37 +307,29 @@ class EntityExtractor:
     }
 
     RELATION_TYPE_SUGGESTIONS = [
-        # Architettura e componenti
         "COMPONENT_RUNS_ON_NODE",
         "COMPONENT_DEPENDS_ON_COMPONENT",
         "SERVICE_DEPENDS_ON_COMPONENT",
         "COMPONENT_PROVIDES_FEATURE",
-
-        # Provisioning e account
         "DOMAIN_HAS_COS",
         "COS_APPLIES_TO_ACCOUNT_TYPE",
         "ACCOUNT_BELONGS_TO_DOMAIN",
         "ACCOUNT_HAS_ROLE",
         "ACCOUNT_HAS_QUOTA",
-
-        # Backup e storage
         "BACKUP_COVERS_ITEM",
         "ITEM_STORED_ON_STORAGE_OBJECT",
         "HSM_POLICY_APPLIES_TO_STORAGE_OBJECT",
-
-        # Configurazione, certificati, sicurezza
         "CERTIFICATE_APPLIES_TO_DOMAIN",
         "CONFIG_OPTION_AFFECTS_COMPONENT",
         "SECURITY_FEATURE_PROTECTS_COMPONENT",
-
-        # Migrazione e operazioni
         "MIGRATION_PROCEDURE_TARGETS_COMPONENT",
         "MIGRATION_PROCEDURE_TARGETS_DOMAIN",
         "CLI_COMMAND_CONFIGURES_OBJECT",
         "TASK_OPERATES_ON_OBJECT",
         "PROCEDURE_INCLUDES_TASK",
-
-        # Fallback generico
+        "MENTIONS",
+        "REFERENCES",
+        "ASSOCIATED_WITH",
         "RELATED_TO",
     ]
 
@@ -440,8 +433,10 @@ class EntityExtractor:
                     type=normalized_type,
                     description=entity.description,
                     importance_score=entity.importance_score,
-                    source_chunks=(
-                        entity.source_chunks.copy() if entity.source_chunks else []
+                    source_text_units=(
+                        entity.source_text_units.copy()
+                        if entity.source_text_units
+                        else []
                     ),
                 )
                 seen_entities[key] = normalized_entity
@@ -449,8 +444,11 @@ class EntityExtractor:
             else:
                 # Merge with existing entity
                 existing = seen_entities[key]
-                if entity.source_chunks:
-                    existing.source_chunks.extend(entity.source_chunks)
+                if entity.source_text_units:
+                    merged_units = set(existing.source_text_units)
+                    merged_units.update(entity.source_text_units)
+                    existing.source_text_units = list(merged_units)
+                    existing.source_chunks = list(merged_units)
                 # Use better description if available
                 if len(entity.description) > len(existing.description):
                     existing.description = entity.description
@@ -461,31 +459,35 @@ class EntityExtractor:
 
         return deduplicated
 
-    def _get_extraction_prompt(self, text: str) -> str:
+    def _get_extraction_prompt(self, text: str, text_unit_id: Optional[str]) -> str:
         """Generate prompt for entity and relationship extraction."""
         entity_types_str = ", ".join(self.entity_types)
         relation_types_str = ", ".join(self.RELATION_TYPE_SUGGESTIONS)
+        text_unit_label = text_unit_id or "UNKNOWN_TEXT_UNIT"
 
         return f"""You are an expert at extracting entities and relationships from text.
 
+You are processing TextUnit ID: {text_unit_label}. Always preserve this identifier for provenance.
+
 **Task**: Extract all relevant entities and relationships from the given text.
 
-**Entity Types**: Focus on these types: {entity_types_str}
+**Entity Types (ontology)**: Use only these canonical types: {entity_types_str}
 **Relationship Types**: Prefer these relationship patterns when applicable: {relation_types_str}
 
 **Instructions**:
-1. Extract entities with: name, type, description, importance (0.0-1.0)
-2. Extract relationships with: source entity, target entity, description, strength (0.0-1.0)
-3. Use exact entity names from the text
-4. Provide detailed descriptions
-5. Rate importance/strength based on context significance
+1. Extract entities with: name, type (must be one of the canonical types), description, importance (0.0-1.0), and TextUnits containing the entity.
+2. Extract relationships with: source entity, target entity, relationship type (choose from the preferred list or RELATED_TO), description, strength (0.0-1.0), and TextUnits supporting the relationship.
+3. Use exact entity names from the text.
+4. Provide concise, factual descriptions grounded in the text.
+5. Rate importance/strength based on context significance.
+6. Always include the provided TextUnit ID in the TextUnits lists.
 
 **Output Format**:
 ENTITIES:
-- Name: [entity_name] | Type: [entity_type] | Description: [description] | Importance: [0.0-1.0]
+- Name: [entity_name] | Type: [entity_type] | Description: [description] | Importance: [0.0-1.0] | TextUnits: [text_unit_ids]
 
 RELATIONSHIPS:
-- Source: [source_entity] | Target: [target_entity] | Description: [description] | Strength: [0.0-1.0]
+- Source: [source_entity] | Target: [target_entity] | Type: [relationship_type] | Description: [description] | Strength: [0.0-1.0] | TextUnits: [text_unit_ids]
 
 **Text to analyze**:
 {text}
@@ -512,12 +514,21 @@ RELATIONSHIPS:
                 relationships_section = sections[1].strip() if len(sections) > 1 else ""
 
             # Parse entities
-            entity_pattern = r"- Name: ([^|]+) \| Type: ([^|]+) \| Description: ([^|]+) \| Importance: ([\d.]+)"
+            entity_pattern = (
+                r"- Name: ([^|]+) \| Type: ([^|]+) \| Description: ([^|]+) \| Importance: ([\d.]+)"
+                r"(?: \| TextUnits: \[([^\]]*)\])?"
+            )
             for match in re.finditer(entity_pattern, entities_section):
                 name = match.group(1).strip()
                 entity_type = match.group(2).strip().upper()
                 description = match.group(3).strip()
                 importance = float(match.group(4))
+                text_units_raw = match.group(5)
+                text_units = (
+                    [unit.strip() for unit in text_units_raw.split(",") if unit.strip()]
+                    if text_units_raw
+                    else []
+                )
 
                 # Apply normalization
                 normalized_name = self._normalize_entity_name(name)
@@ -534,28 +545,44 @@ RELATIONSHIPS:
                     type=normalized_type,
                     description=description,
                     importance_score=min(max(importance, 0.0), 1.0),
-                    source_chunks=[chunk_id],
+                    source_text_units=text_units or [chunk_id],
                 )
                 entities.append(entity)
 
             # Parse relationships
-            relationship_pattern = r"- Source: ([^|]+) \| Target: ([^|]+) \| Description: ([^|]+) \| Strength: ([\d.]+)"
+            relationship_pattern = (
+                r"- Source: ([^|]+) \| Target: ([^|]+) \| Type: ([^|]+) \| Description: ([^|]+)"
+                r" \| Strength: ([\d.]+)(?: \| TextUnits: \[([^\]]*)\])?"
+            )
             for match in re.finditer(relationship_pattern, relationships_section):
                 source = match.group(1).strip()
                 target = match.group(2).strip()
-                description = match.group(3).strip()
-                strength = float(match.group(4))
+                rel_type = match.group(3).strip().upper()
+                description = match.group(4).strip()
+                strength = float(match.group(5))
+                text_units_raw = match.group(6)
+                text_units = (
+                    [unit.strip() for unit in text_units_raw.split(",") if unit.strip()]
+                    if text_units_raw
+                    else []
+                )
 
                 # Normalize entity names in relationships
                 normalized_source = self._normalize_entity_name(source)
                 normalized_target = self._normalize_entity_name(target)
+                normalized_rel_type = (
+                    rel_type
+                    if rel_type in self.RELATION_TYPE_SUGGESTIONS
+                    else "RELATED_TO"
+                )
 
                 relationship = Relationship(
                     source_entity=normalized_source,
                     target_entity=normalized_target,
+                    relationship_type=normalized_rel_type,
                     description=description,
                     strength=min(max(strength, 0.0), 1.0),
-                    source_chunks=[chunk_id],
+                    source_text_units=text_units or [chunk_id],
                 )
                 relationships.append(relationship)
 
@@ -583,7 +610,7 @@ RELATIONSHIPS:
             )
 
         try:
-            prompt = self._get_extraction_prompt(text)
+            prompt = self._get_extraction_prompt(text, chunk_id)
 
             # Offload synchronous/blocking LLM call to a thread executor with retry
             loop = asyncio.get_running_loop()
