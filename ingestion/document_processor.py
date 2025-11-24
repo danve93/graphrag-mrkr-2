@@ -227,8 +227,11 @@ class DocumentProcessor:
             created_entities,
             created_relationships,
         )
+        import json
+        # Convert metrics dict to JSON string for Neo4j storage (Neo4j only accepts primitives)
+        metrics_json = json.dumps(metrics)
         graph_db.create_document_node(
-            doc_id, {"entity_extraction_metrics": metrics}
+            doc_id, {"entity_extraction_metrics": metrics_json}
         )
         return created_entities, created_relationships, metrics
 

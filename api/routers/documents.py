@@ -241,8 +241,15 @@ async def get_document_preview(
     is_text = media_type and media_type.startswith("text/")
     
     if is_markdown or is_text:
-        # Read the file content and return as plain text to trigger inline display
+        # Read the file content and return as plain text/markdown to trigger inline display
         content = path.read_text(encoding="utf-8", errors="replace")
+        # If it's a plain text file, return raw text with correct media type
+        from fastapi import Response
+
+        if media_type == "text/plain":
+            return Response(content, media_type="text/plain")
+
+        # For markdown and other text-like types, return JSON with inline disposition
         return JSONResponse(
             status_code=200,
             content={
@@ -251,9 +258,7 @@ async def get_document_preview(
                 "mime_type": media_type,
                 "filename": info.get("file_name"),
             },
-            headers={
-                "Content-Disposition": "inline"
-            }
+            headers={"Content-Disposition": "inline"},
         )
     
     return FileResponse(path, media_type=media_type, filename=info.get("file_name"))

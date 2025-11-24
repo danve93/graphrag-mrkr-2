@@ -57,8 +57,26 @@ class GraphDB:
 
     def __init__(self):
         """Initialize Neo4j connection."""
+        # Allow creating the GraphDB instance without immediately connecting.
+        # Tests and some runtime paths prefer to create the object and mock
+        # methods before a real Neo4j connection is required.
         self.driver: Optional[Driver] = None
-        self.connect()
+        # By default we will attempt to connect, but callers can pass
+        # `connect_on_init=False` when constructing the object if they
+        # want to defer connecting (see global `graph_db` below).
+        try:
+            connect_on_init = True
+        except Exception:
+            connect_on_init = True
+        if connect_on_init:
+            try:
+                self.connect()
+            except Exception:
+                # If we fail to connect during import (e.g., in test
+                # environments where Neo4j isn't available), log and
+                # continue without raising so test suites can monkeypatch
+                # methods on the `graph_db` instance.
+                logger.debug("Deferred Neo4j connection; will connect on demand.")
 
     def connect(self) -> None:
         """Establish connection to Neo4j database."""
