@@ -53,6 +53,11 @@ describe('chatStore document view state', () => {
     expect(useChatStore.getState().activeView).toBe('chat')
   })
 
+  it('supports selecting the graph view explicitly', () => {
+    useChatStore.getState().setActiveView('graph')
+    expect(useChatStore.getState().activeView).toBe('graph')
+  })
+
   it('clearChat resets to chat view and clears selection', () => {
     useChatStore.getState().selectDocument('doc-42')
     useChatStore.getState().clearChat()

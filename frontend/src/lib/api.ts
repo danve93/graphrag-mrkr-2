@@ -1,5 +1,6 @@
 import type { DocumentDetails, DocumentChunk, DocumentTextPayload } from '@/types'
 import type { ProcessingProgressResponse } from '@/types/upload'
+import type { GraphResponse } from '@/types/graph'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -233,6 +234,36 @@ export const api = {
 
   async getDocument(documentId: string): Promise<DocumentDetails> {
     const response = await fetch(`${API_URL}/api/documents/${documentId}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async getGraph(params?: {
+    community_id?: number
+    node_type?: string
+    level?: number
+    limit?: number
+  }): Promise<GraphResponse> {
+    const query = new URLSearchParams()
+    if (params?.community_id !== undefined) {
+      query.append('community_id', String(params.community_id))
+    }
+    if (params?.node_type) {
+      query.append('node_type', params.node_type)
+    }
+    if (params?.level !== undefined) {
+      query.append('level', String(params.level))
+    }
+    if (params?.limit !== undefined) {
+      query.append('limit', String(params.limit))
+    }
+
+    const queryString = query.toString()
+    const response = await fetch(
+      `${API_URL}/api/graph/clustered${queryString ? `?${queryString}` : ''}`
+    )
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
