@@ -600,7 +600,12 @@ class DocumentRetriever:
         query: str,
         top_k: int = 5,
         chunk_weight: float = 0.5,
+        entity_weight: Optional[float] = None,
+        path_weight: Optional[float] = None,
         use_multi_hop: bool = False,
+        max_hops: Optional[int] = None,
+        beam_size: Optional[int] = None,
+        restrict_to_context: bool = True,
         allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -610,18 +615,41 @@ class DocumentRetriever:
             query: User query
             top_k: Total number of chunks to retrieve
             chunk_weight: Weight for chunk-based results (0.0-1.0)
+            entity_weight: Weight for entity-based results (0.0-1.0)
+            path_weight: Weight for multi-hop path results (0.0-1.0)
             use_multi_hop: Whether to include multi-hop reasoning
+            max_hops: Depth limit for multi-hop traversal
+            beam_size: Beam width for path search
+            restrict_to_context: Whether to enforce provided context document boundaries
 
         Returns:
             List of chunks from all approaches, de-duplicated and ranked
         """
         try:
+            normalized_chunk_weight = max(0.0, min(chunk_weight, 1.0))
+            normalized_entity_weight = (
+                settings.hybrid_entity_weight
+                if entity_weight is None
+                else max(0.0, min(entity_weight, 1.0))
+            )
+            normalized_path_weight = (
+                settings.hybrid_path_weight
+                if path_weight is None
+                else max(0.0, min(path_weight, 1.0))
+            )
+
             # Analyze query to determine if multi-hop would be beneficial
             query_analysis = analyze_query(query)
             multi_hop_recommended = query_analysis.get("multi_hop_recommended", True)
             query_type = query_analysis.get("query_type", "factual")
 
-            allowed_set = set(allowed_document_ids) if allowed_document_ids else None
+            allowed_set = (
+                set(allowed_document_ids)
+                if (allowed_document_ids and restrict_to_context)
+                else None
+            )
+            if not restrict_to_context:
+                allowed_document_ids = None
 
             # Override multi-hop decision based on query analysis
             effective_use_multi_hop = (
@@ -631,7 +659,7 @@ class DocumentRetriever:
             )
 
             # Adjust path weight based on query type
-            base_path_weight = settings.hybrid_path_weight
+            base_path_weight = normalized_path_weight
             if query_type == "comparative":
                 # Comparative queries benefit more from multi-hop
                 path_weight = min(0.8, base_path_weight * 1.3)
@@ -653,31 +681,25 @@ class DocumentRetriever:
             )
 
             # Calculate split for each approach
-            if effective_use_multi_hop:
-                # With multi-hop: chunk, entity, and path results
-                remaining_weight = 1.0 - path_weight
-                chunk_count = max(1, int(top_k * chunk_weight * remaining_weight))
-                entity_count = max(
-                    1, int(top_k * (1 - chunk_weight) * remaining_weight)
-                )
-                # Allocate path slots based on adjusted weight and query type
-                if query_type == "comparative":
-                    path_count = max(
-                        int(top_k * path_weight), top_k // 2
-                    )  # More paths for comparisons
-                elif query_type == "analytical":
-                    path_count = max(
-                        int(top_k * path_weight), top_k // 3
-                    )  # Moderate paths for analysis
+            path_weight = path_weight if effective_use_multi_hop else 0.0
+            combined_weight = max(
+                1e-5,
+                normalized_chunk_weight + normalized_entity_weight + path_weight,
+            )
+            chunk_fraction = normalized_chunk_weight / combined_weight
+            entity_fraction = normalized_entity_weight / combined_weight
+            path_fraction = path_weight / combined_weight
+
+            chunk_count = max(1, int(top_k * chunk_fraction))
+            entity_count = max(1, int(top_k * entity_fraction))
+            path_count = max(0, int(top_k * path_fraction))
+            if chunk_count + entity_count + path_count > top_k:
+                # Trim the smallest bucket to respect the limit
+                overage = chunk_count + entity_count + path_count - top_k
+                if path_count > 0:
+                    path_count = max(0, path_count - overage)
                 else:
-                    path_count = max(
-                        1, int(top_k * path_weight)
-                    )  # Fewer paths for factual queries
-            else:
-                # Without multi-hop: just chunk and entity
-                chunk_count = max(1, int(top_k * chunk_weight))
-                entity_count = max(1, top_k - chunk_count)
-                path_count = 0
+                    entity_count = max(1, entity_count - overage)
 
             # Get results from different approaches
             chunk_results = await self.chunk_based_retrieval(
@@ -692,8 +714,8 @@ class DocumentRetriever:
                 path_results = await self.multi_hop_reasoning_retrieval(
                     query,
                     seed_top_k=5,
-                    max_hops=settings.multi_hop_max_hops,
-                    beam_size=settings.multi_hop_beam_size,
+                    max_hops=max_hops or settings.multi_hop_max_hops,
+                    beam_size=beam_size or settings.multi_hop_beam_size,
                     use_hybrid_seeding=True,
                     allowed_document_ids=allowed_document_ids,
                 )
@@ -725,6 +747,7 @@ class DocumentRetriever:
                 if chunk_id:
                     result["retrieval_source"] = "chunk_based"
                     result["chunk_score"] = result.get("similarity", 0.0)
+                    result["hybrid_score"] = result.get("chunk_score", 0.0)
                     combined_results[chunk_id] = result
 
             # Add entity-based results (merge if duplicate)
@@ -744,15 +767,19 @@ class DocumentRetriever:
                         # Boost score for chunks found by both methods
                         chunk_score = existing.get("chunk_score", 0.0)
                         entity_score = result.get("similarity", 0.3)
-                        existing["hybrid_score"] = min(
-                            1.0, (chunk_score + entity_score) * 0.8
-                        )  # Combined score with cap
+                        weighted_score = (
+                            chunk_fraction * chunk_score
+                            + entity_fraction * entity_score
+                        )
+                        existing["hybrid_score"] = min(1.0, weighted_score)
                     else:
                         result["retrieval_source"] = "entity_based"
                         # Use actual similarity score, with better fallback
                         if allowed_set and result.get("document_id") not in allowed_set:
                             continue
-                        result["hybrid_score"] = result.get("similarity", 0.3)
+                        result["hybrid_score"] = min(
+                            1.0, entity_fraction * result.get("similarity", 0.3)
+                        )
                         combined_results[chunk_id] = result
 
             # Add path-based results (merge if duplicate)
@@ -769,16 +796,18 @@ class DocumentRetriever:
                         )
                         existing["path_length"] = result.get("path_length", 0)
                         # Boost score for chunks found by multiple methods
-                        current_score = existing.get(
-                            "hybrid_score", existing.get("chunk_score", 0.0)
-                        )
+                        current_score = existing.get("hybrid_score", 0.0)
                         path_score = result.get("similarity", 0.3)
-                        existing["hybrid_score"] = min(
-                            1.0, (current_score + path_score) * 0.7
+                        weighted_score = (
+                            current_score * (chunk_fraction + entity_fraction)
+                            + path_fraction * path_score
                         )
+                        existing["hybrid_score"] = min(1.0, weighted_score)
                     else:
                         result["retrieval_source"] = "path_based"
-                        result["hybrid_score"] = result.get("similarity", 0.3)
+                        result["hybrid_score"] = min(
+                            1.0, path_fraction * result.get("similarity", 0.3)
+                        )
                         combined_results[chunk_id] = result
 
             # Sort by hybrid score and return top_k
@@ -822,6 +851,12 @@ class DocumentRetriever:
         mode: RetrievalMode = RetrievalMode.HYBRID,
         top_k: int = 5,
         use_multi_hop: bool = False,
+        chunk_weight: float = 0.5,
+        entity_weight: Optional[float] = None,
+        path_weight: Optional[float] = None,
+        max_hops: Optional[int] = None,
+        beam_size: Optional[int] = None,
+        restrict_to_context: bool = True,
         **kwargs,
     ) -> List[Dict[str, Any]]:
         """
@@ -852,12 +887,16 @@ class DocumentRetriever:
                 query, top_k, allowed_document_ids=allowed_document_ids
             )
         elif mode == RetrievalMode.HYBRID:
-            chunk_weight = kwargs.get("chunk_weight", 0.5)
             return await self.hybrid_retrieval(
                 query,
                 top_k,
                 chunk_weight,
+                entity_weight,
+                path_weight,
                 use_multi_hop,
+                max_hops=max_hops,
+                beam_size=beam_size,
+                restrict_to_context=restrict_to_context,
                 allowed_document_ids=allowed_document_ids,
             )
         else:
@@ -871,6 +910,12 @@ class DocumentRetriever:
         top_k: int = 3,
         expand_depth: int = 2,
         use_multi_hop: bool = False,
+        chunk_weight: float = 0.5,
+        entity_weight: Optional[float] = None,
+        path_weight: Optional[float] = None,
+        max_hops: Optional[int] = None,
+        beam_size: Optional[int] = None,
+        restrict_to_context: bool = True,
         allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -893,6 +938,12 @@ class DocumentRetriever:
                 mode,
                 top_k,
                 use_multi_hop=use_multi_hop,
+                chunk_weight=chunk_weight,
+                entity_weight=entity_weight,
+                path_weight=path_weight,
+                max_hops=max_hops,
+                beam_size=beam_size,
+                restrict_to_context=restrict_to_context,
                 allowed_document_ids=allowed_document_ids,
             )
 

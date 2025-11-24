@@ -21,8 +21,14 @@ async def retrieve_documents_async(
     retrieval_mode: str = "hybrid",
     top_k: int = 5,
     chunk_weight: float = 0.5,
+    entity_weight: Optional[float] = None,
+    path_weight: Optional[float] = None,
     graph_expansion: bool = True,
     use_multi_hop: bool = False,
+    max_hops: Optional[int] = None,
+    beam_size: Optional[int] = None,
+    restrict_to_context: bool = True,
+    expansion_depth: Optional[int] = None,
     context_documents: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -34,8 +40,14 @@ async def retrieve_documents_async(
         retrieval_mode: Retrieval strategy ("chunk_only", "entity_only", "hybrid", "auto")
         top_k: Number of chunks to retrieve
         chunk_weight: Weight for chunk-based results in hybrid mode
+        entity_weight: Weight for entity-filtered results in hybrid mode
+        path_weight: Weight for path-based results in hybrid mode
         graph_expansion: Whether to use graph expansion
         use_multi_hop: Whether to use multi-hop reasoning
+        max_hops: Depth limit for graph traversal
+        beam_size: Beam width for multi-hop search
+        restrict_to_context: Whether to enforce context_documents filtering
+        expansion_depth: Optional override for graph expansion depth
         context_documents: Optional list of document IDs to restrict retrieval scope
 
     Returns:
@@ -102,6 +114,13 @@ async def retrieve_documents_async(
                 mode=enhanced_mode,
                 top_k=adjusted_top_k,
                 use_multi_hop=use_multi_hop,
+                chunk_weight=chunk_weight,
+                entity_weight=entity_weight,
+                path_weight=path_weight,
+                max_hops=max_hops,
+                beam_size=beam_size,
+                restrict_to_context=restrict_to_context,
+                expand_depth=expansion_depth or settings.max_expansion_depth,
                 allowed_document_ids=allowed_ids,
             )
         else:
@@ -112,6 +131,11 @@ async def retrieve_documents_async(
                 top_k=adjusted_top_k,
                 chunk_weight=chunk_weight,
                 use_multi_hop=use_multi_hop,
+                entity_weight=entity_weight,
+                path_weight=path_weight,
+                max_hops=max_hops,
+                beam_size=beam_size,
+                restrict_to_context=restrict_to_context,
                 allowed_document_ids=allowed_ids,
             )
 
@@ -137,8 +161,14 @@ def retrieve_documents(
     retrieval_mode: str = "hybrid",
     top_k: int = 5,
     chunk_weight: float = 0.5,
+    entity_weight: Optional[float] = None,
+    path_weight: Optional[float] = None,
     graph_expansion: bool = True,
     use_multi_hop: bool = False,
+    max_hops: Optional[int] = None,
+    beam_size: Optional[int] = None,
+    restrict_to_context: bool = True,
+    expansion_depth: Optional[int] = None,
     context_documents: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -150,8 +180,14 @@ def retrieve_documents(
         retrieval_mode: Retrieval strategy
         top_k: Number of chunks to retrieve
         chunk_weight: Weight for chunk-based results
+        entity_weight: Weight for entity-filtered results
+        path_weight: Weight for path-based results
         graph_expansion: Whether to use graph expansion
         use_multi_hop: Whether to use multi-hop reasoning
+        max_hops: Depth limit for graph traversal
+        beam_size: Beam width for multi-hop search
+        restrict_to_context: Whether to enforce context_documents filtering
+        expansion_depth: Optional override for graph expansion depth
         context_documents: Optional list of document IDs to restrict retrieval scope
 
     Returns:
@@ -170,17 +206,23 @@ def retrieve_documents(
                 future = executor.submit(
                     asyncio.run,
                     retrieve_documents_async(
-                        query,
-                        query_analysis,
-                        retrieval_mode,
-                        top_k,
-                        chunk_weight,
-                        graph_expansion,
-                        use_multi_hop,
-                        context_documents=allowed_docs,
-                    ),
-                )
-                return future.result()
+                    query,
+                    query_analysis,
+                    retrieval_mode,
+                    top_k,
+                    chunk_weight,
+                    graph_expansion,
+                    use_multi_hop,
+                    expansion_depth=expansion_depth,
+                    entity_weight=entity_weight,
+                    path_weight=path_weight,
+                    max_hops=max_hops,
+                    beam_size=beam_size,
+                    restrict_to_context=restrict_to_context,
+                    context_documents=allowed_docs,
+                ),
+            )
+            return future.result()
         except RuntimeError:
             # No event loop running - safe to use asyncio.run()
             return asyncio.run(
@@ -192,6 +234,12 @@ def retrieve_documents(
                     chunk_weight,
                     graph_expansion,
                     use_multi_hop,
+                    expansion_depth=expansion_depth,
+                    entity_weight=entity_weight,
+                    path_weight=path_weight,
+                    max_hops=max_hops,
+                    beam_size=beam_size,
+                    restrict_to_context=restrict_to_context,
                     context_documents=allowed_docs,
                 )
             )
