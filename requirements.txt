@@ -39,6 +39,8 @@ numpy>=1.24.0
 pandas>=2.0.0
 requests>=2.31.0
 aiofiles>=23.0.0
+python-igraph>=0.11.0
+leidenalg>=0.10.1
 
 # Graph visualization (optional - not used in new UI)
 plotly>=5.17.0

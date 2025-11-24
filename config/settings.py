@@ -2,7 +2,7 @@
 Configuration management for the GraphRAG pipeline.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -112,6 +112,26 @@ class Settings(BaseSettings):
     )
     max_expansion_depth: int = Field(
         default=2, description="Maximum depth for graph traversal"
+    )
+
+    # Graph Clustering Configuration
+    enable_graph_clustering: bool = Field(
+        default=True, description="Enable Leiden clustering jobs"
+    )
+    clustering_relationship_types: List[str] = Field(
+        default_factory=lambda: ["SIMILAR_TO", "RELATED_TO"],
+        description="Relationship labels to include in clustering projections",
+    )
+    clustering_resolution: float = Field(
+        default=1.0, description="Leiden resolution parameter"
+    )
+    clustering_min_edge_weight: float = Field(
+        default=0.0, description="Minimum edge weight to keep in clustering"
+    )
+    clustering_level: int = Field(default=0, description="Hierarchy level to tag on nodes")
+    default_edge_weight: float = Field(
+        default=1.0,
+        description="Fallback edge weight when no unit-level weight is present",
     )
 
     # Multi-hop Reasoning Configuration
