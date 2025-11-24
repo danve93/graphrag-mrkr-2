@@ -1,8 +1,17 @@
 """
 Document chunking utilities with OCR and quality assessment.
+
+Each chunk is treated as a TextUnit with stable identifiers and
+provenance metadata (document id, page, offsets, size/overlap). The
+`chunk_size` and `chunk_overlap` settings directly correspond to the
+TextUnit's `chunk_size_chars` and `chunk_overlap_chars` fields so that
+retrieval layers can reason about how the text was segmented.
 """
 
+import hashlib
 import logging
+import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -11,6 +20,47 @@ from config.settings import settings
 from core.ocr import ocr_processor
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TextUnit:
+    """Represents a chunk of text with stable provenance metadata."""
+
+    id: str
+    document_id: str
+    content: str
+    page: int
+    start_offset: int
+    end_offset: int
+    chunk_index: int
+    chunk_size_chars: int
+    chunk_overlap_chars: int
+    content_hash: str
+
+    def to_chunk_payload(self) -> Dict[str, Any]:
+        """Return a dict compatible with downstream ingestion code."""
+
+        return {
+            "chunk_id": self.id,
+            "text_unit_id": self.id,
+            "content": self.content,
+            "chunk_index": self.chunk_index,
+            "offset": self.start_offset,
+            "document_id": self.document_id,
+            "metadata": {
+                "text_unit_id": self.id,
+                "page": self.page,
+                "start_offset": self.start_offset,
+                "end_offset": self.end_offset,
+                "chunk_size": len(self.content),
+                "chunk_size_chars": self.chunk_size_chars,
+                "chunk_overlap_chars": self.chunk_overlap_chars,
+                "chunk_index": self.chunk_index,
+                "offset": self.start_offset,
+                "content_hash": self.content_hash,
+                "total_chunks": 0,  # Filled after chunking completes
+            },
+        }
 
 
 class DocumentChunker:
@@ -45,7 +95,15 @@ class DocumentChunker:
             enable_ocr_enhancement: Override for OCR enhancement (if None, uses instance setting)
 
         Returns:
-            List of dictionaries containing chunk data with quality metrics
+            List of dictionaries containing chunk data with quality metrics.
+            Each entry represents a TextUnit with stable identifiers and
+            provenance metadata including:
+            - text_unit_id / chunk_id
+            - source document id
+            - inferred page number
+            - start/end character offsets
+            - configured chunk_size and chunk_overlap
+            - per-chunk content hash
         """
         try:
             # Determine settings to use (provided parameters or instance defaults)
@@ -67,6 +125,7 @@ class DocumentChunker:
 
             # Track character offset for each chunk
             current_offset = 0
+            page_boundaries = self._build_page_boundaries(text)
 
             for i, chunk in enumerate(chunks):
                 # Calculate offset in the original text
@@ -76,6 +135,26 @@ class DocumentChunker:
                     # If exact match fails, use the current offset
                     chunk_offset = current_offset
                 current_offset = chunk_offset + len(chunk)
+
+                start_offset = chunk_offset
+                end_offset = start_offset + len(chunk)
+                page = self._get_page_for_offset(start_offset, page_boundaries)
+                content_hash = self._hash_content(chunk)
+                text_unit = TextUnit(
+                    id=self._build_text_unit_id(
+                        document_id, start_offset, end_offset, content_hash
+                    ),
+                    document_id=document_id,
+                    content=chunk,
+                    page=page,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
+                    chunk_index=i,
+                    chunk_size_chars=settings.chunk_size,
+                    chunk_overlap_chars=settings.chunk_overlap,
+                    content_hash=content_hash,
+                )
+                chunk_info = text_unit.to_chunk_payload()
                 # Assess chunk quality (only if quality filtering is enabled)
                 if use_quality_filtering:
                     quality_assessment = ocr_processor.assess_chunk_quality(chunk)
@@ -94,17 +173,9 @@ class DocumentChunker:
                         },
                     }
 
-                # Create base chunk info
-                chunk_info = {
-                    "chunk_id": f"{document_id}_chunk_{i}",
-                    "content": chunk,
-                    "chunk_index": i,
-                    "offset": chunk_offset,
-                    "document_id": document_id,
-                    "metadata": {
-                        "chunk_size": len(chunk),
-                        "chunk_index": i,
-                        "offset": chunk_offset,
+                # Augment TextUnit metadata with quality information
+                chunk_info["metadata"].update(
+                    {
                         "total_chunks": len(chunks),
                         "quality_score": quality_assessment["quality_score"],
                         "quality_reason": quality_assessment["reason"],
@@ -119,8 +190,8 @@ class DocumentChunker:
                         ],
                         "has_artifacts": quality_assessment["metrics"]["has_artifacts"],
                         "processing_method": "standard",
-                    },
-                }
+                    }
+                )
 
                 # Apply quality filtering if enabled
                 if use_quality_filtering and quality_assessment["needs_ocr"]:
@@ -194,6 +265,57 @@ class DocumentChunker:
         )
 
         return all_chunks
+
+    def _build_page_boundaries(self, text: str) -> List[Dict[str, int]]:
+        """Infer page boundaries from Marker-style markdown headers."""
+
+        boundaries: List[Dict[str, int]] = []
+        pattern = re.compile(r"^## Page (\d+)", re.MULTILINE)
+        matches = list(pattern.finditer(text))
+
+        if not matches:
+            return [
+                {
+                    "page": 1,
+                    "start": 0,
+                    "end": len(text),
+                }
+            ]
+
+        for idx, match in enumerate(matches):
+            start = match.start()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            boundaries.append(
+                {
+                    "page": int(match.group(1)),
+                    "start": start,
+                    "end": end,
+                }
+            )
+
+        return boundaries
+
+    def _get_page_for_offset(
+        self, offset: int, page_boundaries: List[Dict[str, int]]
+    ) -> int:
+        """Return the page number containing the given offset."""
+
+        for boundary in page_boundaries:
+            if boundary["start"] <= offset < boundary["end"]:
+                return boundary["page"]
+        return page_boundaries[-1]["page"] if page_boundaries else 1
+
+    def _hash_content(self, content: str) -> str:
+        """Generate a deterministic hash for a chunk's text."""
+
+        return hashlib.sha1(content.encode("utf-8")).hexdigest()
+
+    def _build_text_unit_id(
+        self, document_id: str, start_offset: int, end_offset: int, content_hash: str
+    ) -> str:
+        """Construct a stable TextUnit identifier."""
+
+        return f"{document_id}_tu_{start_offset}_{end_offset}_{content_hash[:8]}"
 
     def post_entity_quality_filter(
         self, chunks: List[Dict[str, Any]], entity_results: Dict[str, Any]
