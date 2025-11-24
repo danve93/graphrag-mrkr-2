@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Lifecycle manager for FastAPI application."""
     logger.info("Starting GraphRAG API...")
+    # Log resolved LLM provider early to aid debugging misconfigurations
+    try:
+        logger.info(f"Resolved LLM provider: {settings.llm_provider}")
+    except Exception:
+        logger.info("Resolved LLM provider: <unavailable>")
     yield
     logger.info("Shutting down GraphRAG API...")
 

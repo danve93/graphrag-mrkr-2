@@ -271,23 +271,34 @@ class DocumentProcessor:
 
             async with sem:
                 try:
+                    logger.debug("Requesting embedding for chunk %s (len=%s)", chunk_id, len(content) if content else 0)
                     # Rate limiting is now handled in EmbeddingManager
                     embedding = await embedding_manager.aget_embedding(content)
+                    logger.debug(
+                        "Received embedding for chunk %s (len=%s)",
+                        chunk_id,
+                        len(embedding) if embedding is not None else 0,
+                    )
                 except Exception as e:
                     logger.error(f"Async embedding failed for {chunk_id}: {e}")
                     embedding = []
 
             # Persist to DB in a thread to avoid blocking the event loop
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                graph_db.create_chunk_node,
-                chunk_id,
-                doc_id,
-                content,
-                embedding,
-                metadata,
-            )
+            try:
+                logger.debug("Persisting chunk %s to DB (doc: %s)", chunk_id, doc_id)
+                await loop.run_in_executor(
+                    None,
+                    graph_db.create_chunk_node,
+                    chunk_id,
+                    doc_id,
+                    content,
+                    embedding,
+                    metadata,
+                )
+                logger.debug("Persisted chunk %s to DB", chunk_id)
+            except Exception as e:
+                logger.error("Failed to persist chunk %s to DB: %s", chunk_id, e)
 
             # Report progress
             processed_count += 1

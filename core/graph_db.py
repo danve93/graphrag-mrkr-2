@@ -169,27 +169,45 @@ class GraphDB:
         metadata: Dict[str, Any],
     ) -> None:
         """Create a chunk node and link it to its document."""
-        with self.driver.session() as session:  # type: ignore
-            session.run(
-                """
-                MERGE (c:Chunk {id: $chunk_id})
-                SET c.content = $content,
-                    c.embedding = $embedding,
-                    c.chunk_index = $chunk_index,
-                    c.offset = $offset,
-                    c += $metadata
-                WITH c
-                MATCH (d:Document {id: $doc_id})
-                MERGE (d)-[:HAS_CHUNK]->(c)
-                """,
-                chunk_id=chunk_id,
-                doc_id=doc_id,
-                content=content,
-                embedding=embedding,
-                chunk_index=metadata.get("chunk_index", 0),
-                offset=metadata.get("offset", 0),
-                metadata=metadata,
+        logger.debug(
+            "create_chunk_node called: chunk_id=%s doc_id=%s content_len=%s embedding_len=%s",
+            chunk_id,
+            doc_id,
+            len(content) if content is not None else 0,
+            len(embedding) if embedding is not None else 0,
+        )
+
+        try:
+            with self.driver.session() as session:  # type: ignore
+                session.run(
+                    """
+                    MERGE (c:Chunk {id: $chunk_id})
+                    SET c.content = $content,
+                        c.embedding = $embedding,
+                        c.chunk_index = $chunk_index,
+                        c.offset = $offset,
+                        c += $metadata
+                    WITH c
+                    MATCH (d:Document {id: $doc_id})
+                    MERGE (d)-[:HAS_CHUNK]->(c)
+                    """,
+                    chunk_id=chunk_id,
+                    doc_id=doc_id,
+                    content=content,
+                    embedding=embedding,
+                    chunk_index=metadata.get("chunk_index", 0),
+                    offset=metadata.get("offset", 0),
+                    metadata=metadata,
+                )
+        except Exception as e:
+            logger.error(
+                "Failed to create chunk node %s for document %s: %s",
+                chunk_id,
+                doc_id,
+                e,
             )
+            # Re-raise so callers can handle or log at higher level
+            raise
 
     def create_similarity_relationship(
         self, chunk_id1: str, chunk_id2: str, similarity_score: float

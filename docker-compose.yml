@@ -35,6 +35,8 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: graphrag-backend
+    env_file:
+      - ./.env
     environment:
       # LLM provider selection: 'openai' or 'ollama'
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -68,7 +70,7 @@ services:
       dockerfile: Dockerfile.frontend
     container_name: graphrag-frontend
     env_file:
-      - ./frontend/.env.docker
+      - ./.env
     environment:
       - NODE_ENV=development
     ports:

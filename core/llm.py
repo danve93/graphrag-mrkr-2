@@ -16,7 +16,13 @@ logger = logging.getLogger(__name__)
 
 # Configure OpenAI client
 openai.api_key = settings.openai_api_key
-openai.base_url = settings.openai_base_url
+
+# Set base URL: use settings value if provided, otherwise use OpenAI default
+if settings.openai_base_url:
+    openai.base_url = settings.openai_base_url
+else:
+    # Explicitly set to OpenAI's default with trailing slash to avoid concatenation issues
+    openai.base_url = "https://api.openai.com/v1/"
 
 if settings.openai_proxy:
     openai.http_client = httpx.Client(verify=False, base_url=settings.openai_proxy)

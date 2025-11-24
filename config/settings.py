@@ -155,3 +155,30 @@ class Settings(BaseSettings):
 
 # Global settings instance - will read from environment or use defaults
 settings = Settings()
+
+# Normalize and validate LLM provider selection to avoid unexpected defaults.
+# Priority: explicit `LLM_PROVIDER` env -> use if valid; otherwise prefer OpenAI when an API key is present.
+try:
+    _prov = (settings.llm_provider or "").lower()
+except Exception:
+    _prov = ""
+
+if _prov not in ("openai", "ollama"):
+    # If an OpenAI API key is configured, prefer OpenAI
+    if getattr(settings, "openai_api_key", None):
+        settings.llm_provider = "openai"
+    else:
+        # Fall back to ollama only if no OpenAI key is available
+        settings.llm_provider = "ollama"
+else:
+    settings.llm_provider = _prov
+
+# Emit a debug-friendly representation for other modules
+try:
+    # Avoid importing logging configuration too early in some environments
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"Resolved LLM provider: {settings.llm_provider}")
+except Exception:
+    pass

@@ -142,7 +142,7 @@ The frontend will be available at `http://localhost:3000`.
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your_api_key
 OPENAI_BASE_URL=https://api.openai.com/v1  # Optional
-OPENAI_MODEL=gpt-4  # or gpt-3.5-turbo
+OPENAI_MODEL=gpt-4o-mini  # or gpt-3.5-turbo
 
 # Neo4j Configuration
 NEO4J_URI=bolt://localhost:7687
