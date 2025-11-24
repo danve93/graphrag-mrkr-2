@@ -940,7 +940,11 @@ class GraphDB:
             filters.append("e.level = $community_level")
             params["community_level"] = level
         if document_id:
-            filters.append("(e)<-[:CONTAINS_ENTITY]-(c)<-[:HAS_CHUNK]-(d:Document) AND d.id = $document_id")
+            # Use an EXISTS block to scope the pattern inside the predicate
+            # rather than introducing new variables in the WHERE clause
+            filters.append(
+                "EXISTS { MATCH (e)<-[:CONTAINS_ENTITY]-(:Chunk)<-[:HAS_CHUNK]-(d:Document) WHERE d.id = $document_id }"
+            )
             params["document_id"] = document_id
 
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
@@ -1118,8 +1122,11 @@ class GraphDB:
             source_text_units = list(source_chunks)
 
         # Generate embedding for the entity using name and description
-        entity_text = f"{name}: {description}"
-        embedding = await embedding_manager.aget_embedding(entity_text)
+        if getattr(settings, "skip_entity_embeddings", False):
+            embedding = []  # store empty embedding for skipped mode
+        else:
+            entity_text = f"{name}: {description}"
+            embedding = await embedding_manager.aget_embedding(entity_text)
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
@@ -1187,8 +1194,11 @@ class GraphDB:
             source_text_units = list(source_chunks)
 
         # Generate embedding for the entity using name and description
-        entity_text = f"{name}: {description}"
-        embedding = embedding_manager.get_embedding(entity_text)
+        if getattr(settings, "skip_entity_embeddings", False):
+            embedding = []
+        else:
+            entity_text = f"{name}: {description}"
+            embedding = embedding_manager.get_embedding(entity_text)
 
         self._create_entity_node_sync(
             entity_id,

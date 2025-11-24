@@ -117,6 +117,40 @@ export default function DocumentGraph({
     )
   }
 
+  // If the graph returned no nodes for this document, show a clear CTA to process entities
+  if (graphData && Array.isArray(graphData.nodes) && graphData.nodes.length === 0) {
+    return (
+      <div id={`graph-${documentId}`} style={{ height: `${height}px` }} className="flex items-center justify-center bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+        <div className="text-center p-6">
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-2">No entities extracted for this document</p>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mb-4">Run entity extraction to populate the graph and community data.</p>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                setLoading(true)
+                setError(null)
+                await api.reprocessDocumentEntities(documentId)
+                // notify processing state listeners
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('documents:processing-updated'))
+                }
+              } catch (e) {
+                console.error('Failed to queue entity extraction', e)
+                setError('Failed to queue entity extraction')
+              } finally {
+                setLoading(false)
+              }
+            }}
+            className="button-primary px-4 py-2 text-sm"
+          >
+            Process entities
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div id={`graph-${documentId}`} className="w-full border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
       <div style={{ height: `${height}px`, width: `${width}px` }}>

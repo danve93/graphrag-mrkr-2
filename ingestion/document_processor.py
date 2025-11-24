@@ -199,25 +199,95 @@ class DocumentProcessor:
         entity_dict,
         relationship_dict,
     ) -> tuple[int, int, Dict[str, Any]]:
-        """Persist entities/relationships and return metrics."""
+        """Persist entities/relationships and return metrics.
 
-        def _run_async_creation():
-            return self._create_entities_async(entity_dict, relationship_dict, doc_id)
+        When settings.sync_entity_embeddings is True, use a fully synchronous path to avoid
+        background event loop/thread issues (important for test determinism). Otherwise fall
+        back to the existing async parallel creation implementation.
+        """
 
-        try:
-            created_entities, created_relationships = asyncio.run(
-                _run_async_creation()
-            )
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                created_entities, created_relationships = loop.run_until_complete(
+        if getattr(settings, "sync_entity_embeddings", False):
+            created_entities = 0
+            created_relationships = 0
+
+            # Synchronous entity creation with embeddings
+            for entity in entity_dict.values():
+                try:
+                    entity_id = self._generate_entity_id(entity.name)
+                    graph_db.create_entity_node(
+                        entity_id,
+                        entity.name,
+                        entity.type,
+                        entity.description,
+                        entity.importance_score,
+                        entity.source_text_units or entity.source_chunks or [],
+                        entity.source_text_units or entity.source_chunks or [],
+                    )
+                    # Link source chunks
+                    for chunk_id in (
+                        entity.source_text_units or entity.source_chunks or []
+                    ):
+                        try:
+                            graph_db.create_chunk_entity_relationship(
+                                chunk_id, entity_id
+                            )
+                        except Exception:
+                            pass
+                    created_entities += 1
+                except Exception as e:
+                    logger.error(
+                        "Synchronous entity persistence failed for %s in doc %s: %s",
+                        entity.name,
+                        doc_id,
+                        e,
+                    )
+
+            # Relationships
+            for relationships in relationship_dict.values():
+                for relationship in relationships:
+                    try:
+                        source_id = self._generate_entity_id(
+                            relationship.source_entity
+                        )
+                        target_id = self._generate_entity_id(
+                            relationship.target_entity
+                        )
+                        graph_db.create_entity_relationship(
+                            entity_id1=source_id,
+                            entity_id2=target_id,
+                            relationship_type=relationship.relationship_type
+                            or "RELATED_TO",
+                            description=relationship.description,
+                            strength=relationship.strength,
+                            source_chunks=(
+                                relationship.source_text_units
+                                or relationship.source_chunks
+                                or []
+                            ),
+                        )
+                        created_relationships += 1
+                    except Exception:
+                        pass
+        else:
+            def _run_async_creation():
+                return self._create_entities_async(
+                    entity_dict, relationship_dict, doc_id
+                )
+
+            try:
+                created_entities, created_relationships = asyncio.run(
                     _run_async_creation()
                 )
-            else:
-                created_entities, created_relationships = loop.run_until_complete(
-                    _run_async_creation()
-                )
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    created_entities, created_relationships = loop.run_until_complete(
+                        _run_async_creation()
+                    )
+                else:
+                    created_entities, created_relationships = loop.run_until_complete(
+                        _run_async_creation()
+                    )
 
         metrics = self._build_extraction_metrics(
             doc_id,
@@ -670,146 +740,205 @@ class DocumentProcessor:
                     doc_id,
                 )
 
-                # Start background thread to perform entity extraction without blocking
-                def _background_entity_worker(doc_id_local, chunks_local):
-                    operation_id = None
+                # Synchronous path (tests/deterministic runs) when sync_entity_embeddings enabled
+                if getattr(settings, "sync_entity_embeddings", False):
+                    logger.info(
+                        "Running synchronous entity extraction (SYNC_ENTITY_EMBEDDINGS enabled) for %s chunks...",
+                        len(chunks_for_extraction),
+                    )
                     try:
-                        # Start tracking this operation
-                        filename = (
-                            original_filename if original_filename else file_path.name
-                        )
-                        operation_id = self._start_entity_operation(
-                            doc_id_local, filename
-                        )
-
-                        logger.info(
-                            f"Background entity extraction started for document {doc_id_local} (operation: {operation_id})"
-                        )
-
-                        # Phase 1: LLM extraction
-                        self._update_entity_operation(
-                            operation_id,
-                            EntityExtractionState.LLM_EXTRACTION,
-                            "Running LLM entity extraction",
-                        )
                         try:
                             entity_dict, relationship_dict = asyncio.run(
-                                extractor.extract_from_chunks(chunks_local)
+                                extractor.extract_from_chunks(chunks_for_extraction)
+                            )
+                        except RuntimeError:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                entity_dict, relationship_dict = loop.run_until_complete(
+                                    extractor.extract_from_chunks(chunks_for_extraction)
+                                )
+                            else:
+                                entity_dict, relationship_dict = loop.run_until_complete(
+                                    extractor.extract_from_chunks(chunks_for_extraction)
+                                )
+
+                        created_entities, created_relationships, metrics = self._persist_extraction_results(
+                            doc_id, chunks_for_extraction, entity_dict, relationship_dict
+                        )
+                        entity_count = created_entities
+                        relationship_count = created_relationships
+
+                        # Create entity similarities and validate embeddings
+                        try:
+                            graph_db.create_entity_similarities(doc_id)
+                        except Exception as e:
+                            logger.debug(
+                                "Failed to create entity similarities for %s (sync path): %s",
+                                doc_id,
+                                e,
+                            )
+                        try:
+                            graph_db.validate_entity_embeddings(doc_id)
+                        except Exception as e:
+                            logger.debug(
+                                "Failed to validate entity embeddings for %s (sync path): %s",
+                                doc_id,
+                                e,
+                            )
+                        logger.info(
+                            "Synchronous entity extraction finished for %s: %s entities, %s relationships",
+                            doc_id,
+                            created_entities,
+                            created_relationships,
+                        )
+                    except Exception as sync_e:
+                        logger.error(
+                            "Synchronous entity extraction failed for %s: %s",
+                            doc_id,
+                            sync_e,
+                        )
+                else:
+
+                    # Start background thread to perform entity extraction without blocking
+                    def _background_entity_worker(doc_id_local, chunks_local):
+                        operation_id = None
+                        try:
+                            # Start tracking this operation
+                            filename = (
+                                original_filename if original_filename else file_path.name
+                            )
+                            operation_id = self._start_entity_operation(
+                                doc_id_local, filename
+                            )
+
+                            logger.info(
+                                f"Background entity extraction started for document {doc_id_local} (operation: {operation_id})"
+                            )
+
+                            # Phase 1: LLM extraction
+                            self._update_entity_operation(
+                                operation_id,
+                                EntityExtractionState.LLM_EXTRACTION,
+                                "Running LLM entity extraction",
+                            )
+                            try:
+                                entity_dict, relationship_dict = asyncio.run(
+                                    extractor.extract_from_chunks(chunks_local)
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Entity extractor failed in background for {doc_id_local}: {e}"
+                                )
+                                self._update_entity_operation(
+                                    operation_id,
+                                    EntityExtractionState.ERROR,
+                                    error_message=f"LLM extraction failed: {str(e)}",
+                                )
+                                return
+
+                            # Phase 2/3: Embedding generation, database operations, and metrics
+                            self._update_entity_operation(
+                                operation_id,
+                                EntityExtractionState.EMBEDDING_GENERATION,
+                                f"Generating embeddings for {len(entity_dict)} entities",
+                            )
+
+                            (
+                                created_entities,
+                                created_relationships,
+                                metrics,
+                            ) = self._persist_extraction_results(
+                                doc_id_local, chunks_local, entity_dict, relationship_dict
+                            )
+
+                            self._update_entity_operation(
+                                operation_id,
+                                EntityExtractionState.DATABASE_OPERATIONS,
+                                f"Creating {metrics.get('relationships_requested', 0)} relationships",
+                            )
+
+                            # Optionally create entity similarities for this document
+                            try:
+                                graph_db.create_entity_similarities(doc_id_local)
+                            except Exception as e:
+                                logger.debug(
+                                    f"Failed to create entity similarities for {doc_id_local}: {e}"
+                                )
+
+                            # Phase 4: Validation
+                            self._update_entity_operation(
+                                operation_id,
+                                EntityExtractionState.VALIDATION,
+                                "Validating entity embeddings",
+                            )
+
+                            # Validate entity embeddings after processing
+                            try:
+                                validation_results = graph_db.validate_entity_embeddings(
+                                    doc_id_local
+                                )
+                                if not validation_results["validation_passed"]:
+                                    logger.warning(
+                                        f"Document {doc_id_local} has {validation_results['invalid_embeddings']} invalid entity embeddings"
+                                    )
+                                    # Optionally fix invalid embeddings
+                                    invalid_entity_ids = [
+                                        entity["entity_id"]
+                                        for entity in validation_results[
+                                            "invalid_entity_details"
+                                        ]
+                                    ]
+                                    if invalid_entity_ids:
+                                        logger.info(
+                                            f"Attempting to fix {len(invalid_entity_ids)} invalid entity embeddings..."
+                                        )
+                                        fix_results = graph_db.fix_invalid_embeddings(
+                                            entity_ids=invalid_entity_ids
+                                        )
+                                        logger.info(
+                                            f"Fixed {fix_results['entities_fixed']} entity embeddings"
+                                        )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to validate entity embeddings for document {doc_id_local}: {e}"
+                                )
+
+                            logger.info(
+                                f"Background entity extraction finished for {doc_id_local}: {created_entities} entities, {created_relationships} relationships"
                             )
                         except Exception as e:
                             logger.error(
-                                f"Entity extractor failed in background for {doc_id_local}: {e}"
+                                f"Unhandled error in background entity worker for {doc_id_local}: {e}"
                             )
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.ERROR,
-                                error_message=f"LLM extraction failed: {str(e)}",
-                            )
-                            return
-
-                        # Phase 2/3: Embedding generation, database operations, and metrics
-                        self._update_entity_operation(
-                            operation_id,
-                            EntityExtractionState.EMBEDDING_GENERATION,
-                            f"Generating embeddings for {len(entity_dict)} entities",
-                        )
-
-                        (
-                            created_entities,
-                            created_relationships,
-                            metrics,
-                        ) = self._persist_extraction_results(
-                            doc_id_local, chunks_local, entity_dict, relationship_dict
-                        )
-
-                        self._update_entity_operation(
-                            operation_id,
-                            EntityExtractionState.DATABASE_OPERATIONS,
-                            f"Creating {metrics.get('relationships_requested', 0)} relationships",
-                        )
-
-                        # Optionally create entity similarities for this document
-                        try:
-                            graph_db.create_entity_similarities(doc_id_local)
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to create entity similarities for {doc_id_local}: {e}"
-                            )
-
-                        # Phase 4: Validation
-                        self._update_entity_operation(
-                            operation_id,
-                            EntityExtractionState.VALIDATION,
-                            "Validating entity embeddings",
-                        )
-
-                        # Validate entity embeddings after processing
-                        try:
-                            validation_results = graph_db.validate_entity_embeddings(
-                                doc_id_local
-                            )
-                            if not validation_results["validation_passed"]:
-                                logger.warning(
-                                    f"Document {doc_id_local} has {validation_results['invalid_embeddings']} invalid entity embeddings"
+                            if operation_id:
+                                self._update_entity_operation(
+                                    operation_id,
+                                    EntityExtractionState.ERROR,
+                                    error_message=f"Unhandled error: {str(e)}",
                                 )
-                                # Optionally fix invalid embeddings
-                                invalid_entity_ids = [
-                                    entity["entity_id"]
-                                    for entity in validation_results[
-                                        "invalid_entity_details"
-                                    ]
-                                ]
-                                if invalid_entity_ids:
-                                    logger.info(
-                                        f"Attempting to fix {len(invalid_entity_ids)} invalid entity embeddings..."
-                                    )
-                                    fix_results = graph_db.fix_invalid_embeddings(
-                                        entity_ids=invalid_entity_ids
-                                    )
-                                    logger.info(
-                                        f"Fixed {fix_results['entities_fixed']} entity embeddings"
-                                    )
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to validate entity embeddings for document {doc_id_local}: {e}"
-                            )
+                        finally:
+                            # Complete the operation tracking
+                            if operation_id:
+                                self._complete_entity_operation(operation_id)
 
-                        logger.info(
-                            f"Background entity extraction finished for {doc_id_local}: {created_entities} entities, {created_relationships} relationships"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Unhandled error in background entity worker for {doc_id_local}: {e}"
-                        )
-                        if operation_id:
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.ERROR,
-                                error_message=f"Unhandled error: {str(e)}",
-                            )
-                    finally:
-                        # Complete the operation tracking
-                        if operation_id:
-                            self._complete_entity_operation(operation_id)
+                            # Remove this thread from the tracking list when finished
+                            try:
+                                with self._bg_lock:
+                                    current = threading.current_thread()
+                                    if current in self._bg_entity_threads:
+                                        self._bg_entity_threads.remove(current)
+                            except Exception:
+                                pass
 
-                        # Remove this thread from the tracking list when finished
-                        try:
-                            with self._bg_lock:
-                                current = threading.current_thread()
-                                if current in self._bg_entity_threads:
-                                    self._bg_entity_threads.remove(current)
-                        except Exception:
-                            pass
-
-                # Start thread and track it so the UI can detect background work
-                t = threading.Thread(
-                    target=_background_entity_worker,
-                    args=(doc_id, chunks_for_extraction),
-                    daemon=True,
-                )
-                with self._bg_lock:
-                    self._bg_entity_threads.append(t)
-                t.start()
+                    # Start thread and track it so the UI can detect background work
+                    t = threading.Thread(
+                        target=_background_entity_worker,
+                        args=(doc_id, chunks_for_extraction),
+                        daemon=True,
+                    )
+                    with self._bg_lock:
+                        self._bg_entity_threads.append(t)
+                    t.start()
 
             # Create similarity relationships between chunks
             try:
@@ -1398,6 +1527,26 @@ class DocumentProcessor:
             except Exception as sim_exc:  # pragma: no cover
                 logger.debug(
                     "Failed to create entity similarities for %s: %s", doc_id, sim_exc
+                )
+
+            # Auto-clustering: run after similarity generation to assign communities
+            try:
+                from core.graph_clustering import run_auto_clustering
+                clustering_result = run_auto_clustering(graph_db.driver)
+                if clustering_result.get("status") == "success":
+                    logger.info(
+                        "Auto-clustering completed: %s communities, %s nodes updated",
+                        clustering_result.get("communities_count", 0),
+                        clustering_result.get("updated_nodes", 0),
+                    )
+                else:
+                    logger.debug(
+                        "Auto-clustering status: %s",
+                        clustering_result.get("status", "unknown"),
+                    )
+            except Exception as cluster_exc:  # pragma: no cover
+                logger.warning(
+                    "Failed to run auto-clustering for %s: %s", doc_id, cluster_exc
                 )
 
             # Phase 4: Validation

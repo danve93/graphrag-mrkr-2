@@ -208,3 +208,75 @@ def write_communities_to_neo4j(
 
     logger.info("Updated %s Entity nodes with community assignments", updated)
     return int(updated)
+
+
+def run_auto_clustering(
+    driver: Driver,
+    relationship_types: Sequence[str] | None = None,
+    resolution: float | None = None,
+    min_edge_weight: float | None = None,
+    level: int = 0,
+) -> dict[str, int | float]:
+    """
+    Run full clustering pipeline (fetch → normalize → cluster → persist).
+    
+    Args:
+        driver: Neo4j driver instance
+        relationship_types: Edge types to include (defaults to settings.clustering_relationship_types)
+        resolution: Leiden resolution (defaults to settings.clustering_resolution)
+        min_edge_weight: Drop edges below this weight (defaults to settings.clustering_min_edge_weight)
+        level: Community level indicator
+    
+    Returns:
+        Dict with status, communities_count, modularity, updated_nodes
+    """
+    if not settings.enable_clustering or not settings.enable_graph_clustering:
+        logger.info("Graph clustering disabled in settings; skipping auto-clustering.")
+        return {"status": "disabled", "communities_count": 0, "modularity": 0.0, "updated_nodes": 0}
+
+    try:
+        rel_types = relationship_types or list(settings.clustering_relationship_types)
+        res = resolution if resolution is not None else settings.clustering_resolution
+        min_weight = min_edge_weight if min_edge_weight is not None else settings.clustering_min_edge_weight
+
+        logger.info("Auto-clustering: loading entity projection with relationships=%s", rel_types)
+        nodes_df, edges_df = fetch_entity_projection(driver, relationship_types=rel_types)
+
+        if nodes_df.empty:
+            logger.info("No entities available for clustering.")
+            return {"status": "no_entities", "communities_count": 0, "modularity": 0.0, "updated_nodes": 0}
+
+        logger.debug("Normalizing edge weights (min_weight=%s)", min_weight)
+        edges_df = normalize_edge_weights(edges_df, preferred_fields=DEFAULT_WEIGHT_FIELDS, weight_field="weight")
+        
+        if not edges_df.empty:
+            edges_df = edges_df[edges_df["weight"] >= min_weight].reset_index(drop=True)
+
+        logger.debug("Building igraph (%s nodes, %s edges)", len(nodes_df), len(edges_df))
+        graph = to_igraph(nodes_df, edges_df, weight_field="weight")
+
+        if graph.vcount() == 0:
+            logger.warning("No nodes in graph projection; skipping clustering.")
+            return {"status": "no_nodes", "communities_count": 0, "modularity": 0.0, "updated_nodes": 0}
+
+        if graph.ecount() == 0:
+            logger.warning("No edges after filtering; skipping clustering.")
+            return {"status": "no_edges", "communities_count": 0, "modularity": 0.0, "updated_nodes": 0}
+
+        logger.info("Running Leiden clustering (resolution=%s)...", res)
+        membership, modularity = run_leiden_clustering(graph, resolution=res, weight_field="weight")
+        communities_count = len(set(membership.values()))
+
+        logger.info("Leiden finished: %s communities, modularity=%.4f", communities_count, modularity)
+        updated = write_communities_to_neo4j(driver, membership, level=level)
+
+        return {
+            "status": "success",
+            "communities_count": communities_count,
+            "modularity": float(modularity),
+            "updated_nodes": updated,
+        }
+
+    except Exception as e:
+        logger.error("Auto-clustering failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e), "communities_count": 0, "modularity": 0.0, "updated_nodes": 0}

@@ -21,12 +21,12 @@
     "next": "14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "react-force-graph-3d": "^1.26.1",
+    "react-force-graph-3d": "^1.29.0",
     "react-markdown": "^9.0.0",
     "react-syntax-highlighter": "^15.5.0",
-    "three": "^0.161.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.0",
+    "three": "^0.161.0",
     "zustand": "^4.5.0"
   },
   "devDependencies": {

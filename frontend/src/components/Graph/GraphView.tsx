@@ -268,20 +268,21 @@ export default function GraphView() {
           </div>
         )}
         <ForceGraph3D
-          graphData={graphPayload}
-          nodeColor={(node: GraphNode) => getCommunityColor(node.community_id || undefined)}
+          graphData={graphPayload as any}
+          // Use property accessors where possible to avoid TS generic mismatch
+          nodeColor={(node: any) => getCommunityColor(node.community_id || undefined)}
           linkColor={() => '#94a3b8'}
-          nodeVal={(node: GraphNode & { val?: number }) => node.val ?? Math.max(node.degree ?? 1, 1)}
-          linkWidth={(link: GraphEdge & { value?: number }) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
-          nodeLabel={(node: GraphNode) => nodeLabel(node)}
-          linkLabel={(link: GraphEdge) => linkLabel(link)}
+          nodeVal={(node: any) => node.val ?? Math.max(node.degree ?? 1, 1)}
+          linkWidth={(link: any) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
+          nodeLabel={(node: any) => nodeLabel(node as GraphNode)}
+          linkLabel={(link: any) => linkLabel(link as GraphEdge)}
           backgroundColor="#0b1120"
-          onNodeHover={(node) => {
-            setHoverNode(node || null)
+          onNodeHover={(node: any) => {
+            setHoverNode((node as GraphNode) || null)
             setHoverEdge(null)
           }}
-          onLinkHover={(link) => {
-            setHoverEdge(link || null)
+          onLinkHover={(link: any) => {
+            setHoverEdge((link as GraphEdge) || null)
             setHoverNode(null)
           }}
         />

@@ -21,6 +21,7 @@ export default function CommunitiesSection({
   const [communities, setCommunities] = useState(initialCommunities || [])
   const [expanded, setExpanded] = useState(true)
   const [loading, setLoading] = useState(!initialCommunities)
+  const [processing, setProcessing] = useState(false)
 
   useEffect(() => {
     const loadCommunities = async () => {
@@ -83,6 +84,20 @@ export default function CommunitiesSection({
     )
   }
 
+  const handleProcess = async () => {
+    try {
+      setProcessing(true)
+      await api.reprocessDocumentEntities(documentId)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('documents:processing-updated'))
+      }
+    } catch (e) {
+      console.error('Failed to queue entity extraction', e)
+    } finally {
+      setProcessing(false)
+    }
+  }
+
   if (communities.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
@@ -96,9 +111,28 @@ export default function CommunitiesSection({
             None
           </span>
         </button>
+        <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+          <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">No communities found for this document.</p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleProcess}
+              disabled={processing}
+              className="button-primary text-sm px-4 py-2"
+            >
+              {processing ? 'Queuing...' : 'Process entities'}
+            </button>
+            <button
+              onClick={() => setExpanded(true)}
+              className="button-secondary text-sm px-3 py-2"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
       </div>
     )
   }
+
 
   return (
     <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">

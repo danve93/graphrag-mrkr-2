@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     embedding_delay_max: float = Field(default=1.0, description="Maximum delay between embedding requests")
     llm_delay_min: float = Field(default=0.5, description="Minimum delay between LLM requests")
     llm_delay_max: float = Field(default=1.0, description="Maximum delay between LLM requests")
+    sync_entity_embeddings: bool = Field(
+        default=False,
+        description="Force synchronous entity embedding & persistence (set SYNC_ENTITY_EMBEDDINGS=1 for deterministic test runs)",
+    )
+    skip_entity_embeddings: bool = Field(
+        default=False,
+        description="Skip entity embedding generation entirely (set SKIP_ENTITY_EMBEDDINGS=1 to store empty embeddings)",
+    )
+    skip_entity_embeddings: bool = Field(
+        default=False,
+        description="Skip generating embeddings for entities (use SKIP_ENTITY_EMBEDDINGS=1 to bypass during tests)",
+    )
 
     # Document Processing Configuration
     chunk_size: int = Field(default=1000, description="Document chunk size")
@@ -217,5 +229,13 @@ try:
 
     logger = logging.getLogger(__name__)
     logger.info(f"Resolved LLM provider: {settings.llm_provider}")
+    if getattr(settings, "sync_entity_embeddings", False):
+        logger.info("SYNC_ENTITY_EMBEDDINGS enabled: using synchronous entity persistence path")
+    if getattr(settings, "skip_entity_embeddings", False):
+        logger.info("SKIP_ENTITY_EMBEDDINGS enabled: entity embeddings will be omitted")
 except Exception:
     pass
+
+# Environment variables documentation (summary):
+#   SYNC_ENTITY_EMBEDDINGS=1 -> run entity extraction & embedding fully synchronously (deterministic tests)
+#   SKIP_ENTITY_EMBEDDINGS=1 -> bypass embedding generation for entities (faster ingestion, empty embeddings stored)

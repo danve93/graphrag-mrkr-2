@@ -7,7 +7,9 @@ import {
   XMarkIcon,
   ClockIcon,
   CircleStackIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline'
+import GraphView from '@/components/Graph/GraphView'
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import HistoryTab from './HistoryTab'
 import DatabaseTab from './DatabaseTab'
@@ -30,7 +32,7 @@ export default function Sidebar({
   minWidth = 260,
   maxWidth = 480,
 }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<'history' | 'database'>('history')
+  const [activeTab, setActiveTab] = useState<'history' | 'database' | 'graph'>('history')
   const [isResizing, setIsResizing] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const isConnected = useChatStore((state) => state.isConnected)
@@ -38,6 +40,7 @@ export default function Sidebar({
   const tabs = [
     { id: 'history' as const, label: 'History', icon: ClockIcon },
     { id: 'database' as const, label: 'Database', icon: CircleStackIcon },
+    { id: 'graph' as const, label: 'Graph', icon: ChartBarIcon },
   ]
 
   const resizeWithinBounds = useCallback(
@@ -176,6 +179,7 @@ export default function Sidebar({
                 <div key={activeTab} className="tab-content">
                   {activeTab === 'history' && <HistoryTab />}
                   {activeTab === 'database' && <DatabaseTab />}
+                  {activeTab === 'graph' && <GraphView />}
                 </div>
               </div>
             </>
