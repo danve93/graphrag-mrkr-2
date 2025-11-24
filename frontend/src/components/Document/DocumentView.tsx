@@ -303,27 +303,55 @@ export default function DocumentView() {
         // JSON response with inline content (markdown/text)
         const mimeType = (response as any).mime_type || documentData?.mime_type
         const content = (response as any).content
-        
+
         // For markdown, we'll render it on the frontend and pass to DocumentPreview
-        setPreviewState({ 
-          url: null, 
-          mimeType, 
-          isLoading: false, 
-          error: null, 
+        setPreviewState({
+          url: null,
+          mimeType,
+          isLoading: false,
+          error: null,
           objectUrl: null,
-          content
+          content,
+        })
+        return
+      }
+
+      if (response instanceof Response) {
+        const mimeType = response.headers?.get?.('Content-Type') || documentData?.mime_type
+
+        if (mimeType?.toLowerCase().includes('markdown') || mimeType?.toLowerCase().includes('text/')) {
+          const content = await response.text()
+          setPreviewState({
+            url: null,
+            mimeType,
+            isLoading: false,
+            error: null,
+            objectUrl: null,
+            content,
+          })
+          return
+        }
+
+        const blob = await response.blob()
+        const objectUrl = URL.createObjectURL(blob)
+        setPreviewState({
+          url: objectUrl,
+          mimeType,
+          isLoading: false,
+          error: null,
+          objectUrl,
         })
         return
       }
 
       if ('object_url' in response) {
         // Blob converted to object URL (non-JSON files)
-        setPreviewState({ 
-          url: (response as any).object_url, 
-          mimeType: (response as any).mime_type, 
-          isLoading: false, 
-          error: null, 
-          objectUrl: (response as any).object_url 
+        setPreviewState({
+          url: (response as any).object_url,
+          mimeType: (response as any).mime_type,
+          isLoading: false,
+          error: null,
+          objectUrl: (response as any).object_url,
         })
         return
       }
