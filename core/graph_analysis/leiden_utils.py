@@ -1,15 +1,20 @@
 """Utilities for running Leiden clustering over the entity graph.
 
-The entity graph exposes two relationship types:
-- ``SIMILAR_TO`` edges between entities created from embedding similarity. These edges
-  carry ``similarity`` weights (or ``score`` when coming from chunk similarity projections).
-- ``RELATED_TO`` edges created from extracted relationships. These edges expose
-  ``strength`` values.
+Relationship creation patterns:
+* ``SIMILAR_TO`` edges are inserted with ``MERGE (a)-[r:SIMILAR_TO]-(b)`` in
+  ``core.graph_db`` for both chunk-level and entity-level similarities. These are
+  undirected and already safe for undirected community detection.
+* ``RELATED_TO`` edges between entities follow the same undirected merge pattern
+  and expose a ``strength`` property.
+* Directional edges (for example ``CONTAINS_ENTITY`` from chunks to entities) are
+  intentionally excluded from entity clustering because they are not symmetric and
+  would need to be mirrored before Leiden can consume them.
 
 Leiden expects a single numeric weight property. The helpers below normalize the
 available properties into a unified ``weight`` attribute for projections, and they
 fall back to ``1.0`` when a weight is missing so the algorithm can still run at
-resolution values provided by callers.
+resolution values provided by callers. Default projections are undirected and
+weighted; directional edges should either be dropped or symmetrized before use.
 """
 
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
@@ -105,3 +110,69 @@ def build_leiden_parameters(
     """
 
     return {"weightProperty": weight_property, "resolution": resolution}
+
+
+def _coalesce_weight(relationship_alias: str = "r", default: float = DEFAULT_WEIGHT) -> str:
+    """Return a Cypher expression that picks a numeric weight for an edge."""
+
+    fields: Sequence[str] = ("weight", "similarity", "score", "strength")
+    field_chain = ", ".join(f"{relationship_alias}.{field}" for field in fields)
+    return f"coalesce({field_chain}, {default})"
+
+
+def build_entity_leiden_projection_cypher(
+    weight_field: str = "weight",
+    relationship_labels: Sequence[str] | None = None,
+    directional_labels: Sequence[str] | None = None,
+    symmetrize_directional: bool = True,
+) -> str:
+    """Build a Cypher projection that returns an undirected edge list for Leiden.
+
+    The default projection includes only entity-to-entity relationships created by
+    ingestion (``SIMILAR_TO`` and ``RELATED_TO``), which are already stored as
+    undirected edges. Directional relationships are ignored unless explicitly
+    provided via ``directional_labels``; when supplied, they are mirrored so Leiden
+    can still operate in undirected weighted mode.
+
+    Parameters
+    ----------
+    weight_field:
+        Name for the normalized weight property emitted in the projection.
+    relationship_labels:
+        Entity relationship types to include. Defaults to the standard undirected
+        labels: ``SIMILAR_TO`` and ``RELATED_TO``.
+    directional_labels:
+        Optional directional relationship types to mirror into undirected pairs.
+        Use this only when absolutely necessary; most Leiden runs should drop
+        directional edges instead of mixing them with undirected entity links.
+    symmetrize_directional:
+        When ``True`` (default), directional edges are doubled (forward + reverse)
+        to make them safe for undirected community detection. When ``False``,
+        directional edges are excluded from the projection.
+    """
+
+    labels = relationship_labels or ENTITY_EDGE_LABELS
+    label_union = "|".join(labels)
+    weight_expr = _coalesce_weight(default=DEFAULT_WEIGHT)
+
+    edge_projection = f"
+MATCH (e1:Entity)-[r:{label_union}]-(e2:Entity)
+WITH id(e1) AS source, id(e2) AS target, {weight_expr} AS {weight_field}
+WITH CASE WHEN source < target THEN source ELSE target END AS source,
+     CASE WHEN source < target THEN target ELSE source END AS target,
+     {weight_field}
+RETURN DISTINCT source, target, {weight_field}
+".strip()
+
+    if directional_labels and symmetrize_directional:
+        directional_union = "|".join(directional_labels)
+        mirrored = f"
+MATCH (src)-[r:{directional_union}]->(dst)
+UNWIND [[id(src), id(dst)], [id(dst), id(src)]] AS pair
+WITH pair[0] AS source, pair[1] AS target, {weight_expr} AS {weight_field}
+RETURN DISTINCT source, target, {weight_field}
+".strip()
+
+        edge_projection = "\nUNION\n".join([edge_projection, mirrored])
+
+    return edge_projection
