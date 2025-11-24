@@ -114,6 +114,124 @@ class DocumentProcessor:
         content = f"{doc_id}_{operation_type}_{timestamp}"
         return hashlib.md5(content.encode()).hexdigest()[:16]
 
+    def _prepare_chunks_for_extraction(
+        self, doc_id: str, processed_chunks: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """Prepare chunk payloads for entity extraction.
+
+        Prefers freshly processed chunks (when available) to ensure we attach
+        the exact chunk IDs that were embedded and stored, but will fall back
+        to querying Neo4j if necessary.
+        """
+
+        if processed_chunks:
+            return [
+                {
+                    "chunk_id": chunk.get("chunk_id"),
+                    "content": chunk.get("content", ""),
+                    "document_id": doc_id,
+                }
+                for chunk in processed_chunks
+                if chunk.get("chunk_id")
+            ]
+
+        chunks_from_db = graph_db.get_document_chunks(doc_id)
+        for chunk in chunks_from_db:
+            chunk["document_id"] = doc_id
+        return chunks_from_db
+
+    def _build_extraction_metrics(
+        self,
+        doc_id: str,
+        chunks_for_extraction: List[Dict[str, Any]],
+        entity_dict,
+        relationship_dict,
+        created_entities: int,
+        created_relationships: int,
+    ) -> Dict[str, Any]:
+        """Create a lightweight metrics payload for monitoring extraction quality."""
+
+        total_chunks = len(chunks_for_extraction)
+        referenced_chunks = {
+            cid
+            for entity in entity_dict.values()
+            for cid in (entity.source_chunks or [])
+            if cid
+        }
+        relationships_requested = sum(len(rels) for rels in relationship_dict.values())
+        coverage = (
+            len(referenced_chunks) / total_chunks
+            if total_chunks > 0
+            else 0.0
+        )
+
+        metrics = {
+            "document_id": doc_id,
+            "chunks_processed": total_chunks,
+            "entities_created": created_entities,
+            "relationships_created": created_relationships,
+            "relationships_requested": relationships_requested,
+            "chunk_coverage": round(coverage, 3),
+            "entities_per_chunk": round(
+                created_entities / total_chunks, 3
+            )
+            if total_chunks
+            else 0.0,
+            "unique_chunks_with_entities": len(referenced_chunks),
+        }
+
+        logger.info(
+            "Entity extraction metrics for %s — chunks: %s, entities: %s, "
+            "relationships: %s (requested %s), coverage: %.1f%%",
+            doc_id,
+            total_chunks,
+            created_entities,
+            created_relationships,
+            relationships_requested,
+            coverage * 100,
+        )
+        return metrics
+
+    def _persist_extraction_results(
+        self,
+        doc_id: str,
+        chunks_for_extraction: List[Dict[str, Any]],
+        entity_dict,
+        relationship_dict,
+    ) -> tuple[int, int, Dict[str, Any]]:
+        """Persist entities/relationships and return metrics."""
+
+        def _run_async_creation():
+            return self._create_entities_async(entity_dict, relationship_dict, doc_id)
+
+        try:
+            created_entities, created_relationships = asyncio.run(
+                _run_async_creation()
+            )
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                created_entities, created_relationships = loop.run_until_complete(
+                    _run_async_creation()
+                )
+            else:
+                created_entities, created_relationships = loop.run_until_complete(
+                    _run_async_creation()
+                )
+
+        metrics = self._build_extraction_metrics(
+            doc_id,
+            chunks_for_extraction,
+            entity_dict,
+            relationship_dict,
+            created_entities,
+            created_relationships,
+        )
+        graph_db.create_document_node(
+            doc_id, {"entity_extraction_metrics": metrics}
+        )
+        return created_entities, created_relationships, metrics
+
     def _start_entity_operation(self, doc_id: str, doc_name: str) -> str:
         """Start tracking an entity extraction operation."""
         operation_id = self._generate_operation_id(doc_id)
@@ -532,11 +650,14 @@ class DocumentProcessor:
 
             if should_extract_entities and self.entity_extractor:
                 extractor = self.entity_extractor
-                # Prepare chunks for entity extraction
-                chunks_for_extraction = [
-                    {"chunk_id": chunk["chunk_id"], "content": chunk["content"]}
-                    for chunk in chunks
-                ]
+                chunks_for_extraction = self._prepare_chunks_for_extraction(
+                    doc_id, processed_chunks
+                )
+                logger.info(
+                    "Scheduling entity extraction with retry/backoff for %s chunks (doc: %s)",
+                    len(chunks_for_extraction),
+                    doc_id,
+                )
 
                 # Start background thread to perform entity extraction without blocking
                 def _background_entity_worker(doc_id_local, chunks_local):
@@ -575,50 +696,26 @@ class DocumentProcessor:
                             )
                             return
 
-                        # Phase 2: Embedding generation and database operations
+                        # Phase 2/3: Embedding generation, database operations, and metrics
                         self._update_entity_operation(
                             operation_id,
                             EntityExtractionState.EMBEDDING_GENERATION,
                             f"Generating embeddings for {len(entity_dict)} entities",
                         )
 
-                        # Persist entities and relationships asynchronously
-                        created_entities, created_relationships = asyncio.run(
-                            self._create_entities_async(
-                                entity_dict, relationship_dict, doc_id_local
-                            )
+                        (
+                            created_entities,
+                            created_relationships,
+                            metrics,
+                        ) = self._persist_extraction_results(
+                            doc_id_local, chunks_local, entity_dict, relationship_dict
                         )
 
-                        # Phase 3: Database operations for relationships
                         self._update_entity_operation(
                             operation_id,
                             EntityExtractionState.DATABASE_OPERATIONS,
-                            f"Creating {sum(len(rels) for rels in relationship_dict.values())} relationships",
+                            f"Creating {metrics.get('relationships_requested', 0)} relationships",
                         )
-
-                        # Store entity relationships
-                        for relationships in relationship_dict.values():
-                            for relationship in relationships:
-                                try:
-                                    source_id = self._generate_entity_id(
-                                        relationship.source_entity
-                                    )
-                                    target_id = self._generate_entity_id(
-                                        relationship.target_entity
-                                    )
-                                    graph_db.create_entity_relationship(
-                                        entity_id1=source_id,
-                                        entity_id2=target_id,
-                                        relationship_type="RELATED_TO",
-                                        description=relationship.description,
-                                        strength=relationship.strength,
-                                        source_chunks=relationship.source_chunks or [],
-                                    )
-                                    created_relationships += 1
-                                except Exception as e:
-                                    logger.debug(
-                                        f"Failed to persist relationship for doc {doc_id_local}: {e}"
-                                    )
 
                         # Optionally create entity similarities for this document
                         try:
@@ -1224,7 +1321,7 @@ class DocumentProcessor:
         _emit(EntityExtractionState.STARTING, 0.0, "Preparing entity extraction")
 
         try:
-            chunks_for_extraction = graph_db.get_document_chunks(doc_id)
+            chunks_for_extraction = self._prepare_chunks_for_extraction(doc_id)
             if not chunks_for_extraction:
                 raise ValueError("No chunks found for document")
 
@@ -1256,12 +1353,16 @@ class DocumentProcessor:
                 f"Embedding {entity_count_estimate} entities",
             )
 
-            created_entities, created_relationships = asyncio.run(
-                self._create_entities_async(entity_dict, relationship_dict, doc_id)
+            (
+                created_entities,
+                created_relationships,
+                metrics,
+            ) = self._persist_extraction_results(
+                doc_id, chunks_for_extraction, entity_dict, relationship_dict
             )
 
             # Phase 3: Relationship wiring
-            expected_rels = sum(len(rels) for rels in relationship_dict.values())
+            expected_rels = metrics.get("relationships_requested", 0)
             self._update_entity_operation(
                 operation_id,
                 EntityExtractionState.DATABASE_OPERATIONS,
@@ -1272,27 +1373,6 @@ class DocumentProcessor:
                 0.7,
                 f"Linking {expected_rels} relationships",
             )
-
-            for relationships in relationship_dict.values():
-                for relationship in relationships:
-                    try:
-                        source_id = self._generate_entity_id(relationship.source_entity)
-                        target_id = self._generate_entity_id(relationship.target_entity)
-                        graph_db.create_entity_relationship(
-                            entity_id1=source_id,
-                            entity_id2=target_id,
-                            relationship_type="RELATED_TO",
-                            description=relationship.description,
-                            strength=relationship.strength,
-                            source_chunks=relationship.source_chunks or [],
-                        )
-                        created_relationships += 1
-                    except Exception as rel_exc:  # pragma: no cover - defensive logging
-                        logger.debug(
-                            "Failed to persist relationship for doc %s: %s",
-                            doc_id,
-                            rel_exc,
-                        )
 
             # Optional similarity generation
             try:
@@ -1415,7 +1495,9 @@ class DocumentProcessor:
                         )
 
                         # Get chunks for this document from the database
-                        chunks_for_extraction = graph_db.get_document_chunks(doc_id)
+                        chunks_for_extraction = self._prepare_chunks_for_extraction(
+                            doc_id
+                        )
 
                         if not chunks_for_extraction:
                             logger.warning(f"No chunks found for document {doc_id}")
@@ -1443,43 +1525,20 @@ class DocumentProcessor:
                             f"Generating embeddings for {len(entity_dict)} entities",
                         )
 
-                        # Persist entities and relationships asynchronously
-                        created_entities, created_relationships = asyncio.run(
-                            self._create_entities_async(
-                                entity_dict, relationship_dict, doc_id
-                            )
+                        (
+                            created_entities,
+                            created_relationships,
+                            metrics,
+                        ) = self._persist_extraction_results(
+                            doc_id, chunks_for_extraction, entity_dict, relationship_dict
                         )
 
                         # Phase 3: Database operations for relationships
                         self._update_entity_operation(
                             operation_id,
                             EntityExtractionState.DATABASE_OPERATIONS,
-                            f"Creating {sum(len(rels) for rels in relationship_dict.values())} relationships",
+                            f"Creating {metrics.get('relationships_requested', 0)} relationships",
                         )
-
-                        # Store entity relationships
-                        for relationships in relationship_dict.values():
-                            for relationship in relationships:
-                                try:
-                                    source_id = self._generate_entity_id(
-                                        relationship.source_entity
-                                    )
-                                    target_id = self._generate_entity_id(
-                                        relationship.target_entity
-                                    )
-                                    graph_db.create_entity_relationship(
-                                        entity_id1=source_id,
-                                        entity_id2=target_id,
-                                        relationship_type="RELATED_TO",
-                                        description=relationship.description,
-                                        strength=relationship.strength,
-                                        source_chunks=relationship.source_chunks or [],
-                                    )
-                                    created_relationships += 1
-                                except Exception as e:
-                                    logger.debug(
-                                        f"Failed to persist relationship for doc {doc_id}: {e}"
-                                    )
 
                         # Optionally create entity similarities for this document
                         try:
@@ -1734,7 +1793,9 @@ class DocumentProcessor:
                             )
 
                             # Get chunks for this document from the database
-                            chunks_for_extraction = graph_db.get_document_chunks(doc_id)
+                            chunks_for_extraction = self._prepare_chunks_for_extraction(
+                                doc_id
+                            )
 
                             if not chunks_for_extraction:
                                 logger.warning(f"No chunks found for document {doc_id}")
@@ -1762,44 +1823,20 @@ class DocumentProcessor:
                                 f"Generating embeddings for {len(entity_dict)} entities",
                             )
 
-                            # Persist entities and relationships asynchronously
-                            created_entities, created_relationships = asyncio.run(
-                                self._create_entities_async(
-                                    entity_dict, relationship_dict, doc_id
-                                )
+                            (
+                                created_entities,
+                                created_relationships,
+                                metrics,
+                            ) = self._persist_extraction_results(
+                                doc_id, chunks_for_extraction, entity_dict, relationship_dict
                             )
 
                             # Phase 3: Database operations for relationships
                             self._update_entity_operation(
                                 operation_id,
                                 EntityExtractionState.DATABASE_OPERATIONS,
-                                f"Creating {sum(len(rels) for rels in relationship_dict.values())} relationships",
+                                f"Creating {metrics.get('relationships_requested', 0)} relationships",
                             )
-
-                            # Store entity relationships
-                            for relationships in relationship_dict.values():
-                                for relationship in relationships:
-                                    try:
-                                        source_id = self._generate_entity_id(
-                                            relationship.source_entity
-                                        )
-                                        target_id = self._generate_entity_id(
-                                            relationship.target_entity
-                                        )
-                                        graph_db.create_entity_relationship(
-                                            entity_id1=source_id,
-                                            entity_id2=target_id,
-                                            relationship_type="RELATED_TO",
-                                            description=relationship.description,
-                                            strength=relationship.strength,
-                                            source_chunks=relationship.source_chunks
-                                            or [],
-                                        )
-                                        created_relationships += 1
-                                    except Exception as e:
-                                        logger.debug(
-                                            f"Failed to persist relationship for doc {doc_id}: {e}"
-                                        )
 
                             # Optionally create entity similarities for this document
                             try:
