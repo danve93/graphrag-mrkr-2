@@ -18,6 +18,7 @@ from core.document_summarizer import document_summarizer
 from core.embeddings import embedding_manager
 from core.entity_extraction import EntityExtractor
 from core.graph_db import graph_db
+from ingestion.converters import document_converter
 from ingestion.loaders.csv_loader import CSVLoader
 from ingestion.loaders.docx_loader import DOCXLoader
 from ingestion.loaders.image_loader import ImageLoader
@@ -60,28 +61,9 @@ class DocumentProcessor:
 
     def __init__(self):
         """Initialize the document processor."""
-        # Initialize loaders with intelligent OCR support
-        image_loader = ImageLoader()
-        self.loaders = {
-            ".pdf": PDFLoader(),  # PDF loader with intelligent OCR
-            ".docx": DOCXLoader(),
-            ".txt": TextLoader(),
-            ".md": TextLoader(),
-            ".py": TextLoader(),
-            ".js": TextLoader(),
-            ".html": TextLoader(),
-            ".css": TextLoader(),
-            ".csv": CSVLoader(),
-            ".pptx": PPTXLoader(),
-            ".xlsx": XLSXLoader(),
-            ".xls": XLSXLoader(),  # Also support legacy Excel format
-            # Add support for image files with intelligent OCR
-            ".jpg": image_loader,
-            ".jpeg": image_loader,
-            ".png": image_loader,
-            ".tiff": image_loader,
-            ".bmp": image_loader,
-        }
+        # Initialize loaders with intelligent OCR support (shared with converter)
+        self.converter = document_converter
+        self.loaders = dict(self.converter.loaders)
 
         # Smart OCR is always enabled and applied intelligently
         # No user configuration needed - OCR is applied only where necessary
@@ -423,7 +405,6 @@ class DocumentProcessor:
             Processing result dictionary or None if failed
         """
         try:
-            # Smart OCR is applied automatically by loaders
             use_quality_filtering = (
                 enable_quality_filtering
                 if enable_quality_filtering is not None
@@ -435,56 +416,40 @@ class DocumentProcessor:
                 logger.error(f"File not found: {file_path}")
                 return None
 
-            # Get appropriate loader
-            file_ext = file_path.suffix.lower()
-            loader = self.loaders.get(file_ext)
-
-            # Handle image files with intelligent OCR
-            ocr_metadata = {}
-            if isinstance(loader, ImageLoader):
-                logger.info(f"Processing image file with intelligent OCR: {file_path}")
-                result = loader.load_with_metadata(file_path)
-                if not result or not result["content"]:
-                    logger.info(f"No text content detected in image: {file_path}")
-                    return None
-                content = result["content"]
-                ocr_metadata = result.get("metadata", {})
-            elif isinstance(loader, PDFLoader):
-                logger.info(f"Processing PDF file with intelligent OCR: {file_path}")
-                result = loader.load_with_metadata(file_path)
-                if not result or not result["content"]:
-                    logger.warning(f"No content extracted from PDF: {file_path}")
-                    return None
-                content = result["content"]
-                ocr_metadata = result.get("metadata", {})
-            elif not loader:
-                logger.warning(f"No loader available for file type: {file_ext}")
+            # Convert the document to Markdown content using format-specific converters
+            conversion_result = self.converter.convert(file_path, original_filename)
+            if not conversion_result or not conversion_result.get("content"):
+                logger.warning("No content extracted from %s", file_path)
                 return None
-            else:
-                # Load document content using appropriate loader
-                logger.info(f"Processing file: {file_path}")
-                content = loader.load(file_path)
-                if not content:
-                    logger.warning(f"No content extracted from: {file_path}")
-                    return None
+
+            content = conversion_result.get("content", "")
 
             # Generate document ID and extract metadata
             doc_id = document_id or self._generate_document_id(file_path)
             metadata = self._extract_metadata(file_path, original_filename)
-
-            # Add OCR metadata if available
-            if ocr_metadata:
-                metadata.update(ocr_metadata)
+            metadata.update(conversion_result.get("metadata", {}))
 
             # Ensure content_primary_type is set (derive from file extension if missing)
             metadata["content_primary_type"] = metadata.get(
                 "content_primary_type"
             ) or self._derive_content_primary_type(metadata.get("file_extension"))
 
+            processing_state = {
+                "processing_status": "processing",
+                "processing_stage": "conversion",
+                "processing_progress": 5.0,
+                "processing_error": None,
+            }
+
             # Create document node
-            graph_db.create_document_node(doc_id, metadata)
+            graph_db.create_document_node(doc_id, {**metadata, **processing_state})
 
             # Chunk the document with enhanced processing
+            graph_db.create_document_node(
+                doc_id,
+                {"processing_stage": "chunking", "processing_progress": 25.0},
+            )
+
             if use_quality_filtering:
                 chunks = document_chunker.chunk_text(
                     content,
@@ -499,9 +464,23 @@ class DocumentProcessor:
                 chunks = document_chunker.chunk_text(content, doc_id)
                 logger.info(f"Used standard chunking for {doc_id}")
 
+            for chunk in chunks:
+                chunk_metadata = chunk.get("metadata", {}) or {}
+                chunk_metadata.update(
+                    {
+                        "document_id": doc_id,
+                        "source_document": metadata.get("filename"),
+                    }
+                )
+                chunk["metadata"] = chunk_metadata
+
             # Extract document summary, type, and hashtags after chunking
             logger.info(f"Extracting summary for document {doc_id}")
             summary_data = document_summarizer.extract_summary(chunks)
+            graph_db.create_document_node(
+                doc_id,
+                {"processing_stage": "summarization", "processing_progress": 60.0},
+            )
             
             # Update document node with summary information
             graph_db.update_document_summary(
@@ -516,6 +495,11 @@ class DocumentProcessor:
             )
 
             # Process chunks asynchronously with configurable concurrency (embeddings + storing)
+            graph_db.create_document_node(
+                doc_id,
+                {"processing_stage": "embedding", "processing_progress": 75.0},
+            )
+
             try:
                 # Use asyncio.run for a synchronous wrapper
                 processed_chunks = asyncio.run(
@@ -740,7 +724,19 @@ class DocumentProcessor:
                 "similarity_relationships_created": relationships_created,
                 "metadata": metadata,
                 "status": "success",
+                "processing_status": "completed",
+                "processing_stage": "completed",
             }
+
+            graph_db.create_document_node(
+                doc_id,
+                {
+                    "processing_status": "completed",
+                    "processing_stage": "completed",
+                    "processing_progress": 100.0,
+                    "processing_error": None,
+                },
+            )
 
             logger.info(
                 f"Successfully processed {file_path}: {len(processed_chunks)} chunks created"
@@ -758,7 +754,27 @@ class DocumentProcessor:
 
         except Exception as e:
             logger.error(f"Failed to process file {file_path}: {e}")
-            return {"file_path": str(file_path), "status": "error", "error": str(e)}
+            try:
+                doc_id = document_id or self._generate_document_id(file_path)
+                graph_db.create_document_node(
+                    doc_id,
+                    {
+                        "processing_status": "error",
+                        "processing_stage": "error",
+                        "processing_progress": 0.0,
+                        "processing_error": str(e),
+                    },
+                )
+            except Exception:
+                pass
+
+            return {
+                "file_path": str(file_path),
+                "status": "error",
+                "error": str(e),
+                "processing_status": "error",
+                "processing_stage": "error",
+            }
 
     def is_entity_extraction_running(self) -> bool:
         """
@@ -959,8 +975,6 @@ class DocumentProcessor:
             Processing result dictionary or None if failed
         """
         try:
-            # Determine OCR settings (use provided params or fall back to global settings)
-            # Smart OCR applied automatically
             use_quality_filtering = (
                 enable_quality_filtering
                 if enable_quality_filtering is not None
@@ -972,47 +986,19 @@ class DocumentProcessor:
                 logger.error(f"File not found: {file_path}")
                 return None
 
-            # Get appropriate loader
-            file_ext = file_path.suffix.lower()
-            loader = self.loaders.get(file_ext)
-
             # Generate document ID and extract metadata (needed for all cases)
             doc_id = document_id or self._generate_document_id(file_path)
             metadata = self._extract_metadata(file_path, original_filename)
 
             logger.info(f"Processing file chunks only: {file_path}")
 
-            # Handle image and PDF files with intelligent OCR
-            ocr_metadata = {}
-            if isinstance(loader, ImageLoader):
-                logger.info(f"Processing image file with intelligent OCR: {file_path}")
-                result = loader.load_with_metadata(file_path)
-                if not result or not result["content"]:
-                    logger.info(f"No text content detected in image: {file_path}")
-                    return None
-                content = result["content"]
-                ocr_metadata = result.get("metadata", {})
-            elif isinstance(loader, PDFLoader):
-                logger.info(f"Processing PDF file with intelligent OCR: {file_path}")
-                result = loader.load_with_metadata(file_path)
-                if not result or not result["content"]:
-                    logger.warning(f"No content extracted from PDF: {file_path}")
-                    return None
-                content = result["content"]
-                ocr_metadata = result.get("metadata", {})
-            elif not loader:
-                logger.warning(f"No loader available for file type: {file_ext}")
+            conversion_result = self.converter.convert(file_path, original_filename)
+            if not conversion_result or not conversion_result.get("content"):
+                logger.warning("No content extracted from %s", file_path)
                 return None
-            else:
-                # Load document content using appropriate loader
-                content = loader.load(file_path)
-                if not content:
-                    logger.warning(f"No content extracted from: {file_path}")
-                    return None
 
-            # Add OCR metadata if available
-            if ocr_metadata:
-                metadata.update(ocr_metadata)
+            content = conversion_result.get("content", "")
+            metadata.update(conversion_result.get("metadata", {}))
 
             # Ensure content_primary_type is set (derive from file extension if missing)
             metadata["content_primary_type"] = metadata.get(
@@ -1020,7 +1006,15 @@ class DocumentProcessor:
             ) or self._derive_content_primary_type(metadata.get("file_extension"))
 
             # Create document node
-            graph_db.create_document_node(doc_id, metadata)
+            graph_db.create_document_node(
+                doc_id,
+                {
+                    **metadata,
+                    "processing_status": "processing",
+                    "processing_stage": "chunking",
+                    "processing_progress": 15.0,
+                },
+            )
 
             # Chunk the document with enhanced processing
             if use_quality_filtering:
@@ -1037,9 +1031,24 @@ class DocumentProcessor:
                 chunks = document_chunker.chunk_text(content, doc_id)
                 logger.info(f"Used standard chunking for {doc_id}")
 
+            for chunk in chunks:
+                chunk_metadata = chunk.get("metadata", {}) or {}
+                chunk_metadata.update(
+                    {
+                        "document_id": doc_id,
+                        "source_document": metadata.get("filename"),
+                    }
+                )
+                chunk["metadata"] = chunk_metadata
+
             # Extract document summary, type, and hashtags after chunking
             logger.info(f"Extracting summary for document {doc_id}")
             summary_data = document_summarizer.extract_summary(chunks)
+
+            graph_db.create_document_node(
+                doc_id,
+                {"processing_stage": "summarization", "processing_progress": 60.0},
+            )
             
             # Update document node with summary information
             graph_db.update_document_summary(
@@ -1054,6 +1063,11 @@ class DocumentProcessor:
             )
 
             # Process chunks asynchronously with configurable concurrency (embeddings + storing)
+            graph_db.create_document_node(
+                doc_id,
+                {"processing_stage": "embedding", "processing_progress": 75.0},
+            )
+
             try:
                 # Use asyncio.run for a synchronous wrapper
                 processed_chunks = asyncio.run(
@@ -1120,7 +1134,19 @@ class DocumentProcessor:
                 "similarity_relationships_created": relationships_created,
                 "metadata": metadata,
                 "status": "success",
+                "processing_status": "completed",
+                "processing_stage": "completed",
             }
+
+            graph_db.create_document_node(
+                doc_id,
+                {
+                    "processing_status": "completed",
+                    "processing_stage": "completed",
+                    "processing_progress": 100.0,
+                    "processing_error": None,
+                },
+            )
 
             logger.info(
                 f"Successfully processed {file_path} (chunks only): {len(processed_chunks)} chunks created"
@@ -1138,7 +1164,27 @@ class DocumentProcessor:
 
         except Exception as e:
             logger.error(f"Failed to process file {file_path} (chunks only): {e}")
-            return {"file_path": str(file_path), "status": "error", "error": str(e)}
+            try:
+                doc_id = document_id or self._generate_document_id(file_path)
+                graph_db.create_document_node(
+                    doc_id,
+                    {
+                        "processing_status": "error",
+                        "processing_stage": "error",
+                        "processing_progress": 0.0,
+                        "processing_error": str(e),
+                    },
+                )
+            except Exception:
+                pass
+
+            return {
+                "file_path": str(file_path),
+                "status": "error",
+                "error": str(e),
+                "processing_status": "error",
+                "processing_stage": "error",
+            }
 
     def extract_entities_for_document(
         self,

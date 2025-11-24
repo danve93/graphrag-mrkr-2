@@ -603,6 +603,8 @@ async def upload_document(file: UploadFile = File(...)):
                 status="success",
                 chunks_created=result.get("chunks_created", 0),
                 document_id=result.get("document_id"),
+                processing_status=result.get("processing_status"),
+                processing_stage=result.get("processing_stage"),
             )
         else:
             error_msg = result.get("error", "Unknown error") if result else "Processing failed"
@@ -610,6 +612,8 @@ async def upload_document(file: UploadFile = File(...)):
                 filename=filename,
                 status="error",
                 chunks_created=0,
+                processing_status=result.get("processing_status") if result else "error",
+                processing_stage=result.get("processing_stage") if result else "error",
                 error=error_msg,
             )
 
@@ -773,7 +777,9 @@ async def stage_document(file: UploadFile = File(...)):
             file_id=file_id,
             filename=filename,
             document_id=document_id,
-            status="queued" if enqueued else "staged"
+            status="queued" if enqueued else "staged",
+            processing_status="queued" if enqueued else "staged",
+            processing_stage="queued" if enqueued else "staged",
         )
 
     except Exception as e:
@@ -782,6 +788,8 @@ async def stage_document(file: UploadFile = File(...)):
             file_id="",
             filename=filename,
             status="error",
+            processing_status="error",
+            processing_stage="error",
             error=str(e)
         )
 
