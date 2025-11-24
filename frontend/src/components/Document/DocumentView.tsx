@@ -1,5 +1,6 @@
 "use client"
 
+import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeftIcon,
@@ -123,7 +124,7 @@ export default function DocumentView() {
     } catch (e) {
       // ignore
     }
-  }, [])
+  }, [selectDocument, selectedDocumentId])
 
   useEffect(() => {
     let isSubscribed = true
@@ -820,9 +821,10 @@ export default function DocumentView() {
                   )}
                 </div>
               </section>
-            )}
+            </>
+          )}
 
-            <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+          <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
               <header className={`flex items-center justify-between px-5 py-4 ${isChunksExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
                 <button
                   type="button"
@@ -1079,62 +1081,61 @@ export default function DocumentView() {
               </section>
             )}
 
-            {documentData.metadata && (
-              <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
-                <header className={`flex items-center justify-between px-5 py-4 ${isMetadataExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
-                  <button
-                    type="button"
-                    onClick={toggleMetadataExpanded}
-                    className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
-                  >
-                    {isMetadataExpanded ? (
-                      <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
-                    ) : (
-                      <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
-                    )}
-                    <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Metadata</h3>
-                  </button>
-                </header>
-                <AnimatePresence>
-                  {isMetadataExpanded && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.3, ease: 'easeInOut' }}
-                      className="overflow-hidden"
+              {documentData.metadata && (
+                <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+                  <header className={`flex items-center justify-between px-5 py-4 ${isMetadataExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
+                    <button
+                      type="button"
+                      onClick={toggleMetadataExpanded}
+                      className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
                     >
-                      <pre className="bg-secondary-900 text-secondary-50 text-xs rounded-b-lg p-4 overflow-auto">
-                        {JSON.stringify(documentData.metadata, null, 2)}
-                      </pre>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                    </section>
+                      {isMetadataExpanded ? (
+                        <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                      ) : (
+                        <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                      )}
+                      <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Metadata</h3>
+                    </button>
+                  </header>
+                  <AnimatePresence>
+                    {isMetadataExpanded && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.3, ease: 'easeInOut' }}
+                        className="overflow-hidden"
+                      >
+                        <pre className="bg-secondary-900 text-secondary-50 text-xs rounded-b-lg p-4 overflow-auto">
+                          {JSON.stringify(documentData.metadata, null, 2)}
+                        </pre>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </section>
+              )}
 
-                    {/* Document-level graph and community info */}
-                    <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
-                      <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
-                        <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
-                        <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
-                      </header>
-                      <div className="p-5">
-                        <DocumentGraph documentId={documentData.id} height={480} />
-                      </div>
-                    </section>
+              {/* Document-level graph and community info */}
+              <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+                <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
+                  <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
+                  <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
+                </header>
+                <div className="p-5">
+                  <DocumentGraph documentId={documentData.id} height={480} />
+                </div>
+              </section>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                      <div>
-                        <CommunitiesSection documentId={documentData.id} />
-                      </div>
-                      <div>
-                        <ChunkSimilaritiesSection documentId={documentData.id} />
-                      </div>
-                    </div>
-                  </>
-            )}
-          </div>
-        )}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                  <CommunitiesSection documentId={documentData.id} />
+                </div>
+                <div>
+                  <ChunkSimilaritiesSection documentId={documentData.id} />
+                </div>
+              </div>
+            </div>
+          )}
       </div>
 
       {(previewState.url || previewState.content) && (
