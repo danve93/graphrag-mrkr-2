@@ -4,3 +4,4 @@
 .env.docker
 /data
 /api/routers/__pycache__
+/frontend/node_modules
