@@ -24,6 +24,9 @@ import type {
 import type { ProcessingGlobalSummary } from '@/types/upload'
 import { useChatStore } from '@/store/chatStore'
 import DocumentPreview from './DocumentPreview'
+import DocumentGraph from './DocumentGraph'
+import CommunitiesSection from './CommunitiesSection'
+import ChunkSimilaritiesSection from './ChunkSimilaritiesSection'
 
 interface PreviewState {
   url: string | null
@@ -780,7 +783,8 @@ export default function DocumentView() {
             </section>
 
             {(documentData.summary || documentData.chunks.length > 0 || documentData.metadata?.processing_status !== 'staged') && (
-              <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+              <>
+                <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
                 <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Summary</h3>
@@ -1106,7 +1110,28 @@ export default function DocumentView() {
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </section>
+                    </section>
+
+                    {/* Document-level graph and community info */}
+                    <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+                      <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
+                        <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
+                        <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
+                      </header>
+                      <div className="p-5">
+                        <DocumentGraph documentId={documentData.id} height={480} />
+                      </div>
+                    </section>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div>
+                        <CommunitiesSection documentId={documentData.id} />
+                      </div>
+                      <div>
+                        <ChunkSimilaritiesSection documentId={documentData.id} />
+                      </div>
+                    </div>
+                  </>
             )}
           </div>
         )}

@@ -71,8 +71,55 @@ async def generate_document_summary(document_id: str):
         ) from exc
 
 
-@router.patch("/{document_id}/hashtags")
-async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequest):
+@router.get("/{document_id}/similarities")
+async def get_document_chunk_similarities(document_id: str):
+    """Get chunk-to-chunk similarity relationships for a document."""
+    try:
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        # Get all chunks for this document
+        chunks = graph_db.get_document_chunks(document_id)
+        if not chunks:
+            return {"document_id": document_id, "similarities": []}
+
+        # Get similarity relationships between chunks
+        chunk_ids = [chunk.get("chunk_id") or chunk.get("id") for chunk in chunks]
+        
+        # Query Neo4j for SIMILAR_TO relationships between these chunks
+        query = """
+            MATCH (c1:Chunk)-[sim:SIMILAR_TO]-(c2:Chunk)
+            WHERE c1.id IN $chunk_ids AND c2.id IN $chunk_ids AND c1.id < c2.id
+            RETURN 
+                c1.id AS chunk1_id,
+                c1.content AS chunk1_text,
+                c2.id AS chunk2_id,
+                c2.content AS chunk2_text,
+                coalesce(sim.score, 0) AS score
+            ORDER BY score DESC
+        """
+        
+        with graph_db.driver.session() as session:
+            results = session.run(query, chunk_ids=chunk_ids).data()
+        
+        return {
+            "document_id": document_id,
+            "similarities": results
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to get chunk similarities for %s: %s", document_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve chunk similarities"
+        ) from exc
+
+
+
     """Update the hashtags for a document."""
     try:
         # Verify document exists

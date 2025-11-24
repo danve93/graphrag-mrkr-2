@@ -24,6 +24,9 @@ async def get_clustered_graph(
     level: Optional[int] = Query(
         default=None, description="Community detection level for the selection"
     ),
+    document_id: Optional[str] = Query(
+        default=None, description="Filter graph to entities from a specific document"
+    ),
     limit: int = Query(
         default=300,
         gt=0,
@@ -39,6 +42,7 @@ async def get_clustered_graph(
             node_type=node_type,
             level=level,
             limit=limit,
+            document_id=document_id,
         )
         return GraphResponse(**graph)
     except Exception as exc:  # pragma: no cover - thin HTTP wrapper

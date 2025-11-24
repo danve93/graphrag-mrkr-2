@@ -13,3 +13,5 @@
 /ingestion/__pycache__
 /ingestion/loaders/__pycache__
 /scripts/__pycache__
+/frontend/.next/cache
+/rag/__pycache__

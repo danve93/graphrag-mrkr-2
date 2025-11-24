@@ -245,6 +245,7 @@ export const api = {
     node_type?: string
     level?: number
     limit?: number
+    document_id?: string
   }): Promise<GraphResponse> {
     const query = new URLSearchParams()
     if (params?.community_id !== undefined) {
@@ -258,6 +259,9 @@ export const api = {
     }
     if (params?.limit !== undefined) {
       query.append('limit', String(params.limit))
+    }
+    if (params?.document_id) {
+      query.append('document_id', params.document_id)
     }
 
     const queryString = query.toString()
@@ -282,6 +286,14 @@ export const api = {
 
   async getDocumentText(documentId: string): Promise<DocumentTextPayload> {
     const response = await fetch(`${API_URL}/api/documents/${documentId}/text`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async getDocumentChunkSimilarities(documentId: string) {
+    const response = await fetch(`${API_URL}/api/documents/${documentId}/similarities`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }

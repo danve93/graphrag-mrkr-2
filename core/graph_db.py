@@ -921,6 +921,7 @@ class GraphDB:
         node_type: Optional[str] = None,
         level: Optional[int] = None,
         limit: int = 300,
+        document_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return clustered graph data with community and degree metadata."""
 
@@ -938,6 +939,9 @@ class GraphDB:
         if level is not None:
             filters.append("e.level = $community_level")
             params["community_level"] = level
+        if document_id:
+            filters.append("(e)<-[:CONTAINS_ENTITY]-(c)<-[:HAS_CHUNK]-(d:Document) AND d.id = $document_id")
+            params["document_id"] = document_id
 
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
 
