@@ -29,6 +29,16 @@ export default function ChatInterface() {
   const [currentStage, setCurrentStage] = useState<string>('query_analysis')
   const [completedStages, setCompletedStages] = useState<string[]>([])
   const [settings, setSettings] = useState<any>(null)
+  const [advancedSettings, setAdvancedSettings] = useState({
+    chunk_weight: 0.6,
+    entity_weight: 0.4,
+    path_weight: 0.6,
+    max_hops: 2,
+    beam_size: 8,
+    graph_expansion_depth: 2,
+    restrict_to_context: true,
+  })
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
   const healthCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const scrollToBottom = () => {
@@ -45,6 +55,18 @@ export default function ChatInterface() {
       try {
         const response = await api.getSettings()
         setSettings(response)
+        setAdvancedSettings((prev) => ({
+          ...prev,
+          chunk_weight: response?.hybrid_chunk_weight ?? prev.chunk_weight,
+          entity_weight: response?.hybrid_entity_weight ?? prev.entity_weight,
+          path_weight: response?.hybrid_path_weight ?? prev.path_weight,
+          max_hops: response?.multi_hop_max_hops ?? prev.max_hops,
+          beam_size: response?.multi_hop_beam_size ?? prev.beam_size,
+          graph_expansion_depth:
+            response?.max_expansion_depth ?? prev.graph_expansion_depth,
+          restrict_to_context:
+            response?.default_context_restriction ?? prev.restrict_to_context,
+        }))
       } catch (error) {
         console.error('Failed to fetch settings:', error)
       }
@@ -99,6 +121,10 @@ export default function ChatInterface() {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
     }
+  }
+
+  const updateAdvancedSetting = (key: string, value: number | boolean) => {
+    setAdvancedSettings((prev) => ({ ...prev, [key]: value }))
   }
 
   const handleNewChat = useCallback(() => {
@@ -221,6 +247,13 @@ export default function ChatInterface() {
           context_documents: contextDocuments,
           context_document_labels: contextDocumentLabels,
           context_hashtags: contextHashtags,
+          chunk_weight: advancedSettings.chunk_weight,
+          entity_weight: advancedSettings.entity_weight,
+          path_weight: advancedSettings.path_weight,
+          max_hops: advancedSettings.max_hops,
+          beam_size: advancedSettings.beam_size,
+          graph_expansion_depth: advancedSettings.graph_expansion_depth,
+          restrict_to_context: advancedSettings.restrict_to_context,
         },
         { signal: controller.signal }
       )
@@ -446,8 +479,100 @@ export default function ChatInterface() {
       </div>
 
       {/* Input */}
-      <div className="border-t border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4">
-        <div className="max-w-4xl mx-auto">
+    <div className="border-t border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4">
+        <div className="max-w-4xl mx-auto space-y-4">
+          <details
+            className="rounded-lg border border-secondary-200 dark:border-secondary-600 bg-secondary-50 dark:bg-secondary-900 p-4"
+            open={showAdvancedSettings}
+            onToggle={(event) => setShowAdvancedSettings(event.currentTarget.open)}
+          >
+            <summary className="cursor-pointer font-semibold text-secondary-900 dark:text-white">
+              Advanced retrieval settings
+            </summary>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="flex flex-col text-sm text-secondary-800 dark:text-secondary-200">
+                Chunk weight
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={advancedSettings.chunk_weight}
+                  onChange={(e) => updateAdvancedSetting('chunk_weight', parseFloat(e.target.value) || 0)}
+                  className="mt-1 rounded border border-secondary-200 bg-white p-2 text-secondary-900 dark:border-secondary-700 dark:bg-secondary-800 dark:text-white"
+                />
+              </label>
+              <label className="flex flex-col text-sm text-secondary-800 dark:text-secondary-200">
+                Entity weight
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={advancedSettings.entity_weight}
+                  onChange={(e) => updateAdvancedSetting('entity_weight', parseFloat(e.target.value) || 0)}
+                  className="mt-1 rounded border border-secondary-200 bg-white p-2 text-secondary-900 dark:border-secondary-700 dark:bg-secondary-800 dark:text-white"
+                />
+              </label>
+              <label className="flex flex-col text-sm text-secondary-800 dark:text-secondary-200">
+                Path weight
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={advancedSettings.path_weight}
+                  onChange={(e) => updateAdvancedSetting('path_weight', parseFloat(e.target.value) || 0)}
+                  className="mt-1 rounded border border-secondary-200 bg-white p-2 text-secondary-900 dark:border-secondary-700 dark:bg-secondary-800 dark:text-white"
+                />
+              </label>
+              <label className="flex flex-col text-sm text-secondary-800 dark:text-secondary-200">
+                Multi-hop depth (hops)
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={advancedSettings.max_hops}
+                  onChange={(e) => updateAdvancedSetting('max_hops', parseInt(e.target.value) || 0)}
+                  className="mt-1 rounded border border-secondary-200 bg-white p-2 text-secondary-900 dark:border-secondary-700 dark:bg-secondary-800 dark:text-white"
+                />
+              </label>
+              <label className="flex flex-col text-sm text-secondary-800 dark:text-secondary-200">
+                Beam size
+                <input
+                  type="number"
+                  min={1}
+                  max={32}
+                  step={1}
+                  value={advancedSettings.beam_size}
+                  onChange={(e) => updateAdvancedSetting('beam_size', parseInt(e.target.value) || 0)}
+                  className="mt-1 rounded border border-secondary-200 bg-white p-2 text-secondary-900 dark:border-secondary-700 dark:bg-secondary-800 dark:text-white"
+                />
+              </label>
+              <label className="flex flex-col text-sm text-secondary-800 dark:text-secondary-200">
+                Graph expansion depth
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={advancedSettings.graph_expansion_depth}
+                  onChange={(e) => updateAdvancedSetting('graph_expansion_depth', parseInt(e.target.value) || 0)}
+                  className="mt-1 rounded border border-secondary-200 bg-white p-2 text-secondary-900 dark:border-secondary-700 dark:bg-secondary-800 dark:text-white"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-secondary-800 dark:text-secondary-200">
+                <input
+                  type="checkbox"
+                  checked={advancedSettings.restrict_to_context}
+                  onChange={(e) => updateAdvancedSetting('restrict_to_context', e.target.checked)}
+                  className="h-4 w-4 rounded border-secondary-300 text-primary-600 focus:ring-primary-500"
+                />
+                Restrict retrieval to selected context
+              </label>
+            </div>
+          </details>
           <ChatInput
             onSend={handleSendMessage}
             onStop={handleStopStreaming}
