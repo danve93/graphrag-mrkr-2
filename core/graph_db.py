@@ -641,6 +641,93 @@ class GraphDB:
                 f"Deleted document {doc_id} and cleaned up {len(chunk_ids)} chunks and related entities"
             )
 
+    def reset_document_entities(self, doc_id: str) -> Dict[str, int]:
+        """Remove existing entity links for a document so extraction can be rerun cleanly."""
+
+        with self.driver.session() as session:  # type: ignore
+            record = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
+                RETURN collect(c.id) AS chunk_ids
+                """,
+                doc_id=doc_id,
+            ).single()
+
+            chunk_ids: List[str] = [] if record is None else record.get("chunk_ids", [])
+
+            # Clear previous extraction metrics
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                SET d.entity_extraction_metrics = NULL
+                """,
+                doc_id=doc_id,
+            )
+
+            if not chunk_ids:
+                return {"chunk_ids": 0, "entity_relationships": 0, "chunk_entity_relationships": 0, "entities_removed": 0}
+
+            rel_result = session.run(
+                """
+                MATCH (e1:Entity)-[r:RELATED_TO]-(e2:Entity)
+                WHERE any(cid IN coalesce(r.source_chunks, []) WHERE cid IN $chunk_ids)
+                DELETE r
+                RETURN count(r) AS deleted
+                """,
+                chunk_ids=chunk_ids,
+            ).single()
+            rel_deleted = 0 if rel_result is None else rel_result.get("deleted", 0)
+
+            chunk_entity_result = session.run(
+                """
+                MATCH (c:Chunk)-[rel:CONTAINS_ENTITY]->(e:Entity)
+                WHERE c.id IN $chunk_ids
+                DELETE rel
+                RETURN count(rel) AS deleted
+                """,
+                chunk_ids=chunk_ids,
+            ).single()
+            chunk_entity_deleted = (
+                0 if chunk_entity_result is None else chunk_entity_result.get("deleted", 0)
+            )
+
+            session.run(
+                """
+                MATCH (e:Entity)
+                WHERE any(cid IN coalesce(e.source_chunks, []) WHERE cid IN $chunk_ids)
+                SET e.source_chunks = [cid IN coalesce(e.source_chunks, []) WHERE NOT cid IN $chunk_ids]
+                """,
+                chunk_ids=chunk_ids,
+            )
+
+            orphan_result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE (coalesce(e.source_chunks, []) = [] OR e.source_chunks IS NULL)
+                  AND NOT ( ()-[:CONTAINS_ENTITY]->(e) )
+                WITH e LIMIT 10000
+                DETACH DELETE e
+                RETURN count(e) AS deleted
+                """,
+            ).single()
+            orphan_deleted = 0 if orphan_result is None else orphan_result.get("deleted", 0)
+
+        logger.info(
+            "Reset entity data for document %s — chunks: %s, entity rels removed: %s, chunk/entity rels removed: %s, orphans deleted: %s",
+            doc_id,
+            len(chunk_ids),
+            rel_deleted,
+            chunk_entity_deleted,
+            orphan_deleted,
+        )
+
+        return {
+            "chunk_ids": len(chunk_ids),
+            "entity_relationships": rel_deleted,
+            "chunk_entity_relationships": chunk_entity_deleted,
+            "entities_removed": orphan_deleted,
+        }
+
     def get_all_documents(self) -> List[Dict[str, Any]]:
         """Get all documents with their metadata, chunk counts, and OCR information."""
         with self.driver.session() as session:  # type: ignore
