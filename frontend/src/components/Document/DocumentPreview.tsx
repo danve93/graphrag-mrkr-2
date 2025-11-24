@@ -304,7 +304,7 @@ ${cleanHtml}
           srcDoc={htmlContent}
           title="Markdown preview"
           className="w-full h-full border-none rounded-lg"
-          sandbox="allow-same-origin"
+          sandbox="allow-same-origin allow-scripts"
         />
       )
     }
