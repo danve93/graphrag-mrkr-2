@@ -11,6 +11,7 @@ from rag.nodes.generation import generate_response
 from rag.nodes.graph_reasoning import reason_with_graph
 from rag.nodes.query_analysis import analyze_query
 from rag.nodes.retrieval import retrieve_documents
+from core.quality_scorer import quality_scorer
 
 logger = logging.getLogger(__name__)
 
@@ -236,9 +237,35 @@ class GraphRAG:
 
             context_docs = getattr(final_state, "context_documents", [])
             metadata = getattr(final_state, "metadata", {}) or {}
+            history_turns = len(chat_history or [])
+
             if context_docs:
                 metadata = {**metadata, "context_documents": context_docs}
-                setattr(final_state, "metadata", metadata)
+            metadata["chat_history_turns"] = history_turns
+
+            # Calculate quality score inside the pipeline when available
+            quality_score = getattr(final_state, "quality_score", None)
+            if not quality_score:
+                relevant_chunks = getattr(final_state, "graph_context", []) or getattr(
+                    final_state, "retrieved_chunks", []
+                )
+                relevant_chunks = [
+                    chunk
+                    for chunk in relevant_chunks
+                    if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
+                ]
+                quality_score = quality_scorer.calculate_quality_score(
+                    answer=getattr(final_state, "response", ""),
+                    query=user_query,
+                    context_chunks=relevant_chunks,
+                    sources=getattr(final_state, "sources", []),
+                )
+                setattr(final_state, "quality_score", quality_score)
+
+            if quality_score:
+                metadata["quality_score"] = quality_score
+
+            setattr(final_state, "metadata", metadata)
 
             # Return results
             return {

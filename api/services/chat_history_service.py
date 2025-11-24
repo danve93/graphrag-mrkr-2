@@ -3,10 +3,17 @@
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from api.models import ChatMessage, ConversationHistory, ConversationSession
+from api.models import (
+    ChatMessage,
+    ConversationHistory,
+    ConversationSession,
+    MessageSearchResponse,
+    MessageSearchResult,
+)
 from core.graph_db import graph_db
 
 logger = logging.getLogger(__name__)
@@ -68,6 +75,40 @@ def strip_markdown(text: str) -> str:
 class ChatHistoryService:
     """Service for managing chat conversation history."""
 
+    @staticmethod
+    def _generate_timestamp() -> str:
+        """Return a timezone aware ISO timestamp."""
+
+        return datetime.now().astimezone().isoformat()
+
+    async def create_session(self, session_id: Optional[str] = None, title: Optional[str] = None) -> str:
+        """Create a session node if it doesn't exist and return the id."""
+
+        session_identifier = session_id or str(uuid.uuid4())
+
+        driver = graph_db.driver
+        if driver is None:
+            raise RuntimeError("Neo4j driver is not initialized")
+
+        timestamp = self._generate_timestamp()
+        driver.execute_query(
+            """
+            MERGE (s:ConversationSession {session_id: $session_id})
+            ON CREATE SET s.created_at = $timestamp,
+                          s.updated_at = $timestamp,
+                          s.deleted_at = null,
+                          s.title = $title
+            ON MATCH SET s.updated_at = $timestamp,
+                          s.deleted_at = null,
+                          s.title = coalesce($title, s.title)
+            """,
+            session_id=session_identifier,
+            timestamp=timestamp,
+            title=title,
+        )
+
+        return session_identifier
+
     async def save_message(
         self,
         session_id: str,
@@ -96,7 +137,8 @@ class ChatHistoryService:
         """
         try:
             # Use the machine's local timezone so frontend shows relative times in local context
-            timestamp = datetime.now().astimezone().isoformat()
+            timestamp = self._generate_timestamp()
+            message_id = str(uuid.uuid4())
 
             driver = graph_db.driver
             if driver is None:
@@ -105,9 +147,13 @@ class ChatHistoryService:
             # Create message node in Neo4j
             query = """
             MERGE (s:ConversationSession {session_id: $session_id})
-            ON CREATE SET s.created_at = $timestamp, s.updated_at = $timestamp
-            ON MATCH SET s.updated_at = $timestamp
+            ON CREATE SET s.created_at = $timestamp,
+                          s.updated_at = $timestamp,
+                          s.deleted_at = null
+            ON MATCH SET s.updated_at = $timestamp,
+                          s.deleted_at = null
             CREATE (m:Message {
+                message_id: $message_id,
                 role: $role,
                 content: $content,
                 timestamp: $timestamp,
@@ -116,7 +162,8 @@ class ChatHistoryService:
                 follow_up_questions: $follow_up_questions,
                 context_documents: $context_documents,
                 context_document_labels: $context_document_labels,
-                context_hashtags: $context_hashtags
+                context_hashtags: $context_hashtags,
+                deleted_at: null
             })
             CREATE (s)-[:HAS_MESSAGE]->(m)
             """
@@ -124,6 +171,7 @@ class ChatHistoryService:
             driver.execute_query(
                 query,
                 session_id=session_id,
+                message_id=message_id,
                 role=role,
                 content=content,
                 timestamp=timestamp,
@@ -135,7 +183,7 @@ class ChatHistoryService:
                 context_hashtags=context_hashtags or [],
             )
 
-            logger.info(f"Saved message to session {session_id}")
+            logger.info(f"Saved message to session {session_id} with id {message_id}")
 
         except Exception as e:
             logger.error(f"Failed to save message: {e}")
@@ -158,6 +206,8 @@ class ChatHistoryService:
 
             query = """
             MATCH (s:ConversationSession {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)
+            WHERE (s.deleted_at IS NULL OR s.deleted_at = "")
+              AND (m.deleted_at IS NULL OR m.deleted_at = "")
             RETURN s, m
             ORDER BY m.timestamp
             """
@@ -196,6 +246,7 @@ class ChatHistoryService:
                 messages.append(
                     ChatMessage(
                         role=msg_node.get("role", ""),
+                        message_id=msg_node.get("message_id"),
                         content=msg_node.get("content", ""),
                         timestamp=msg_node.get("timestamp"),
                         sources=sources_data,
@@ -225,6 +276,7 @@ class ChatHistoryService:
                 messages=messages,
                 created_at=_normalize_ts(session_data.get("created_at", "")),
                 updated_at=_normalize_ts(session_data.get("updated_at", "")),
+                deleted_at=_normalize_ts(session_data.get("deleted_at", "")),
             )
 
         except Exception as e:
@@ -244,14 +296,18 @@ class ChatHistoryService:
                 raise RuntimeError("Neo4j driver is not initialized")
 
             query = (
-                "MATCH (s:ConversationSession)-[:HAS_MESSAGE]->(m:Message)\n"
-                "WITH s, count(m) as message_count, collect(m)[0] as first_message\n"
+                "MATCH (s:ConversationSession)\n"
+                "WHERE s.deleted_at IS NULL OR s.deleted_at = ''\n"
+                "OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:Message)\n"
+                "WHERE m.deleted_at IS NULL OR m.deleted_at = ''\n"
+                "WITH s, [msg IN collect(m) WHERE msg IS NOT NULL] as messages\n"
                 "RETURN s.session_id as session_id,\n"
                 "       s.created_at as created_at,\n"
                 "       s.updated_at as updated_at,\n"
-                "       message_count,\n"
-                "       first_message.content as preview\n"
-                "ORDER BY s.updated_at DESC"
+                "       s.deleted_at as deleted_at,\n"
+                "       size(messages) as message_count,\n"
+                "       CASE WHEN size(messages) > 0 THEN messages[0].content ELSE '' END as preview\n"
+                "ORDER BY coalesce(s.updated_at, s.created_at) DESC"
             )
 
             result = driver.execute_query(query)
@@ -285,6 +341,7 @@ class ChatHistoryService:
                             updated_at=_normalize_ts(record.get("updated_at")),
                             message_count=record["message_count"],
                             preview=preview,
+                            deleted_at=_normalize_ts(record.get("deleted_at")),
                         )
                     )
 
@@ -306,14 +363,19 @@ class ChatHistoryService:
             if driver is None:
                 raise RuntimeError("Neo4j driver is not initialized")
 
+            timestamp = self._generate_timestamp()
+
             query = """
             MATCH (s:ConversationSession {session_id: $session_id})
+            SET s.deleted_at = $timestamp,
+                s.updated_at = $timestamp
+            WITH s
             OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:Message)
-            DETACH DELETE s, m
+            SET m.deleted_at = $timestamp
             """
 
-            driver.execute_query(query, session_id=session_id)
-            logger.info(f"Deleted session {session_id}")
+            driver.execute_query(query, session_id=session_id, timestamp=timestamp)
+            logger.info(f"Soft deleted session {session_id}")
 
         except Exception as e:
             logger.error(f"Failed to delete session: {e}")
@@ -328,16 +390,116 @@ class ChatHistoryService:
 
             query = """
             MATCH (s:ConversationSession)
+            SET s.deleted_at = $timestamp,
+                s.updated_at = $timestamp
+            WITH s
             OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:Message)
-            DETACH DELETE s, m
+            SET m.deleted_at = $timestamp
             """
 
-            driver.execute_query(query)
-            logger.info("Cleared all conversation history")
+            timestamp = self._generate_timestamp()
+            driver.execute_query(query, timestamp=timestamp)
+            logger.info("Soft cleared all conversation history")
 
         except Exception as e:
             logger.error(f"Failed to clear history: {e}")
             raise
+
+    async def restore_session(self, session_id: str) -> None:
+        """Restore a previously soft-deleted session and its messages."""
+
+        driver = graph_db.driver
+        if driver is None:
+            raise RuntimeError("Neo4j driver is not initialized")
+
+        timestamp = self._generate_timestamp()
+
+        driver.execute_query(
+            """
+            MATCH (s:ConversationSession {session_id: $session_id})
+            SET s.deleted_at = null,
+                s.updated_at = $timestamp
+            WITH s
+            OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:Message)
+            SET m.deleted_at = null
+            """,
+            session_id=session_id,
+            timestamp=timestamp,
+        )
+
+    async def soft_delete_message(self, session_id: str, message_id: str) -> None:
+        """Mark a single message as deleted without removing its session."""
+
+        driver = graph_db.driver
+        if driver is None:
+            raise RuntimeError("Neo4j driver is not initialized")
+
+        timestamp = self._generate_timestamp()
+        driver.execute_query(
+            """
+            MATCH (s:ConversationSession {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message {message_id: $message_id})
+            SET m.deleted_at = $timestamp
+            """,
+            session_id=session_id,
+            message_id=message_id,
+            timestamp=timestamp,
+        )
+
+    async def search_messages(self, query: str, include_deleted: bool = False) -> MessageSearchResponse:
+        """Search messages by a case-insensitive substring query."""
+
+        driver = graph_db.driver
+        if driver is None:
+            raise RuntimeError("Neo4j driver is not initialized")
+
+        filters = ""
+        if not include_deleted:
+            filters = (
+                "WHERE (s.deleted_at IS NULL OR s.deleted_at = '') "
+                "AND (m.deleted_at IS NULL OR m.deleted_at = '')"
+            )
+
+        cypher = f"""
+        MATCH (s:ConversationSession)-[:HAS_MESSAGE]->(m:Message)
+        {filters}
+        WITH s, m
+        WHERE toLower(m.content) CONTAINS toLower($query)
+        RETURN s.session_id as session_id,
+               m.message_id as message_id,
+               m.role as role,
+               m.content as content,
+               m.timestamp as timestamp,
+               m.quality_score as quality_score,
+               m.context_documents as context_documents
+        ORDER BY timestamp DESC
+        LIMIT 50
+        """
+
+        result = driver.execute_query(cypher, query=query)
+
+        results: List[MessageSearchResult] = []
+        if result and result.records:
+            for record in result.records:
+                quality_data = record.get("quality_score")
+                if isinstance(quality_data, str):
+                    try:
+                        quality_data = json.loads(quality_data)
+                    except json.JSONDecodeError:
+                        quality_data = None
+
+                results.append(
+                    MessageSearchResult(
+                        session_id=record.get("session_id"),
+                        message_id=record.get("message_id"),
+                        role=record.get("role", ""),
+                        content=record.get("content", ""),
+                        timestamp=record.get("timestamp"),
+                        quality_score=quality_data,
+                        context_documents=record.get("context_documents") or [],
+                    )
+                )
+
+        return MessageSearchResponse(query=query, results=results)
 
 
 # Global service instance

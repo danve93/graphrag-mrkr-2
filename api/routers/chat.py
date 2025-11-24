@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -23,8 +23,14 @@ router = APIRouter()
 
 
 async def stream_response_generator(
-    result: dict, session_id: str, user_query: str, context_documents: List[str],
-    context_document_labels: List[str], context_hashtags: List[str], stage_updates: Optional[List[str]] = None
+    result: dict,
+    session_id: str,
+    user_query: str,
+    context_documents: List[str],
+    context_document_labels: List[str],
+    context_hashtags: List[str],
+    chat_history: List[dict],
+    stage_updates: Optional[List[str]] = None,
 ) -> AsyncGenerator[str, None]:
     """Generate streaming response with SSE format."""
     try:
@@ -76,7 +82,7 @@ async def stream_response_generator(
                 await asyncio.sleep(0.015)  # Slightly faster for smoother feel
 
         # NOW emit quality calculation stage (AFTER response is done)
-        quality_score = None
+        quality_score = result.get("quality_score")
         try:
             # Emit quality calculation stage
             stage_data = {
@@ -86,22 +92,23 @@ async def stream_response_generator(
             yield f"data: {json.dumps(stage_data)}\n\n"
             await asyncio.sleep(0.05)
 
-            context_chunks = result.get("graph_context", [])
-            if not context_chunks:
-                context_chunks = result.get("retrieved_chunks", [])
+            if not quality_score:
+                context_chunks = result.get("graph_context", [])
+                if not context_chunks:
+                    context_chunks = result.get("retrieved_chunks", [])
 
-            relevant_chunks = [
-                chunk
-                for chunk in context_chunks
-                if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
-            ]
+                relevant_chunks = [
+                    chunk
+                    for chunk in context_chunks
+                    if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
+                ]
 
-            quality_score = quality_scorer.calculate_quality_score(
-                answer=response_text,
-                query=user_query,
-                context_chunks=relevant_chunks,
-                sources=result.get("sources", []),
-            )
+                quality_score = quality_scorer.calculate_quality_score(
+                    answer=response_text,
+                    query=user_query,
+                    context_chunks=relevant_chunks,
+                    sources=result.get("sources", []),
+                )
         except Exception as e:
             logger.warning(f"Quality scoring failed: {e}")
 
@@ -120,7 +127,7 @@ async def stream_response_generator(
                 query=user_query,
                 response=response_text,
                 sources=result.get("sources", []),
-                chat_history=[],
+                chat_history=chat_history,
             )
         except Exception as e:
             logger.warning(f"Follow-up generation failed: {e}")
@@ -139,7 +146,7 @@ async def stream_response_generator(
                 role="assistant",
                 content=response_text,
                 sources=result.get("sources", []),
-                quality_score=quality_score,
+                quality_score=quality_score or result.get("quality_score"),
                 follow_up_questions=follow_up_questions,
                 context_documents=context_documents,
                 context_document_labels=context_document_labels,
@@ -157,10 +164,11 @@ async def stream_response_generator(
         yield f"data: {json.dumps(sources_data)}\n\n"
 
         # Send quality score
-        if quality_score:
+        quality_payload = quality_score or result.get("quality_score")
+        if quality_payload:
             quality_data = {
                 "type": "quality_score",
-                "content": quality_score,
+                "content": quality_payload,
             }
             yield f"data: {json.dumps(quality_data)}\n\n"
 
@@ -195,6 +203,76 @@ async def stream_response_generator(
         yield f"data: {json.dumps(error_data)}\n\n"
 
 
+async def _prepare_chat_context(
+    request: ChatRequest,
+) -> Tuple[str, List[dict], dict, List[str], List[str], List[str]]:
+    """Load chat history, run RAG, and enrich metadata for downstream handlers."""
+
+    session_id = request.session_id or str(uuid.uuid4())
+
+    chat_history: List[dict] = []
+    if request.session_id:
+        try:
+            history = await chat_history_service.get_conversation(session_id)
+            chat_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in history.messages
+            ]
+        except Exception as exc:
+            logger.warning(f"Could not load chat history: {exc}")
+
+    context_documents = request.context_documents or []
+    context_document_labels = request.context_document_labels or []
+    context_hashtags = request.context_hashtags or []
+
+    result = graph_rag.query(
+        user_query=request.message,
+        retrieval_mode=request.retrieval_mode,
+        top_k=request.top_k,
+        temperature=request.temperature,
+        use_multi_hop=request.use_multi_hop,
+        chat_history=chat_history,
+        context_documents=context_documents,
+    )
+
+    metadata = result.get("metadata", {}) or {}
+    metadata["chat_history_turns"] = len(chat_history)
+    metadata.setdefault("context_documents", context_documents)
+
+    quality_score = result.get("quality_score")
+    if not quality_score:
+        try:
+            context_chunks = result.get("graph_context", []) or result.get("retrieved_chunks", [])
+            relevant_chunks = [
+                chunk
+                for chunk in context_chunks
+                if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
+            ]
+            quality_score = quality_scorer.calculate_quality_score(
+                answer=result.get("response", ""),
+                query=request.message,
+                context_chunks=relevant_chunks,
+                sources=result.get("sources", []),
+            )
+        except Exception as exc:
+            logger.warning(f"Quality scoring failed in chat preparation: {exc}")
+
+    if quality_score:
+        metadata["quality_score"] = quality_score
+        result["quality_score"] = quality_score
+
+    result["metadata"] = metadata
+
+    return (
+        session_id,
+        chat_history,
+        result,
+        context_documents,
+        context_document_labels,
+        context_hashtags,
+    )
+
+
 @router.post("/query", response_model=ChatResponse)
 async def chat_query(request: ChatRequest):
     """
@@ -207,36 +285,15 @@ async def chat_query(request: ChatRequest):
         Chat response with answer, sources, and metadata
     """
     try:
-        # Generate or validate session ID
-        session_id = request.session_id or str(uuid.uuid4())
+        (
+            session_id,
+            chat_history,
+            result,
+            context_documents,
+            context_document_labels,
+            context_hashtags,
+        ) = await _prepare_chat_context(request)
 
-        # Get chat history for this session
-        chat_history = []
-        if request.session_id:
-            try:
-                history = await chat_history_service.get_conversation(session_id)
-                chat_history = [
-                    {"role": msg.role, "content": msg.content}
-                    for msg in history.messages
-                ]
-            except Exception as e:
-                logger.warning(f"Could not load chat history: {e}")
-
-        context_documents = request.context_documents or []
-        context_document_labels = request.context_document_labels or []
-        context_hashtags = request.context_hashtags or []
-
-        # Process query through RAG pipeline
-        result = graph_rag.query(
-            user_query=request.message,
-            retrieval_mode=request.retrieval_mode,
-            top_k=request.top_k,
-            temperature=request.temperature,
-            use_multi_hop=request.use_multi_hop,
-            chat_history=chat_history,
-            context_documents=context_documents,
-        )
-        
         # Log the stages for debugging
         stages = result.get("stages", [])
         logger.info(f"RAG pipeline completed with stages: {stages}")
@@ -245,8 +302,14 @@ async def chat_query(request: ChatRequest):
         if request.stream:
             return StreamingResponse(
                 stream_response_generator(
-                    result, session_id, request.message, context_documents,
-                    context_document_labels, context_hashtags, stages
+                    result,
+                    session_id,
+                    request.message,
+                    context_documents,
+                    context_document_labels,
+                    context_hashtags,
+                    chat_history,
+                    stages,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -256,27 +319,7 @@ async def chat_query(request: ChatRequest):
                 },
             )
 
-        # Calculate quality score
-        quality_score = None
-        try:
-            context_chunks = result.get("graph_context", [])
-            if not context_chunks:
-                context_chunks = result.get("retrieved_chunks", [])
-
-            relevant_chunks = [
-                chunk
-                for chunk in context_chunks
-                if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
-            ]
-
-            quality_score = quality_scorer.calculate_quality_score(
-                answer=result.get("response", ""),
-                query=request.message,
-                context_chunks=relevant_chunks,
-                sources=result.get("sources", []),
-            )
-        except Exception as e:
-            logger.warning(f"Quality scoring failed: {e}")
+        quality_score = result.get("quality_score")
 
         # Generate follow-up questions
         follow_up_questions = []
@@ -327,6 +370,47 @@ async def chat_query(request: ChatRequest):
     except Exception as e:
         logger.error(f"Chat query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/stream")
+async def chat_stream(request: ChatRequest):
+    """Dedicated SSE endpoint that always streams responses."""
+
+    try:
+        (
+            session_id,
+            chat_history,
+            result,
+            context_documents,
+            context_document_labels,
+            context_hashtags,
+        ) = await _prepare_chat_context(request)
+
+        stages = result.get("stages", [])
+        logger.info(f"RAG pipeline completed with stages: {stages}")
+
+        return StreamingResponse(
+            stream_response_generator(
+                result,
+                session_id,
+                request.message,
+                context_documents,
+                context_document_labels,
+                context_hashtags,
+                chat_history,
+                stages,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    except Exception as exc:
+        logger.error(f"Streamed chat failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/follow-ups", response_model=FollowUpResponse)
