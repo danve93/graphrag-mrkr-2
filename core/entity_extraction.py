@@ -111,19 +111,166 @@ class Relationship:
 class EntityExtractor:
     """Extracts entities and relationships from text using LLM."""
 
-    # Default entity types based on nano-graphrag
+    # Default entity types tailored for Carbonio use cases
     DEFAULT_ENTITY_TYPES = [
-        "PERSON",
-        "ORGANIZATION",
-        "LOCATION",
-        "EVENT",
-        "CONCEPT",
-        "TECHNOLOGY",
-        "PRODUCT",
-        "DOCUMENT",
-        "DATE",
-        "MONEY",
+        # Infrastruttura e architettura
+        "COMPONENT",
+        "SERVICE",
+        "NODE",
+
+        # Provisioning e oggetti utente
+        "DOMAIN",
+        "CLASS_OF_SERVICE",
+        "ACCOUNT",
+        "ACCOUNT_TYPE",
+        "ROLE",
+
+        "RESOURCE",
+
+        # Quota e gestione utilizzo
+        "QUOTA_OBJECT",
+
+        # Backup, storage, migrazione
+        "BACKUP_OBJECT",
+        "ITEM",
+        "STORAGE_OBJECT",
+        "MIGRATION_PROCEDURE",
+
+        # Configurazione, sicurezza, certificati
+        "CERTIFICATE",
+        "CONFIG_OPTION",
+        "SECURITY_FEATURE",
+
+        # CLI, API, procedure operative
+        "CLI_COMMAND",
+        "API_OBJECT",
+        "TASK",
+        "PROCEDURE",
+
+        # Articoli Zendesk
+        "ARTICLE",
     ]
+
+    CARBONIO_ENTITY_TYPE_OVERRIDES = {
+        # Provisioning e ruoli
+        "CLASS OF SERVICE": "CLASS_OF_SERVICE",
+        "CLASS OF SERVICES": "CLASS_OF_SERVICE",
+        "CLASS OF SERVICES (COS)": "CLASS_OF_SERVICE",
+        "COS": "CLASS_OF_SERVICE",
+
+        "DOMAIN": "DOMAIN",
+        "E-MAIL DOMAIN": "DOMAIN",
+        "MAIL DOMAIN": "DOMAIN",
+
+        "REGULAR USER": "ACCOUNT_TYPE",
+        "USER ACCOUNT": "ACCOUNT_TYPE",
+        "END USER": "ACCOUNT_TYPE",
+
+        "FUNCTIONAL ACCOUNT": "ACCOUNT_TYPE",
+        "SHARED ACCOUNT": "ACCOUNT_TYPE",
+        "RESOURCE ACCOUNT": "RESOURCE",
+        "SYSTEM ACCOUNT": "ACCOUNT_TYPE",
+        "EXTERNAL ACCOUNT": "ACCOUNT_TYPE",
+
+        "RESOURCE": "RESOURCE",
+
+        "GLOBAL ADMIN": "ROLE",
+        "GLOBAL ADMINISTRATOR": "ROLE",
+        "DELEGATED ADMIN": "ROLE",
+        "DELEGATED ADMINISTRATOR": "ROLE",
+        "DOMAIN ADMIN": "ROLE",
+
+        # Componenti e servizi
+        "MTA": "COMPONENT",
+        "MTA AV/AS": "COMPONENT",
+        "MAILSTORE": "COMPONENT",
+        "MAILSTORE & PROVISIONING": "COMPONENT",
+        "PROXY": "COMPONENT",
+        "FILES": "COMPONENT",
+        "CHATS": "COMPONENT",
+        "DOCS": "COMPONENT",
+        "DOCS & EDITOR": "COMPONENT",
+        "TASKS": "COMPONENT",
+        "VIDEO SERVER": "COMPONENT",
+        "MONITORING": "COMPONENT",
+        "BACKUP": "COMPONENT",
+
+        "MESH & DIRECTORY": "SERVICE",
+        "DIRECTORY": "SERVICE",
+        "DIRECTORY REPLICA": "SERVICE",
+        "EVENT STREAMING": "SERVICE",
+
+        "NODE": "NODE",
+        "SERVER NODE": "NODE",
+        "CARBONIO NODE": "NODE",
+
+        # Backup e storage
+        "ITEM": "ITEM",
+        "BACKUP ITEM": "ITEM",
+
+        "SMARTSCAN": "BACKUP_OBJECT",
+        "SMART SCAN": "BACKUP_OBJECT",
+        "REALTIME SCANNER": "BACKUP_OBJECT",
+        "REAL TIME SCANNER": "BACKUP_OBJECT",
+        "BACKUP PATH": "BACKUP_OBJECT",
+        "RETENTION POLICY": "BACKUP_OBJECT",
+        "LEGAL HOLD": "BACKUP_OBJECT",
+
+        "VOLUME": "STORAGE_OBJECT",
+        "PRIMARY VOLUME": "STORAGE_OBJECT",
+        "SECONDARY VOLUME": "STORAGE_OBJECT",
+        "HSM VOLUME": "STORAGE_OBJECT",
+        "OBJECT STORAGE": "STORAGE_OBJECT",
+        "STORAGE TIER": "STORAGE_OBJECT",
+
+        # Certificati e configurazione
+        "DOMAIN CERTIFICATE": "CERTIFICATE",
+        "WILDCARD CERTIFICATE": "CERTIFICATE",
+        "INFRASTRUCTURE CERTIFICATE": "CERTIFICATE",
+        "TLS CERTIFICATE": "CERTIFICATE",
+        "CERTIFICATE": "CERTIFICATE",
+
+        "PUBLIC SERVICE HOSTNAME": "CONFIG_OPTION",
+        "VIRTUAL HOST NAME": "CONFIG_OPTION",
+        "PUBLIC HOSTNAME": "CONFIG_OPTION",
+
+        "HSM POLICY": "CONFIG_OPTION",
+        "HSM SETTINGS": "CONFIG_OPTION",
+
+        # Sicurezza
+        "DOS FILTER": "SECURITY_FEATURE",
+        "DENIAL OF SERVICE FILTER": "SECURITY_FEATURE",
+        "OTP": "SECURITY_FEATURE",
+        "ONE-TIME PASSWORD": "SECURITY_FEATURE",
+        "S/MIME": "SECURITY_FEATURE",
+        "SMIME": "SECURITY_FEATURE",
+        "AUTHENTICATION METHOD": "SECURITY_FEATURE",
+
+        # Migrazione, CLI, API, procedure
+        "MIGRATION PROCEDURE": "MIGRATION_PROCEDURE",
+        "MIGRATION FLOW": "MIGRATION_PROCEDURE",
+        "MIGRATION PATH": "MIGRATION_PROCEDURE",
+
+        "CLI COMMAND": "CLI_COMMAND",
+        "CARBONIO CLI COMMAND": "CLI_COMMAND",
+
+        "API OBJECT": "API_OBJECT",
+        "FILES API OBJECT": "API_OBJECT",
+
+        "TASK": "TASK",
+        "ADMIN TASK": "TASK",
+        "MAINTENANCE TASK": "TASK",
+
+        "PROCEDURE": "PROCEDURE",
+        "ADMIN PROCEDURE": "PROCEDURE",
+        "MAINTENANCE PROCEDURE": "PROCEDURE",
+
+        # Concetti chiave
+        "RPO": "CONCEPT",
+        "RTO": "CONCEPT",
+        "BACKUP STRATEGY": "CONCEPT",
+        "USER MANAGEMENT": "CONCEPT",
+    }
 
     # Patterns for low-value entities that should be filtered out
     LOW_VALUE_PATTERNS = [
@@ -149,72 +296,49 @@ class EntityExtractor:
 
     # Entity type normalization mapping
     ENTITY_TYPE_MAPPING = {
-        # Normalize inconsistent typing
-        "PERSON (ROLE)": "PERSON",
-        "PERSON (COLLECTIVE)": "PERSON",
-        "PERSON (LEGAL ROLE)": "PERSON",
-        "PERSON/CONCEPT": "PERSON",
-        "PERSON/ORGANIZATION": "PERSON",
-        "PERSON (OR ORGANIZATION)": "PERSON",
-        "**PERSON**": "PERSON",
-        "**ORGANIZATION**": "ORGANIZATION",
-        "ORGANIZATION/TECHNOLOGY": "ORGANIZATION",
-        "**LOCATION**": "LOCATION",
-        "LOCATION/CONCEPT": "LOCATION",
-        "**CONCEPT**": "CONCEPT",
-        "CONCEPT / PRODUCT": "CONCEPT",
-        "TECHNOLOGY / CONCEPT": "CONCEPT",
-        "CONCEPT/DOCUMENT": "CONCEPT",
-        "CONCEPT (LEGISLATION)": "CONCEPT",
-        "CONCEPT (LAND PARCEL)": "CONCEPT",
-        "CONCEPT (PROPERTY INTEREST)": "CONCEPT",
-        "CONCEPT (OWNERSHIP TYPE)": "CONCEPT",
-        "CONCEPT (CLAUSE NUMBER)": "CONCEPT",
-        "MATERIAL (CLASSIFIED UNDER CONCEPT)": "CONCEPT",
-        "SECTION (TREATED AS CONCEPT)": "CONCEPT",
-        "ACTION (TREATED AS CONCEPT FOR EXTRACTION)": "CONCEPT",
-        "TIME (TREATED AS CONCEPT)": "CONCEPT",
-        "PROPERTY (TREATED AS CONCEPT)": "CONCEPT",
-        "**DOCUMENT**": "DOCUMENT",
-        "DOCUMENT (TAX/IDENTIFIER)": "DOCUMENT",
-        "DOCUMENT (AUSTRALIAN BUSINESS NUMBER)": "DOCUMENT",
-        "DOCUMENT (CONTACT INFORMATION)": "DOCUMENT",
-        "PRODUCT (WEBPAGE)": "PRODUCT",
-        "PRODUCT/TECHNOLOGY": "PRODUCT",
-        "TRADEMARK (TREATED AS PRODUCT)": "PRODUCT",
-        "PHONE NUMBER (TECHNOLOGY)": "TECHNOLOGY",
-        "CONTACT (TREATED AS TECHNOLOGY FOR PHONE CONTACT)": "TECHNOLOGY",
-        "EMAIL (TREATED AS A PRODUCT/TECHNOLOGY IDENTIFIER)": "TECHNOLOGY",
-        "EMAIL (PRODUCT/TECHNOLOGY IDENTIFIER)": "TECHNOLOGY",
-        "WEBSITE (TECHNOLOGY)": "TECHNOLOGY",
-        "EMAIL (TECHNOLOGY)": "TECHNOLOGY",
-        "CONTACT (TREATED AS TECHNOLOGY FOR THIS LIST)": "TECHNOLOGY",
-        "CONTACT (TREATED AS TECHNOLOGY FOR EMAIL CONTACT)": "TECHNOLOGY",
-        "**MONEY**": "MONEY",
-        "MONEY (CONCEPT)": "MONEY",
-        "**EVENT**": "EVENT",
-        "SECTION (EVENT)": "EVENT",
-        "DATE (DURATION)": "DATE",
-        "**NUMBER**": "CONCEPT",  # Numbers as concepts
-        # Consolidate contact information
-        "CONTACT": "TECHNOLOGY",
-        "CONTACT INFORMATION": "TECHNOLOGY",
-        "CONTACT INFORMATION (ASSOCIATED WITH ORGANIZATION)": "TECHNOLOGY",
-        "CONTACT (TREATED AS A TELEPHONE NUMBER)": "TECHNOLOGY",
-        "CONTACT (PHONE NUMBER)": "TECHNOLOGY",
-        "CONTACT (PHONE)": "TECHNOLOGY",
-        # Consolidate materials
-        "MATERIAL": "CONCEPT",
-        # Consolidate sections
-        "SECTION": "CONCEPT",
-        # Other consolidations
-        "SOFTWARE": "TECHNOLOGY",
-        "PROGRAM": "TECHNOLOGY",
-        "SERVICE": "PRODUCT",
-        "PROJECT": "CONCEPT",
-        "EDUCATION": "CONCEPT",
-        "LANGUAGE": "CONCEPT",
+        **{
+            # Preserve a few generic cleanups to keep compatibility with legacy data
+            "SECTION": "CONCEPT",
+            "SERVICE": "PRODUCT",
+            "CONTACT": "TECHNOLOGY",
+        },
+        **CARBONIO_ENTITY_TYPE_OVERRIDES,
     }
+
+    RELATION_TYPE_SUGGESTIONS = [
+        # Architettura e componenti
+        "COMPONENT_RUNS_ON_NODE",
+        "COMPONENT_DEPENDS_ON_COMPONENT",
+        "SERVICE_DEPENDS_ON_COMPONENT",
+        "COMPONENT_PROVIDES_FEATURE",
+
+        # Provisioning e account
+        "DOMAIN_HAS_COS",
+        "COS_APPLIES_TO_ACCOUNT_TYPE",
+        "ACCOUNT_BELONGS_TO_DOMAIN",
+        "ACCOUNT_HAS_ROLE",
+        "ACCOUNT_HAS_QUOTA",
+
+        # Backup e storage
+        "BACKUP_COVERS_ITEM",
+        "ITEM_STORED_ON_STORAGE_OBJECT",
+        "HSM_POLICY_APPLIES_TO_STORAGE_OBJECT",
+
+        # Configurazione, certificati, sicurezza
+        "CERTIFICATE_APPLIES_TO_DOMAIN",
+        "CONFIG_OPTION_AFFECTS_COMPONENT",
+        "SECURITY_FEATURE_PROTECTS_COMPONENT",
+
+        # Migrazione e operazioni
+        "MIGRATION_PROCEDURE_TARGETS_COMPONENT",
+        "MIGRATION_PROCEDURE_TARGETS_DOMAIN",
+        "CLI_COMMAND_CONFIGURES_OBJECT",
+        "TASK_OPERATES_ON_OBJECT",
+        "PROCEDURE_INCLUDES_TASK",
+
+        # Fallback generico
+        "RELATED_TO",
+    ]
 
     def __init__(self, entity_types: Optional[List[str]] = None):
         """Initialize entity extractor."""
@@ -340,12 +464,14 @@ class EntityExtractor:
     def _get_extraction_prompt(self, text: str) -> str:
         """Generate prompt for entity and relationship extraction."""
         entity_types_str = ", ".join(self.entity_types)
+        relation_types_str = ", ".join(self.RELATION_TYPE_SUGGESTIONS)
 
         return f"""You are an expert at extracting entities and relationships from text.
 
 **Task**: Extract all relevant entities and relationships from the given text.
 
 **Entity Types**: Focus on these types: {entity_types_str}
+**Relationship Types**: Prefer these relationship patterns when applicable: {relation_types_str}
 
 **Instructions**:
 1. Extract entities with: name, type, description, importance (0.0-1.0)

@@ -1325,6 +1325,13 @@ class DocumentProcessor:
             if not chunks_for_extraction:
                 raise ValueError("No chunks found for document")
 
+            cleanup_stats = graph_db.reset_document_entities(doc_id)
+            logger.info(
+                "Cleared previous entities for %s before re-extraction: %s",
+                doc_id,
+                cleanup_stats,
+            )
+
             # Phase 1: LLM extraction
             self._update_entity_operation(
                 operation_id,
