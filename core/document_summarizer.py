@@ -180,6 +180,13 @@ class DocumentSummarizer:
                     "hashtags": []
                 }
 
+            batch_size = settings.summarization_batch_size
+            if batch_size and batch_size > 0 and len(chunks) > batch_size:
+                logger.info(
+                    "Limiting summary prompt to first %s of %s chunks", batch_size, len(chunks)
+                )
+                chunks = chunks[:batch_size]
+
             # Combine all chunks into full content
             full_content = "\n\n".join([chunk.get("content", "") for chunk in chunks])
 

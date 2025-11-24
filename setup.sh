@@ -75,6 +75,9 @@ EMBEDDING_MODEL=text-embedding-ada-002
 
 # Application Configuration
 LOG_LEVEL=INFO
+ENABLE_CLUSTERING=true
+ENABLE_GRAPH_CLUSTERING=true
+SUMMARIZATION_BATCH_SIZE=20
 EOF
     echo "${YELLOW}⚠️  Please edit .env and add your API keys${NC}"
 fi

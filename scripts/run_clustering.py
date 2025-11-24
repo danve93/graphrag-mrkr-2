@@ -92,8 +92,11 @@ def filter_edges(edges_df: pd.DataFrame, weight_field: str, min_weight: float) -
 
 
 def main() -> None:
-    if not settings.enable_graph_clustering:
-        print("Graph clustering disabled via settings; exiting.")
+    if not settings.enable_clustering or not settings.enable_graph_clustering:
+        print(
+            "Graph clustering disabled via settings; set ENABLE_CLUSTERING and "
+            "ENABLE_GRAPH_CLUSTERING to true to re-enable."
+        )
         return
 
     args = parse_args()
