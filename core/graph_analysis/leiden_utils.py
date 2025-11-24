@@ -155,23 +155,23 @@ def build_entity_leiden_projection_cypher(
     label_union = "|".join(labels)
     weight_expr = _coalesce_weight(default=DEFAULT_WEIGHT)
 
-    edge_projection = f"
-MATCH (e1:Entity)-[r:{label_union}]-(e2:Entity)
-WITH id(e1) AS source, id(e2) AS target, {weight_expr} AS {weight_field}
-WITH CASE WHEN source < target THEN source ELSE target END AS source,
-     CASE WHEN source < target THEN target ELSE source END AS target,
-     {weight_field}
-RETURN DISTINCT source, target, {weight_field}
-".strip()
+    edge_projection = (
+        f"MATCH (e1:Entity)-[r:{label_union}]-(e2:Entity)\n"
+        f"WITH id(e1) AS source, id(e2) AS target, {weight_expr} AS {weight_field}\n"
+        f"WITH CASE WHEN source < target THEN source ELSE target END AS source,\n"
+        f"     CASE WHEN source < target THEN target ELSE source END AS target,\n"
+        f"     {weight_field}\n"
+        f"RETURN DISTINCT source, target, {weight_field}"
+    ).strip()
 
     if directional_labels and symmetrize_directional:
         directional_union = "|".join(directional_labels)
-        mirrored = f"
-MATCH (src)-[r:{directional_union}]->(dst)
-UNWIND [[id(src), id(dst)], [id(dst), id(src)]] AS pair
-WITH pair[0] AS source, pair[1] AS target, {weight_expr} AS {weight_field}
-RETURN DISTINCT source, target, {weight_field}
-".strip()
+        mirrored = (
+            f"MATCH (src)-[r:{directional_union}]->(dst)\n"
+            f"UNWIND [[id(src), id(dst)], [id(dst), id(src)]] AS pair\n"
+            f"WITH pair[0] AS source, pair[1] AS target, {weight_expr} AS {weight_field}\n"
+            f"RETURN DISTINCT source, target, {weight_field}"
+        ).strip()
 
         edge_projection = "\nUNION\n".join([edge_projection, mirrored])
 

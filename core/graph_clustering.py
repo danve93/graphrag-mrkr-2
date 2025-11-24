@@ -108,16 +108,47 @@ def to_igraph(
     edges_df: pd.DataFrame,
     weight_field: str = "weight",
 ) -> ig.Graph:
-    """Convert node and edge frames into an igraph.Graph."""
+    """Convert node and edge frames into an igraph.Graph.
+    
+    Creates an igraph where vertices are identified by their index positions.
+    Entity IDs are stored as vertex attributes for reference.
+    """
 
     graph = ig.Graph()
-    graph.add_vertices(nodes_df["entity_id"].tolist())
-    graph.vs["entity_id"] = nodes_df["entity_id"].tolist()
+    node_ids = nodes_df["entity_id"].tolist()
+    
+    # Add vertices
+    graph.add_vertices(len(node_ids))
+    graph.vs["entity_id"] = node_ids
     graph.vs["name"] = nodes_df["name"].tolist()
 
     if not edges_df.empty:
-        graph.add_edges(list(zip(edges_df["source_id"], edges_df["target_id"])))
-        graph.es[weight_field] = edges_df[weight_field].astype(float).tolist()
+        # Create a mapping from entity_id to vertex index
+        node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
+        
+        # Convert edges from entity IDs to vertex indices
+        edges_as_indices = []
+        node_set = set(node_ids)
+        
+        for _, row in edges_df.iterrows():
+            src_id = row["source_id"]
+            tgt_id = row["target_id"]
+            
+            # Only add edges where both source and target exist
+            if src_id in node_set and tgt_id in node_set:
+                src_idx = node_to_idx[src_id]
+                tgt_idx = node_to_idx[tgt_id]
+                edges_as_indices.append((src_idx, tgt_idx))
+        
+        if edges_as_indices:
+            graph.add_edges(edges_as_indices)
+            # Extract weights for valid edges
+            valid_edges = edges_df[
+                (edges_df["source_id"].isin(node_set)) & (edges_df["target_id"].isin(node_set))
+            ]
+            graph.es[weight_field] = valid_edges[weight_field].astype(float).tolist()
+        else:
+            graph.es[weight_field] = []
     else:
         graph.es[weight_field] = []
 

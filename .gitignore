@@ -5,3 +5,11 @@
 /data
 /api/routers/__pycache__
 /frontend/node_modules
+/api/tests/__pycache__
+/api/__pycache__
+/config/__pycache__
+/core/__pycache__
+/core/graph_analysis/__pycache__
+/ingestion/__pycache__
+/ingestion/loaders/__pycache__
+/scripts/__pycache__

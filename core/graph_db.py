@@ -962,19 +962,19 @@ class GraphDB:
                 relatedEdges,
                 node,
                 degree,
-                collect(DISTINCT {document_id: d.id, document_name: coalesce(d.original_filename, d.filename)}) AS docs
+                collect(DISTINCT CASE WHEN d.id IS NOT NULL THEN {{doc_id: d.id, doc_name: coalesce(d.original_filename, d.filename)}} ELSE NULL END) AS docs
             WITH
                 allNodes,
                 relatedEdges,
-                collect(DISTINCT {
+                collect(DISTINCT {{
                     id: node.id,
                     label: node.name,
                     type: node.type,
                     community_id: node.community_id,
                     level: node.level,
                     degree: degree,
-                    documents: [doc IN docs WHERE doc.document_id IS NOT NULL]
-                }) AS nodes
+                    documents: [doc IN docs WHERE doc IS NOT NULL]
+                }}) AS nodes
             WITH nodes, relatedEdges, [n IN nodes | n.id] AS nodeIds
             UNWIND relatedEdges AS rel
             WITH nodes, nodeIds, rel
@@ -983,21 +983,21 @@ class GraphDB:
             WITH nodes, rel, coalesce(rel.source_text_units, []) AS tus
             WITH nodes, rel, CASE WHEN size(tus) = 0 THEN [NULL] ELSE tus END AS textUnitIds
             UNWIND textUnitIds AS tu
-            OPTIONAL MATCH (c:Chunk {id: tu})<-[:HAS_CHUNK]-(d:Document)
+            OPTIONAL MATCH (c:Chunk {{id: tu}})<-[:HAS_CHUNK]-(d:Document)
             WITH
                 nodes,
                 rel,
-                collect(DISTINCT CASE WHEN tu IS NULL THEN NULL ELSE {id: tu, document_id: d.id, document_name: coalesce(d.original_filename, d.filename)} END) AS textUnits
+                collect(DISTINCT CASE WHEN tu IS NULL THEN NULL ELSE {{id: tu, doc_id: CASE WHEN d.id IS NOT NULL THEN d.id ELSE 'unknown' END, doc_name: CASE WHEN d.id IS NOT NULL THEN coalesce(d.original_filename, d.filename) ELSE 'unknown' END}} END) AS textUnits
             RETURN
                 nodes,
-                collect(DISTINCT {
+                collect(DISTINCT {{
                     source: startNode(rel).id,
                     target: endNode(rel).id,
                     type: rel.type,
                     weight: coalesce(rel.strength, 0.5),
                     description: rel.description,
                     text_units: [tu IN textUnits WHERE tu IS NOT NULL]
-                }) AS edges
+                }}) AS edges
         """
 
         with self.driver.session() as session:  # type: ignore
