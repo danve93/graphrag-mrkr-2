@@ -1,0 +1,20 @@
+Plan to supply Leiden inputs from existing graph data
+
+1) Standardize weights
+- Use the weight hints defined in core/graph_analysis/leiden_utils.py (score/similarity for SIMILAR_TO, strength for RELATED_TO).
+- When exporting edges, add a normalized "weight" property that falls back to 1.0 if no numeric field exists.
+- If both edge types are present, prefer SIMILAR_TO.score when available; otherwise use RELATED_TO.strength; keep the chosen field consistent in the projection.
+
+2) Directionality decision
+- Default to an undirected entity-only projection because SIMILAR_TO and RELATED_TO are created with MERGE (a)-[r]-(b).
+- Drop directional relationships (e.g., CONTAINS_ENTITY) from clustering unless you explicitly mirror them into both directions before exporting.
+- If directional edges must be included, symmetrize them during export so Leiden can operate on an undirected weighted graph.
+
+3) Graph projection scope
+- Build a projection over Entity nodes using only SIMILAR_TO and RELATED_TO edges, since these already carry weight-like attributes and are undirected.
+- Use a Cypher projection similar to build_entity_leiden_projection_cypher() in core/graph_analysis/leiden_utils.py to emit source, target, and weight columns.
+- Parameterize the projection by edge labels, minimum weight thresholds, and resolution so experiments do not require code changes.
+
+4) Outputs to generate
+- An undirected edge list with standardized weight column (CSV/Parquet) suitable for Leiden.
+- Optional summary of available edge labels and weight fields to validate inputs before clustering.
