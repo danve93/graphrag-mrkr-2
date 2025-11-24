@@ -100,6 +100,16 @@ This will:
 3. Install all Node.js dependencies
 4. Create configuration templates
 
+Alternatively, if you prefer a single-command containerized launch, start everything with Docker Compose (recommended for demos and quick local runs):
+
+```bash
+# Start all services (backend, frontend, and Neo4j) in detached mode
+docker compose up -d
+
+# If you changed Dockerfiles or want to force a rebuild, run:
+docker compose up -d --build
+```
+
 ### Manual Setup
 
 #### 1. Backend Setup
@@ -310,7 +320,11 @@ npm run build
 ### Docker Compose
 
 ```bash
-docker-compose up -d --build
+# Start all services with modern Docker Compose command (recommended)
+docker compose up -d
+
+# Optional: rebuild images before starting
+docker compose up -d --build
 ```
 
 ## 🤝 Contributing
