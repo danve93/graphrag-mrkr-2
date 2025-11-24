@@ -13,6 +13,34 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Validate Python and Node.js versions
+PYTHON_VERSION=$(python3 - <<'EOF'
+import sys
+print('.'.join(map(str, sys.version_info[:3])))
+EOF
+)
+
+NODE_VERSION=$(node -v 2>/dev/null | sed 's/^v//')
+
+if [ -z "$NODE_VERSION" ]; then
+    echo "${YELLOW}Node.js is not installed. Please install Node.js 18 or higher before continuing.${NC}"
+    exit 1
+fi
+
+version_ge() {
+    [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+}
+
+if ! version_ge "$PYTHON_VERSION" "3.10"; then
+    echo "${YELLOW}Python 3.10 or higher is required. Detected: ${PYTHON_VERSION}.${NC}"
+    exit 1
+fi
+
+if ! version_ge "$NODE_VERSION" "18.0.0"; then
+    echo "${YELLOW}Node.js 18 or higher is required. Detected: ${NODE_VERSION}.${NC}"
+    exit 1
+fi
+
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then
     echo "${YELLOW}Creating Python virtual environment...${NC}"
