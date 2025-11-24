@@ -103,7 +103,7 @@ Deliver a production-ready minimum viable product that showcases graph-based ret
 **Relationship Patterns:** Component↔Node/Component/Feature, provisioning links, backup/storage coverage, config/security associations, migration/CLI/task/procedure edges, generic RELATED_TO fallback
 
 ### Operations & Setup
-- **Prerequisites:** Python 3.10+, Node 18+, Neo4j 5+, OpenAI-compatible API key
+ **Docker deployment:** Unified entrypoint (`docker compose up -d`) for chat UI, backend API, and database upload. Use `docker compose up -d --build` when you need to rebuild images after Dockerfile changes.
 - **Runtime:** Backend via `python api/main.py`, frontend via `npm run dev`, Neo4j local or Docker, SSE streams responses
 - **Quality scoring:** Feature toggles in settings/env vars; scoring is non-blocking and cached
 - **Docker deployment:** Unified entrypoint (`docker-compose up -d --build`) for chat UI, backend API, and database upload

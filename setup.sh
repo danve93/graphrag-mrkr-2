@@ -106,3 +106,11 @@ echo "4. In another terminal, start the frontend: cd frontend && npm run dev"
 echo "5. Open http://localhost:3000 in your browser"
 echo ""
 echo "For detailed instructions, see SETUP_V2.md"
+
+# Docker Compose alternative
+echo "\nAlternate Docker-based startup (recommended for demos):"
+echo "1. Make sure Docker and Docker Compose (v2) are installed and running"
+echo "2. From the project root run:\n   docker compose up -d\n"
+echo "3. To rebuild images after changing Dockerfiles, run:\n   docker compose up -d --build\n"
+
+echo "If you prefer the containerized path, skip starting the backend/frontend locally and use the docker-compose stack instead."

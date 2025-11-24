@@ -1,3 +1,9 @@
+ # Usage: start the entire stack from the repository root with Docker Compose v2
+ # Recommended for demos/local testing:
+ #   docker compose up -d
+ # To rebuild images after changing Dockerfiles:
+ #   docker compose up -d --build
+
 version: '3.8'
 
 x-environment: &default-env
