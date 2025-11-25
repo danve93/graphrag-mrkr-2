@@ -22,8 +22,6 @@ def list_jobs(page: int = 1, page_size: int = 50, _token: str = Depends(auth.req
         raise HTTPException(status_code=500, detail=str(e))
     return {"jobs": items, "page": page, "page_size": page_size, "total": int(total)}
 
-
-
 @router.get("/token", summary="Get persistent user token (admin only)")
 def get_user_token(_admin: str = Depends(auth.require_admin)):
     try:
@@ -31,6 +29,8 @@ def get_user_token(_admin: str = Depends(auth.require_admin)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"user_token": token}
+
+
 
 
 @router.get("/{job_id}", summary="Get job details")
@@ -109,11 +109,5 @@ def retry_job(job_id: str, _token: str = Depends(auth.require_user_or_admin)):
     return {"status": "requeued", "job_id": job_id}
 
 
-@router.get("/token", summary="Get persistent user token (admin only)")
-def get_user_token(_admin: str = Depends(auth.require_admin)):
-    try:
-        token = auth.ensure_user_token()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"user_token": token}
+
 

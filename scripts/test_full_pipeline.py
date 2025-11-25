@@ -3,7 +3,6 @@
 Full pipeline test script: ingest document, create similarities, run clustering, and summarize communities.
 """
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -14,9 +13,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from config.settings import settings
-from core.graph_db import graph_db
-from ingestion.document_processor import document_processor
+from config.settings import settings  # noqa: E402
+from core.graph_db import graph_db  # noqa: E402
+from ingestion.document_processor import document_processor  # noqa: E402
 
 # Configure logging
 logging.basicConfig(

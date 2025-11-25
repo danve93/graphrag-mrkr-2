@@ -1,384 +1,374 @@
-# GraphRAG v2.0 🚀
+````markdown
+# Amber
 
 <!-- markdownlint-disable -->
 
-A state-of-the-art document intelligence system powered by graph-based RAG (Retrieval-Augmented Generation). Built with Next.js, FastAPI, and Neo4j.
+Amber is a document intelligence system powered by graph-enhanced Retrieval-Augmented Generation (RAG). Built with Next.js, FastAPI, and Neo4j.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Node 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
-[![Next.js 14](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com/)
 
-## ✨ Features
+# Amber
 
-### 🎨 ALL NEW Modern UI
-- **Responsive Design**: Works on desktop, tablet, and mobile
-- **Dark Mode Ready**: Clean, modern interface
-- **Smooth Animations**: Polished user experience
-- **Accessibility**: Built with accessibility in mind
-- **Dark Mode**: Toggle between light and dark themes
+Amber is a document intelligence platform implementing graph-enhanced Retrieval-Augmented Generation (RAG). It combines vector search, graph expansion, entity reasoning, and LLMs to provide contextual, sourced, and high-quality answers over ingested document collections.
 
-### 📊 ALL NEW Conversation History
-- **Persistent Sessions**: Store and retrieve past conversations
-- **Session Management**: View, search, and delete conversations
-- **Context Preservation**: Maintain conversation context across sessions
+This repository contains:
+- Backend API and ingestion pipeline (FastAPI + Python)
+- Frontend UI (Next.js + TypeScript)
+- Graph storage and analysis (Neo4j)
+- Utilities and scripts for ingestion, clustering, and maintenance
 
-### 💬 Intelligent Chat
-- **NEW Follow-up Questions**: AI-generated suggestions to continue the conversation
-- **Real-time Streaming**: Token-by-token response generation with SSE
-- **Context-Aware**: Leverages graph relationships for accurate answers
-- **Quality Scoring**: Real-time assessment of answer quality
+For a short technical overview and architecture notes, see `AGENTS.md`.
 
-### 📚 Document Management
-- **NEW Summary extraction**: Automatic summary extraction during ingestion
-- **NEW In-app Document View**: Inspect metadata, chunks, entities, and live previews
-- **NEW Tags extraction**: Automatic tags extraction during ingestion (editable)
-- **Multi-format Support**: PDF, DOCX, TXT, MD, PPT, XLS
-- **Smart Chunking**: Intelligent document segmentation
-- **Entity Extraction**: Automatic identification of key entities
-- **Graph Relationships**: Connects related concepts across documents
+## Table of Contents
+- Overview
+- Quick Start (Docker Compose preferred)
+- Local Development (backend + frontend)
+- Important Scripts and Commands
+- API (selected endpoints)
+- Ingestion and Processing
+- Configuration (important environment variables)
+- Testing and Quality
+- Deployment
+- Contributing
+- License
 
-### 🔍 Advanced Retrieval
-- **NEW Context Restriction**: Rectrict context by specifying documents or tags in chat
-- **Hybrid Search**: Combines vector similarity and graph traversal
-- **Multi-hop Reasoning**: Connects information across multiple documents
-- **Relevance Scoring**: Transparent source ranking
-- **Entity-Enhanced**: Leverages extracted entities for better context
+## Overview
 
-## 🏗️ Architecture
+Key components:
+- Frontend: `frontend/` (Next.js app) — chat UI, history, upload, database explorer
+- Backend: `api/` (FastAPI) — chat router, document endpoints, job management, chat-tuning
+- Ingestion: `ingestion/` — loaders, converters, and document processor which handles chunking, OCR, embeddings, and entity extraction
+- Graph storage: Neo4j — stores Documents, Chunks, Entities, and relationships used for multi-hop retrieval
+- RAG pipeline: `rag/graph_rag.py` — LangGraph-based pipeline (query analysis → retrieval → graph reasoning → generation)
+
+### Pipeline Diagram
+
+Below is a visual representation of the core pipeline. A Mermaid diagram is provided for renderers that support it, followed by an ASCII fallback.
+
+```mermaid
+flowchart LR
+  subgraph FE [Frontend]
+    UI[Next.js Chat UI]
+  end
+
+  subgraph BE [Backend]
+    API[FastAPI API]
+    RAG[LangGraph RAG Pipeline]
+    RET[Retriever (vector search)]
+    EXP[Graph Expansion / Multi-hop]
+    RR[Reranker (FlashRank, optional)]
+    GEN[LLM Generation]
+    QS[Quality Scoring]
+    FH[Follow-up Generation]
+  end
+
+  subgraph GRAPH [Graph]
+    NEO[Neo4j (Docs / Chunks / Entities)]
+  end
+
+  subgraph LLM [LLM Provider]
+    LLM[OpenAI / Ollama / Local Model]
+    EMB[Embedding Service / Model]
+  end
+
+  UI -->|POST chat query| API
+  API --> RAG
+  RAG -->|embedding lookup| RET
+  RET --> NEO
+  RET --> EXP
+  EXP --> NEO
+  EXP -->|candidates| RR
+  RR --> GEN
+  GEN -->|tokens| API
+  GEN --> QS
+  QS --> API
+  GEN --> FH
+  API -->|SSE stream| UI
+  NEO -->|graph data| RAG
+  LLM --> GEN
+  EMB --> RET
+```
+
+Fallback ASCII diagram:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend                             │
-│                   (Next.js 14 + React)                      │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Chat Interface  │  History  │  Upload  │  Database  │   │
-│  └──────────────────────────────────────────────────────┘   │
-└────────────────┬────────────────────────────────────────────┘
-                 │ REST API + SSE
-                 │
-┌────────────────▼────────────────────────────────────────────┐
-│                      Backend API                            │
-│                    (FastAPI + Python)                       │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │   Chat   │   History   │   Database   │   Upload    │    │
-│  └─────────────────────────────────────────────────────┘    │
-└────────┬───────────────────────┬────────────────────────────┘
-         │                       │
-         │ LangGraph             │ Neo4j Driver
-         │ Pipeline              │
-         │                       │
-┌────────▼───────────┐  ┌────────▼────────────┐
-│                    │  │                     │
-│  LangChain/OpenAI  │  │      Neo4j          │
-│  (LLM & Embeddings)│  │   (Graph Database)  │
-│                    │  │                     │
-└────────────────────┘  └─────────────────────┘
+Frontend (Next.js UI)
+        |
+        v
+    FastAPI API
+        |
+        v
+   LangGraph RAG Pipeline
+        |
+  -------------------------------
+  |       Retrieval & Ranking    |
+  |  - Vector Retriever (embeddings)
+  |  - Graph Expansion (Neo4j multi-hop)
+  |  - Optional Reranker (FlashRank)
+  -------------------------------
+        |
+        v
+    LLM Generation (OpenAI/Ollama)
+        |
+  -------------------------------
+  |  Post-processing & UX events |
+  |  - Quality Scoring           |
+  |  - Follow-up Suggestion      |
+  |  - SSE token streaming to UI |
+  -------------------------------
+
+Graph storage: Neo4j stores Documents, Chunks, Entities, and relationships used by the retriever and graph expansion.
 ```
 
-## 🚀 Quick Start
 
-### Prerequisites
+## Quick Start (recommended: Docker Compose)
 
-- **Python 3.10+** and pip
-- **Node.js 18+** and npm
-- **Neo4j 5.0+** database
-- **OpenAI API key** (or compatible endpoint)
+The fastest way to run the full stack (backend, frontend, Neo4j) locally is Docker Compose.
 
-### One-Command Setup
+Start the full stack:
 
 ```bash
-git clone https://github.com/FlorentB974/graphrag4.git
-cd graphrag4
-./setup.sh
-```
-
-This will:
-1. Create a Python virtual environment
-2. Install all Python dependencies
-3. Install all Node.js dependencies
-4. Create configuration templates
-
-Alternatively, if you prefer a single-command containerized launch, start everything with Docker Compose (recommended for demos and quick local runs):
-
-```bash
-# Start all services (backend, frontend, and Neo4j) in detached mode
 docker compose up -d
+```
 
-# If you changed Dockerfiles or want to force a rebuild, run:
+Rebuild images after changing Dockerfiles:
+
+```bash
 docker compose up -d --build
 ```
 
-### Manual Setup
-
-#### 1. Backend Setup
+Stream logs:
 
 ```bash
-# Create and activate virtual environment
+docker compose logs -f
+```
+
+Open the frontend at `http://localhost:3000` and the backend docs at `http://localhost:8000/docs`.
+
+## Local Development (backend)
+
+1. Create and activate a virtual environment:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
+```
 
-# Install dependencies
+2. Install dependencies:
+
+```bash
 pip install -r requirements.txt
+```
 
-# Configure environment
+3. Copy environment template and set secrets:
+
+```bash
 cp .env.example .env
-# Edit .env and add your API keys and Neo4j credentials
+# Edit .env and set OPENAI_API_KEY, NEO4J_* credentials, etc.
 ```
 
-#### 2. Start Neo4j
-
-**Option A: Docker**
-```bash
-docker run -d \
-    --name neo4j \
-    -p 7474:7474 -p 7687:7687 \
-    -e NEO4J_AUTH=neo4j/your_password \
-    neo4j:latest
-```
-
-**Option B: Local Installation**
-```bash
-# Start your locally installed Neo4j instance
-neo4j start
-```
-
-#### 3. Start Backend API
+4. Start the backend (development reload enabled):
 
 ```bash
-source .venv/bin/activate
 python api/main.py
 ```
 
-API will be available at `http://localhost:8000`  
-API docs at `http://localhost:8000/docs`
+The API will be available at `http://localhost:8000` and interactive docs at `/docs`.
 
-#### 4. Frontend Setup
+## Local Frontend (development)
 
 ```bash
 cd frontend
 npm install
 cp .env.local.example .env.local
+# Set NEXT_PUBLIC_API_URL to http://localhost:8000
 npm run dev
 ```
 
-Frontend will be available at `http://localhost:3000`
-
-## 📖 Usage
-
-### Uploading Documents
-
-1. Click the **Upload** tab in the sidebar
-2. Drag and drop files or click to select
-3. Wait for processing to complete
-4. Documents will appear in the Database tab
-
-### Asking Questions
-
-1. Type your question in the chat input
-2. Press Enter or click the send button
-3. Watch as the AI streams the response
-4. View sources by expanding the Sources section
-5. Click follow-up questions to continue the conversation
-
-### Managing History
-
-1. Click the **History** tab
-2. View all past conversations
-3. Click on a conversation to load it
-4. Delete conversations individually or clear all
-
-### Database Management
-
-1. Click the **Database** tab
-2. View statistics (documents, chunks, entities, relationships)
-3. Click a document row to open the full Document View with preview
-4. Manage documents (delete, clear database) without leaving the chat context
-
-### Viewing Documents
-
-1. Select a document from the **Database** tab
-2. Review metadata, chunk text, extracted entities, and related documents
-3. Open the preview to stream PDFs, images, or download other formats
-4. Use the back button to return to the chat without losing conversation state
-
-## 🔧 Configuration
-
-### Environment Variables
-
-See `.env.example` for all available options. Key variables:
+Production build:
 
 ```bash
-# LLM
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4
-
-# Neo4j
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=your_password
-
-# Features
-ENABLE_ENTITY_EXTRACTION=true
-ENABLE_QUALITY_SCORING=true
-# Clustering & summaries
-ENABLE_CLUSTERING=true
-ENABLE_GRAPH_CLUSTERING=true
-SUMMARIZATION_BATCH_SIZE=20
+cd frontend
+npm ci
+npm run build
+npm run start
 ```
 
-### Advanced Configuration
+## Important CLI Scripts
 
-Edit `config/settings.py` for fine-tuning:
-- Chunk sizes and overlap
-- Similarity thresholds
-- Graph expansion parameters
-- Multi-hop reasoning settings
-- Clustering toggles and summarization batch sizes
+- `scripts/ingest_documents.py` — CLI to ingest a single file or directory into the pipeline. Examples:
 
-### Operational Runbooks
+  ```bash
+  # Ingest a single file
+  python scripts/ingest_documents.py --file /path/to/document.pdf
 
-- **Ingestion → clustering → summaries**
-  1. Start dependencies: Neo4j (`docker compose up neo4j` or system service), your LLM provider (OpenAI key or local Ollama), and ensure the clustering worker can reach Neo4j.
-  2. Activate the backend virtualenv (`source .venv/bin/activate`) and run `python scripts/ingest_documents.py --input-dir <folder>` to push a small corpus.
-  3. Populate graph communities with `python scripts/run_clustering.py`; clustering is skipped when `ENABLE_CLUSTERING` or `ENABLE_GRAPH_CLUSTERING` is false.
-  4. Generate community summaries from ingested text units with `python -c "from core.community_summarizer import community_summarizer; community_summarizer.summarize_levels()"`.
-  5. Validate storage by checking Neo4j node properties (documents have summaries/types/hashtags; chunks and entities have community labels) and call the API (e.g., `/api/documents` or `/api/health`) to confirm responses include summary metadata.
-- **Required services**: Neo4j (with GDS), an LLM backend (OpenAI or Ollama), and the clustering job; ingestion and summarization will stall without them.
+  # Ingest a directory recursively
+  python scripts/ingest_documents.py --input-dir /path/to/docs --recursive
 
-## 📚 Documentation
+  # Show supported extensions
+  python scripts/ingest_documents.py --show-supported
+  ```
 
-- **[Setup Guide](SETUP_V2.md)**: Comprehensive setup instructions
-- **[Migration Guide](MIGRATION_V2.md)**: Migrating from v1.x
-- **[Frontend README](frontend/README.md)**: Frontend-specific documentation
-- **[API Documentation](http://localhost:8000/docs)**: Interactive API docs (when running)
+- `scripts/run_clustering.py` — run graph clustering and projections (see script for arguments)
 
-## 🏗️ Project Structure
+## Selected API Endpoints
 
-```
-graphrag4/
-├── api/                    # FastAPI backend
-│   ├── main.py             # API application
-│   ├── models.py           # Pydantic models
-│   ├── routers/            # API endpoints
-│   └── services/           # Business logic
-├── frontend/               # Next.js frontend
-│   ├── src/
-│   │   ├── app/            # Next.js pages
-│   │   ├── components/     # React components
-│   │   ├── lib/            # Utilities
-│   │   └── types/          # TypeScript types
-│   └── package.json
-├── core/                   # Core functionality
-│   ├── graph_db.py         # Neo4j integration
-│   ├── llm.py              # LLM management
-│   ├── embeddings.py       # Vector embeddings
-│   └── entity_extraction.py
-├── rag/                    # RAG pipeline
-│   ├── graph_rag.py        # Main RAG orchestrator
-│   └── nodes/              # LangGraph nodes
-├── ingestion/              # Document processing
-│   ├── document_processor.py
-│   └── loaders/            # File format loaders
-├── scripts/                # Utility scripts
-│   └── ingest_documents.py
-├── config/                 # Configuration
-│   └── settings.py
-├── requirements.txt        # Python dependencies
-└── setup.sh                # Quick setup script
-```
+The backend exposes REST endpoints under `/api/*`. Below are commonly used endpoints; see `/docs` for full interactive schemas.
 
-## 🧪 Development
+- `GET /api/health` — health, version and feature flags
+- `POST /api/chat/query` — run a chat query (returns structured response, supports `stream` flag)
+- `POST /api/chat/stream` — always returns SSE streaming tokens
+- `POST /api/chat/follow-ups` — generate follow-up questions for a pair (request+response)
+- `GET /api/chat-tuning/config` — download chat tuning configuration (parameters)
+- `GET /api/chat-tuning/config/values` — read current live tuning values
+- `GET /api/documents` — list documents
+- `GET /api/documents/{document_id}` — document metadata and analytics
+- `POST /api/documents/{document_id}/generate-summary` — (re)generate summary
+- `POST /api/documents/{document_id}/hashtags` — update document hashtags
+- `GET /api/documents/{document_id}/similarities` — chunk-to-chunk similarities for a document
+- `GET /api/documents/{document_id}/preview` — preview file or chunk content
+- `GET /api/history/sessions` — list chat sessions
+- `GET /api/history/{session_id}` — fetch conversation messages
+- Job management under `/api/jobs` — list, trigger, and monitor background jobs
 
-### Running Tests
+Notes on chat tuning and models:
+- Chat requests accept `llm_model` and `embedding_model` fields; these are wired through the RAG pipeline so the UI can select models at runtime.
+- Chat responses stream SSE events of types `stage`, `token`, `sources`, `quality_score`, `follow_ups`, and `metadata`.
+
+## Ingestion & Processing
+
+- Document ingestion is handled by `ingestion/document_processor.py`. It:
+  - Converts files to text/markdown using `ingestion/converters`
+  - Chunks text with `core/chunking.document_chunker`
+  - Generates embeddings via `core/embeddings.embedding_manager`
+  - Stores Document, Chunk, and Entity nodes in Neo4j via `core/graph_db`.
+
+- Entity extraction is optional (controlled by settings) and can run synchronously (for deterministic tests) or in background threads.
+
+- After ingestion, chunk similarity edges are created and optional clustering/summaries can run via scripts in `scripts/`.
+
+## Advanced features
+
+This project includes several advanced components for improving retrieval quality, organizing the graph, and controlling runtime behavior.
+
+- Leiden / Graph Clustering
+  - The repository contains utilities and scripts to build clustering projections and run Leiden clustering (see `scripts/run_clustering.py` and `scripts/build_leiden_projection.py`).
+  - Clustering uses Neo4j (with GDS) to project relationships (e.g., `SIMILAR_TO`, `RELATED_TO`) and compute communities that are used for summarization and navigation in the UI.
+  - Configuration for clustering can be found in `config/settings.py` (parameters like `clustering_resolution`, `clustering_relationship_types`, and `enable_graph_clustering`).
+
+- Reranking (FlashRank)
+  - An optional post-retrieval reranker (FlashRank) is available and guarded by the `flashrank_enabled` setting.
+  - Reranker settings live in `config/settings.py` (`flashrank_model_name`, `flashrank_max_candidates`, `flashrank_blend_weight`, `flashrank_batch_size`, `flashrank_max_length`).
+  - The backend attempts to pre-warm the reranker at startup when enabled (see `api/main.py` lifespan logic which calls `prewarm_ranker()` where configured).
+  - Reranking is applied after initial hybrid retrieval and can be blended with the original hybrid score according to `flashrank_blend_weight`.
+
+- Classification
+  - The project includes a classification router and configuration (see `api/routers/classification.py` and `config/classification_config.json`).
+  - Classification is used for document labeling and can be integrated into ingestion or used as a separate service to tag documents or chunks.
+
+- Entity Extraction & Entity Graph
+  - Entities are extracted from chunks using LLMs via `core/entity_extraction.py`. Extraction is optional and controlled by `ENABLE_ENTITY_EXTRACTION` and `sync_entity_embeddings` flags.
+  - The `DocumentProcessor` schedules or runs entity extraction, persists entity nodes, creates chunk-entity relationships, and computes entity similarities (`graph_db.create_entity_similarities`).
+  - Entity extraction can run synchronously for deterministic tests (`SYNC_ENTITY_EMBEDDINGS=1`) or asynchronously in background threads to avoid blocking ingestion.
+  - The graph stores entities and relationships to enable multi-hop reasoning during retrieval and to support entity-based exploration in the UI.
+
+- Chat Tuning and Model Selection
+  - Chat tuning allows changing runtime retrieval and generation parameters from the UI without restarting the server. The chat router reads live tuning values (`api/routers/chat_tuning.py`) and the chat logic uses them as defaults when request values match application defaults.
+  - Tuning parameters include retrieval weights (`chunk_weight`, `entity_weight`, `path_weight`), multi-hop options (`max_hops`, `beam_size`), expansion depth (`graph_expansion_depth`), and model selection fields.
+  - The chat request schema accepts `llm_model` and `embedding_model` fields which are passed through to the RAG pipeline (`graph_rag.query(...)`) so the UI can select the generation model and embedding model at runtime.
+  - Live tuning values and the tuning parameter definitions are available via `/api/chat-tuning/config` and `/api/chat-tuning/config/values`.
+
+These building blocks work together: hybrid retrieval returns candidate chunks, the reranker can refine ordering, graph expansion and entity relationships enable multi-hop context, Leiden clustering groups content for summaries and navigation, and chat-tuning lets operators adjust behavior and models at request time.
+
+## Configuration (important env vars and settings)
+
+Configuration is provided via environment variables and documented in `config/settings.py`. Key variables include:
+
+- LLM & embeddings
+  - `OPENAI_API_KEY` — OpenAI API key (if using OpenAI provider)
+  - `OPENAI_MODEL` — default OpenAI model (server default in settings)
+  - `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_EMBEDDING_MODEL` — for local Ollama usage
+  - `EMBEDDING_MODEL` — default embedding model
+
+- Neo4j
+  - `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
+
+- Feature toggles
+  - `ENABLE_ENTITY_EXTRACTION` — enable entity extraction (default true)
+  - `ENABLE_QUALITY_SCORING` — enable quality scoring
+  - `FLASHRANK_ENABLED` — optional reranker
+
+- Misc
+  - `SYNC_ENTITY_EMBEDDINGS` — force synchronous embedding & persistence for deterministic runs
+  - `CHUNK_SIZE`, `CHUNK_OVERLAP` — chunker params
+
+Refer to `config/settings.py` for full list and defaults.
+
+## Testing and Code Quality
+
+Backend tests live under `api/tests/`. Run them with:
 
 ```bash
 source .venv/bin/activate
 pytest api/tests/
+```
 
+Frontend tests live in `frontend/` and run with the standard npm scripts:
+
+```bash
 cd frontend
 npm run test
 ```
 
-### Code Quality
+Repository tooling:
+
+- Linting: `ruff`
+- Formatting: `black`, `isort`
+- Type checks: `mypy` (optional)
+
+Example lint/test commands:
 
 ```bash
-# Format code
+source .venv/bin/activate
+ruff check .
 black .
 isort .
+pytest api/tests/
+```
 
-# Lint
-flake8 .
+## Deployment
 
-# Type checking
+- Docker Compose is the recommended local/demo deployment mechanism.
+- For production, package services individually and run behind suitable ingress/load-balancer; ensure Neo4j is provisioned with required memory and GDS plugin when using clustering.
+
+## Contributing
+
+Please open issues and PRs. Recommended workflow:
+
+1. Fork repository and create a feature branch
+2. Run tests and linters locally
+3. Open a PR with description, test results, and screenshots where applicable
+
+## License
+
+This project is licensed under the MIT License. See `LICENSE.md` for details.
+# Optional type check
 mypy .
 ```
 
-### Frontend Development
+## Docker
 
-```bash
-cd frontend
+The preferred way to start all services for local demos is via Docker Compose as shown in Quick Start above.
 
-# Lint
-npm run lint
+Use `docker compose up -d` to bring up the full stack and `docker compose logs -f` to stream logs.
 
-# Type checking
-npm run type-check
+## Contributing
 
-# Build
-npm run build
-```
+Contributions are welcome. Please follow the standard fork / branch / PR workflow and include tests for new behavior.
 
-## 🐳 Docker Deployment
-
-### Docker Compose
-
-```bash
-# Start all services with modern Docker Compose command (recommended)
-docker compose up -d
-
-# Optional: rebuild images before starting
-docker compose up -d --build
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
 
-## 🙏 Acknowledgments
-
-- Built with [LangChain](https://www.langchain.com/) and [LangGraph](https://www.langchain.com/langgraph)
-- Powered by [OpenAI](https://openai.com/) GPT models
-- Graph database by [Neo4j](https://neo4j.com/)
-- Frontend framework by [Next.js](https://nextjs.org/)
-- Styled with [Tailwind CSS](https://tailwindcss.com/)
-- Tested with [Akash Chat API](https://chatapi.akash.network/documentation) 
-
-## 📞 Support
-
-- **Documentation**: Check the `/docs` directory
-- **Issues**: [GitHub Issues](https://github.com/FlorentB974/graphrag4/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/FlorentB974/graphrag4/discussions)
-
-## 🗺️ Roadmap
-
-- [ ] Multi-language support
-- [ ] Voice input/output
-- [x] Document preview
-- [ ] Advanced search
-- [ ] Export conversations
-- [x] Dark mode
-- [ ] Mobile apps
-- [ ] Plugin system
-- [ ] Analytics dashboard
+````

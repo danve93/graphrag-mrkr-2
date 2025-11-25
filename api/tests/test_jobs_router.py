@@ -110,7 +110,7 @@ def test_admin_cancel_all_purge_and_retry():
     assert user_token
 
     # user retries the job
-    r = client.post(f"/api/jobs/to-retry/retry", headers={"Authorization": f"Bearer {user_token}"})
+    r = client.post("/api/jobs/to-retry/retry", headers={"Authorization": f"Bearer {user_token}"})
     assert r.status_code == 200
     assert r.json().get("status") == "requeued"
     j = job_manager.get_job("to-retry")

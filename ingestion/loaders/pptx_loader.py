@@ -107,7 +107,7 @@ class PPTXLoader:
             # Get layout name if available
             if hasattr(slide, "slide_layout") and hasattr(slide.slide_layout, "name"):
                 analysis["layout_name"] = slide.slide_layout.name
-        except:
+        except Exception:
             pass
 
         analysis["shape_count"] = len(slide.shapes)

@@ -1,15 +1,13 @@
 import asyncio
 import os
 import sys
-import types
-import pytest
 
 # Ensure repository root is on sys.path so tests can import the package modules
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from rag.nodes import retrieval as retrieval_module
+from rag.nodes import retrieval as retrieval_module  # noqa: E402
 
 
 async def _fake_retrieve_async(**kwargs):

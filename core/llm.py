@@ -326,6 +326,7 @@ Please provide a comprehensive answer based on the context provided above."""
         include_sources: bool,
         temperature: float,
         chat_history: list = None,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate RAG response by splitting the request into multiple parts."""
         try:

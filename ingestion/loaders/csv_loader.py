@@ -2,10 +2,9 @@
 CSV document loader with intelligent processing.
 """
 
-import io
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -128,7 +127,7 @@ class CSVLoader:
                     analysis.append(
                         f"  {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}"
                     )
-                except:
+                except Exception:
                     pass
 
         # Identify categorical columns
@@ -265,7 +264,7 @@ class CSVLoader:
                 try:
                     pd.to_datetime(df[col], errors="raise")
                     date_columns.append(col)
-                except:
+                except Exception:
                     pass
 
         if date_columns:

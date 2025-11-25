@@ -114,41 +114,6 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     return job
 
 
-def list_jobs(limit: int | None = None) -> list[Dict[str, Any]]:
-    """Return a list of job dicts stored in Redis, newest first.
-
-    This scans keys matching `jobs:*`, loads each job via `get_job`,
-    sorts by `created_at` (descending) and applies an optional limit.
-    """
-    r = _get_redis()
-    # use sorted set for pagination (jobs:zset). newest first.
-    try:
-        # support offset/limit via python-level slicing if caller passes a tuple
-        ids = r.zrevrange("jobs:zset", 0, -1)
-    except Exception:
-        # fallback to keys scan
-        keys = r.keys("jobs:*")
-        ids = []
-        for k in keys:
-            try:
-                key = k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
-            except Exception:
-                key = str(k)
-            if key.startswith("jobs:"):
-                ids.append(key.split(":", 1)[1])
-    jobs = []
-    for idb in ids:
-        try:
-            job_id = idb.decode() if isinstance(idb, (bytes, bytearray)) else str(idb)
-        except Exception:
-            job_id = str(idb)
-        job = get_job(job_id)
-        if job:
-            jobs.append(job)
-    # sort by created_at desc
-    # already returned in zrevrange order (newest first)
-    return jobs
-
 
 def list_jobs(limit: int | None = None, offset: int = 0) -> list[Dict[str, Any]]:
     r = _get_redis()
@@ -181,12 +146,7 @@ def list_jobs(limit: int | None = None, offset: int = 0) -> list[Dict[str, Any]]
     return jobs
 
 
-def count_jobs() -> int:
-    r = _get_redis()
-    try:
-        return int(r.zcard("jobs:zset"))
-    except Exception:
-        return len(r.keys("jobs:*"))
+
 
 
 def cancel_all() -> int:

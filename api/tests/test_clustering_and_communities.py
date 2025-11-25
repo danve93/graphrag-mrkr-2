@@ -2,25 +2,18 @@
 Tests for graph clustering, community detection, and community summarization.
 """
 
-import json
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from config.settings import settings
-from core.community_summarizer import CommunitySummarizer, community_summarizer
+from core.community_summarizer import CommunitySummarizer
 from core.graph_clustering import (
-    fetch_entity_projection,
     normalize_edge_weights,
-    run_leiden_clustering,
-    to_igraph,
-    write_communities_to_neo4j,
 )
-from core.graph_db import graph_db
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +272,7 @@ class TestIngestionWithClustering:
         """Test that document processor creates chunk similarities for clustering."""
         from ingestion.document_processor import DocumentProcessor
 
-        processor = DocumentProcessor()
+        _processor = DocumentProcessor()
 
         # Setup mocks
         mock_graph_db.create_chunk_similarities.return_value = 5

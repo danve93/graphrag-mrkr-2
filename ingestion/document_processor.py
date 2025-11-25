@@ -19,13 +19,6 @@ from core.embeddings import embedding_manager
 from core.entity_extraction import EntityExtractor
 from core.graph_db import graph_db
 from ingestion.converters import document_converter
-from ingestion.loaders.csv_loader import CSVLoader
-from ingestion.loaders.docx_loader import DOCXLoader
-from ingestion.loaders.image_loader import ImageLoader
-from ingestion.loaders.pdf_loader import PDFLoader
-from ingestion.loaders.pptx_loader import PPTXLoader
-from ingestion.loaders.text_loader import TextLoader
-from ingestion.loaders.xlsx_loader import XLSXLoader
 
 logger = logging.getLogger(__name__)
 

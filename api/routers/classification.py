@@ -15,7 +15,6 @@ from api.models import ReindexResult, ReindexJobResponse, ReindexJobStatus
 from api import job_manager
 from api import reindex_tasks
 import uuid
-import time
 
 logger = logging.getLogger(__name__)
 

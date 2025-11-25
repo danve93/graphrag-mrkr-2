@@ -180,12 +180,10 @@ class EmbeddingManager:
         self._wait_for_rate_limit()
         
         try:
-            # Allow callers to override the embedding model by passing a keyword argument
-            model_override = None
             # Inspect kwargs from wrapper call if present (backwards compatible)
             # NOTE: callers should prefer passing model via explicit parameter in future versions
-            # but for now we keep this simple pattern.
-            # If the caller passed a model via attribute on the instance, honor that.
+            # but for now we keep this simple pattern. If the caller passed a model via
+            # attribute on the instance, honor that.
             model_to_use = getattr(self, "_temp_model_override", None) or self.model
 
             if self.provider == "ollama":

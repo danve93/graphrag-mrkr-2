@@ -9,7 +9,6 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 
@@ -69,20 +68,6 @@ def get_job(job_id: str) -> Optional[JobRecord]:
         rec = _jobs.get(job_id)
         return asdict(rec) if rec else None
 
-
-def list_jobs(limit: int | None = None) -> list[Dict[str, Any]]:
-    """Return a list of job records sorted by creation time (newest first).
-
-    Args:
-        limit: optional maximum number of jobs to return.
-    """
-    with _lock:
-        items = [asdict(r) for r in _jobs.values()]
-    # sort newest first
-    items.sort(key=lambda x: x.get("created_at", 0), reverse=True)
-    if limit is not None:
-        return items[:limit]
-    return items
 
 
 def list_jobs(limit: int | None = None, offset: int = 0) -> list[Dict[str, Any]]:

@@ -10,13 +10,11 @@ Tests the full document processing flow:
 6. Auto-clustering and community assignment
 """
 
-import asyncio
 import logging
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
 
 import pytest
 
@@ -25,10 +23,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import settings
-from core.graph_db import graph_db
-from core.graph_clustering import run_auto_clustering
-from ingestion.document_processor import DocumentProcessor
+from config.settings import settings  # noqa: E402
+from core.graph_db import graph_db  # noqa: E402
+from core.graph_clustering import run_auto_clustering  # noqa: E402
+from ingestion.document_processor import DocumentProcessor  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -193,7 +191,7 @@ def test_full_ingestion_pipeline(document_processor, test_document_path, cleanup
         
         if len(entities) > 0:
             # Show sample entities
-            logger.info(f"  Sample entities:")
+            logger.info("  Sample entities:")
             for i, entity in enumerate(entities[:5], 1):
                 logger.info(f"    {i}. {entity.get('label', 'N/A')} ({entity.get('type', 'N/A')}) - Community: {entity.get('community_id', 'None')}")
             

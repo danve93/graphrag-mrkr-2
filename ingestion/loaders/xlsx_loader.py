@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 
 import openpyxl
 import pandas as pd
-from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +122,7 @@ class XLSXLoader:
 
                 # Analyze column content
                 non_null_count = df[col].notna().sum()
-                null_count = df[col].isna().sum()
+                _null_count = df[col].isna().sum()
 
                 if non_null_count > 0:
                     # Detect data type

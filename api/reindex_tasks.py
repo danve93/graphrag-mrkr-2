@@ -8,7 +8,6 @@ status reporting.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
 
 from api import job_manager
 

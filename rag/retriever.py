@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from config.settings import settings
 from core.embeddings import embedding_manager
-from core.graph_db import PathResult, graph_db
+from core.graph_db import graph_db
 from rag.nodes.query_analysis import analyze_query
 
 logger = logging.getLogger(__name__)

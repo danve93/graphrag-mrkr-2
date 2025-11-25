@@ -120,6 +120,8 @@ async def get_document_chunk_similarities(document_id: str):
 
 
 
+@router.post("/{document_id}/hashtags")
+async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequest):
     """Update the hashtags for a document."""
     try:
         # Verify document exists
@@ -129,24 +131,14 @@ async def get_document_chunk_similarities(document_id: str):
             raise HTTPException(status_code=404, detail="Document not found")
 
         # Update hashtags
-        graph_db.update_document_hashtags(
-            doc_id=document_id,
-            hashtags=request.hashtags
-        )
+        graph_db.update_document_hashtags(doc_id=document_id, hashtags=request.hashtags)
 
-        return {
-            "document_id": document_id,
-            "hashtags": request.hashtags,
-            "status": "success"
-        }
+        return {"document_id": document_id, "hashtags": request.hashtags, "status": "success"}
     except HTTPException:
         raise
     except Exception as exc:
         logger.error("Failed to update hashtags for %s: %s", document_id, exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to update hashtags"
-        ) from exc
+        raise HTTPException(status_code=500, detail="Failed to update hashtags") from exc
 
 
 @router.get("/{document_id}/preview")

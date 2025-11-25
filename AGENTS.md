@@ -1,37 +1,45 @@
 ## Project Overview
-GraphRAG v2.0 is a state-of-the-art document intelligence system powered by graph-based RAG (Retrieval-Augmented Generation) with LangGraph, FastAPI, Next.js, and Neo4j.
+Amber is a document intelligence platform implementing graph-enhanced Retrieval-Augmented Generation (RAG). It combines vector search, graph expansion, entity reasoning, and LLMs to provide contextual, sourced, and high-quality answers over ingested document collections. Amber is built with LangGraph, FastAPI, Next.js, and Neo4j.
 
 ## Architecture
 
 ### Core Pipeline (LangGraph State Machine)
-The RAG pipeline in `rag/graph_rag.py` uses LangGraph's StateGraph with 4 sequential nodes:
-1. **Query Analysis** (`query_analysis`) - Analyzes user intent and extracts structured query parameters
-2. **Retrieval** (`retrieval`) - Fetches chunks via hybrid search (vector similarity + graph expansion)
-3. **Graph Reasoning** (`graph_reasoning`) - Traverses relationships to enrich context and handle multi-hop queries
-4. **Generation** (`generation`) - Streams LLM response with quality scoring
+The RAG pipeline in `rag/graph_rag.py` uses LangGraph's StateGraph to implement a modular pipeline that can be observed and tuned at runtime. Typical stages include:
 
-**State Management**: Uses plain dict-based state (not custom classes) that flows through all nodes. Each node appends to `state["stages"]` for progress UI updates.
+1. **Query Analysis** (`query_analysis`) — Normalize the query, extract filters (context documents, hashtags), and prepare retrieval parameters.
+2. **Retrieval** (`retrieval`) — Hybrid retrieval combining embedding similarity with entity-aware candidate selection.
+3. **Graph Reasoning / Expansion** (`graph_reasoning`) — Neo4j-backed multi-hop expansion that traverses chunk similarities and entity relationships to enrich context.
+4. **Reranking (optional)** — Post-retrieval reranking using FlashRank (when enabled) to refine candidate ordering.
+5. **Generation** (`generation`) — LLM generation that streams tokens; downstream tasks include quality scoring and follow-up suggestion.
+
+State Management: the pipeline uses plain dict-based `state` objects; each node appends readable stage identifiers to `state["stages"]`. The API streams these stage updates to the frontend (SSE) for progress UI and diagnostics.
 
 ### Ingestion Pipeline
-`ingestion/document_processor.py` handles multi-format documents with:
-- **Format Loaders** (PDF, DOCX, TXT, PPTX, XLSX, CSV, Images) in `ingestion/loaders/`
-- **OCR** - Applied intelligently (enabled by default, quality-filtered)
-- **Chunking** (`core/chunking.py`) - Configurable size/overlap with metadata preservation
-- **Entity Extraction** (`core/entity_extraction.py`) - Optional LLM-based entity identification
-- **Quality Scoring** (`core/quality_scorer.py`) - Filters low-quality chunks
-- **Neo4j Storage** - Creates Document nodes, Chunk nodes, Entity nodes, and relationships
+`ingestion/document_processor.py` implements a robust pipeline for multi-format document ingestion and enrichment:
+
+- **Format loaders** (`ingestion/loaders/`): PDF, DOCX, TXT, MD, PPTX, XLSX, CSV, images; loaders convert content to text/Markdown and apply OCR selectively when warranted.
+- **Conversion & Preprocessing**: normalization, metadata extraction, and filename handling.
+- **Chunking** (`core/chunking.py`): configurable chunk size/overlap with provenance in chunk metadata.
+- **Embedding generation** (`core/embeddings.py`): asynchronous manager with concurrency controls and model selection support.
+- **Entity extraction** (`core/entity_extraction.py`): optional LLM-based extraction that creates Entity nodes, chunk-entity relationships, and entity embeddings. Extraction may run synchronously for tests or asynchronously in background threads for production ingestion.
+- **Quality scoring & filtering** (`core/quality_scorer.py`): filters or marks low-quality chunks to improve retrieval and grounding.
+- **Graph persistence** (`core/graph_db.py`): creates Document, Chunk, and Entity nodes and the relationship edges used for expansion and clustering.
+
+The `DocumentProcessor` exposes synchronous and asynchronous entry points, supports chunk-only ingestion, and tracks background entity extraction operations so the UI can display progress and status.
 
 ### API Layer (FastAPI)
-- **Routers**: `api/routers/` - chat, documents, database, history endpoints
-- **Models**: `api/models.py` - Pydantic schemas for requests/responses (ChatRequest, ChatResponse, etc.)
-- **Services**: `api/services/` - Business logic (chat_history_service, follow_up_service)
-- **Streaming**: Chat responses use SSE (Server-Sent Events) with dict payloads: `{"type": "stage"|"token"|"quality", "content": ...}`
+- **Routers**: `api/routers/` contains `chat.py`, `documents.py`, `database.py`, `history.py`, `classification.py`, `chat_tuning.py`, and `jobs.py`.
+- **Models**: `api/models.py` defines Pydantic request/response models. The `ChatRequest` model exposes `llm_model` and `embedding_model` fields so the UI can select models at runtime.
+- **Services**: `api/services/` contains business logic like chat history and follow-up question generation.
+- **Streaming**: SSE streams emit structured payloads (`stage`, `token`, `sources`, `quality_score`, `follow_ups`, `metadata`) consumed by the frontend.
+
+The lifecycle hook (`api.main.lifespan`) performs startup tasks (user token ensure, optional FlashRank prewarm) and logs provider resolution for debugging.
 
 ### Frontend (Next.js + React)
-- **State Management**: Zustand stores (`store/chatStore.ts`, `themeStore.ts`)
-- **Components**: Organized by feature - Chat, Document, Sidebar, Theme, Toast
-- **SSE Consumption**: `ChatInterface` parses streaming responses and updates UI progressively
-- **Type Safety**: TypeScript types mirror API models in `src/types/index.ts`
+- **State Management**: Zustand plus React Context providers (branding, theme, chat tuning).
+- **Features**: Chat interface with streaming, history panel, upload UI, database explorer, Chat Tuning panel (model and retrieval controls).
+- **SSE Handling**: `ChatInterface` reconstructs token streams into messages, renders stage updates, shows sources and quality scores, and provides follow-up suggestions.
+- **Type Safety**: TypeScript models in `src/types/index.ts` mirror backend Pydantic models for safe API consumption.
 
 ## Critical Data Flows
 
@@ -51,27 +59,30 @@ The RAG pipeline in `rag/graph_rag.py` uses LangGraph's StateGraph with 4 sequen
 6. UI polls `/api/documents/processing-status` to track progress
 
 ### Hybrid Retrieval (Key Algorithm)
-Combine chunk similarity + graph expansion:
-- Vector search returns top_k chunks by embedding similarity
-- For each chunk: traverse SIMILAR_TO edges, follow entity relationships
-- Controlled by `expansion_similarity_threshold`, `max_expansion_depth`, `max_expanded_chunks`
-- Multi-hop reasoning (if enabled) scores paths through entities: stronger relationships + higher entity importance = higher scores
+Hybrid retrieval combines multiple signals and steps:
+
+- **Vector search** (embeddings): initial top-K candidates by embedding similarity.
+- **Graph expansion**: expand candidates by traversing `SIMILAR_TO` chunk edges and entity relationships in Neo4j (controlled by `expansion_similarity_threshold`, `max_expansion_depth`, `max_expanded_chunks`).
+- **Optional reranking**: FlashRank reranker can re-order the top candidates for generation using `flashrank_blend_weight` to combine rerank scores with hybrid scores.
+
+Multi-hop reasoning evaluates path strength using relationship strength and entity importance to surface context-rich multi-hop evidence for the generator.
 
 ## Key Configuration Patterns
-All settings in `config/settings.py` are environment-based:
-- **LLM Selection**: `llm_provider` (openai|ollama) determines which backend to use
-- **Concurrency**: `embedding_concurrency` (default 3), `llm_concurrency` (default 2) prevent rate limiting
-- **Rate Limiting**: `embedding_delay_min/max`, `llm_delay_min/max` add random delays between requests
-- **Retrieval Tuning**: `hybrid_chunk_weight` (default 0.6), `max_expanded_chunks` (default 500), `max_expansion_depth` (default 2)
-- **Quality Filtering**: `enable_quality_filtering`, `ocr_quality_threshold` (default 0.6)
+Settings live in `config/settings.py` and can be set through environment variables or overridden by chat tuning at runtime:
 
-## Development Workflow
-- **Python Environment**: Always `source .venv/bin/activate` before running backend commands
-- **Configuration**: Copy `.env.example` to `.env` and populate required keys (OPENAI_API_KEY, NEO4J_* credentials)
-- **Database**: Neo4j must be running (Docker or local) before ingestion/queries
-- **Frontend**: Runs on http://localhost:3000, proxies API calls to http://localhost:8000
-- **Testing**: `pytest api/tests/` for Python, `npm run test` for frontend
-- **Debugging**: Enable `LOG_LEVEL=DEBUG` in `.env` for verbose logs; check `/api/health` for service status
+- **LLM & Embeddings**: `llm_provider`, `openai_api_key`, `openai_model`, `ollama_model`, `embedding_model`.
+- **Concurrency & Rate Limits**: `embedding_concurrency`, `llm_concurrency`, `embedding_delay_min/max`, `llm_delay_min/max`.
+- **Retrieval & Expansion**: `hybrid_chunk_weight`, `hybrid_entity_weight`, `max_expanded_chunks`, `max_expansion_depth`, `expansion_similarity_threshold`.
+- **Reranking**: `flashrank_enabled`, `flashrank_model_name`, `flashrank_max_candidates`, `flashrank_blend_weight`, `flashrank_batch_size`.
+- **Entity / OCR**: `enable_entity_extraction`, `SYNC_ENTITY_EMBEDDINGS`, `enable_ocr`, `ocr_quality_threshold`.
+
+### Development Workflow
+- Create and activate a virtualenv: `python3 -m venv .venv && source .venv/bin/activate`.
+- Install backend deps: `pip install -r requirements.txt`.
+- Copy `.env.example` → `.env` and fill credentials (OpenAI, Neo4j, optional FlashRank cache path).
+- Start backend: `python api/main.py` (reload enabled) and frontend: `cd frontend && npm run dev`.
+- Tests: `pytest api/tests/` and `cd frontend && npm run test`.
+- Use `SYNC_ENTITY_EMBEDDINGS=1` for deterministic entity extraction runs in test environments.
 
 ## Code Patterns & Conventions
 - **Error Handling**: Async functions wrapped in try/except; errors returned in state/response dicts (never thrown to client)
@@ -80,22 +91,18 @@ All settings in `config/settings.py` are environment-based:
 - **Neo4j Queries**: Use parameterized queries with `$param` syntax; avoid string concatenation
 - **Service Isolation**: Business logic in `api/services/` and `core/`; routers only handle HTTP concerns (validation, response formatting)
 
-## MVP Scope
+### MVP Scope
 
-### Purpose
-Deliver a production-ready minimum viable product that showcases graph-based retrieval-augmented generation across a modern web interface. The MVP must allow users to ingest multi-format documents, explore them via graph-aware retrieval, and chat with high-quality, contextual responses.
+Purpose: deliver an MVP that demonstrates Amber's graph-augmented RAG capabilities across a modern UI: ingest documents, run hybrid retrieval with optional reranking and multi-hop reasoning, and chat with streamed, sourced responses.
 
-### Core User Experience
-- **Modern responsive UI** with dark-mode toggle and accessibility-friendly styling for desktop, tablet, and mobile
-- **Persistent conversation history** to resume, search, and delete sessions while preserving context for follow-up turns
-- **Intelligent chat** that streams answers, detects follow-up questions, re-contextualizes with chat history, and surfaces quality scores
-- **Document management workspace** to upload PDFs, DOCX, TXT, MD, PPT, or XLS; monitor ingestion; view metadata/chunks/entities; manage database
-- **Advanced retrieval controls** supporting context restriction, hybrid search, and multi-hop graph reasoning
+Core UX highlights:
+- Responsive chat interface with streaming and sources
+- Persistent conversation history and session restore
+- Upload and ingestion tracking with chunk previews and entity displays
+- Chat tuning UI to change retrieval/generation parameters and select LLM/embedding models at request time
 
-### Data Ingestion & Processing
-- **Multi-format ingestion** accepts PDF, DOCX, TXT, MD, PPT, XLS; PDFs use Marker OCR/LLM pipeline for high-fidelity Markdown
-- **Graph enrichment** extracts entities and relationships with provenance for multi-hop traversal
-- **Retrieval pipeline** combines vector similarity, entity search, and multi-hop paths with configurable weights and depth limits
+Data flow highlights:
+- Ingest → Chunk → Embed → Persist (Neo4j) → Hybrid retrieval → Optional rerank → Generate → Stream to UI
 
 ### Current Entity Model (from `core/entity_extraction.py`)
 **Canonical Types:** Component, Service, Node, Domain, Class of Service, Account, Account Type, Role, Resource, Quota Object, Backup Object, Item, Storage Object, Migration Procedure, Certificate, Config Option, Security Feature, CLI Command, API Object, Task, Procedure, Concept, Document, Person, Organization, Location, Event, Technology, Product, Date, Money
@@ -114,9 +121,13 @@ Deliver a production-ready minimum viable product that showcases graph-based ret
 - Retrieval leverages hybrid + multi-hop reasoning to connect entities across documents with adjustable parameters
 - Full setup via provided scripts without additional code changes
 
-## Do NOT
-- Write MD documentation files unless explicitly requested
-- Write tests unless explicitly requested
-- Skip virtual environment activation for Python commands
-- Use hardcoded API keys or credentials (always use .env)
-- Modify CORS origins without updating `api/main.py`
+## Operational Notes & Do Not
+
+Do NOT commit secrets or hardcoded API keys. Use environment variables and `.env` instead.
+
+Operational notes:
+- **Reranker prewarm**: `api/main.py` will attempt to import and prewarm FlashRank when `flashrank_enabled` is true; failures are logged and do not prevent startup.
+- **Chat tuning**: tuning values are applied as runtime defaults and can be used to override retrieval/generation parameters without restarting the server.
+- **Clustering**: Leiden clustering requires Neo4j with GDS and sufficient memory; use `scripts/run_clustering.py` and `scripts/build_leiden_projection.py`.
+
+For deeper details see source files under `api/`, `ingestion/`, `core/`, and `rag/`.
