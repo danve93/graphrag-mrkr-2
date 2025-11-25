@@ -23,10 +23,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gcc \
+            g++ \
+            pkg-config \
+            libgl1 \
+            libglvnd0 \
+            libglib2.0-0 \
+            libsm6 \
+            libxrender1 \
+            libxext6 \
+            poppler-utils \
+            tesseract-ocr \
+            tesseract-ocr-eng \
+            ca-certificates
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
