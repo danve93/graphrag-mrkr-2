@@ -119,7 +119,7 @@ export default function Home() {
       />
 
       {/* Main Content (grid column 2) */}
-      <main className={`min-w-0 flex flex-col transition-all duration-300`}>
+      <main className={`min-w-0 min-h-0 flex flex-col transition-all duration-300`}>
         <div className="flex items-center gap-3 border-b border-secondary-200 bg-white px-6 py-4 dark:border-secondary-800 dark:bg-secondary-900">
           {navigation.map((view) => (
             <button
@@ -136,7 +136,7 @@ export default function Home() {
           ))}
         </div>
 
-        <div className="flex-1 overflow-auto bg-secondary-50 dark:bg-secondary-900">
+        <div className="flex-1 overflow-auto overscroll-contain min-h-0 bg-secondary-50 dark:bg-secondary-900">
           {activeView === 'graph' && <GraphView />}
           {activeView === 'chatTuning' && <ChatTuningPanel />}
           {activeView === 'classification' && <ClassificationPanel />}

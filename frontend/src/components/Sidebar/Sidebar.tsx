@@ -136,7 +136,7 @@ export default function Sidebar({
         } ${isResizing ? 'no-transition' : ''} relative`}
         style={{ width: `${collapsed ? 72 : width}px` }}
       >
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full min-h-0">
           {/* Collapse button (desktop) */}
           <button
             onClick={() => onCollapseToggle()}
@@ -204,7 +204,7 @@ export default function Sidebar({
               )}
 
               {/* Tab Content */}
-              <div className={`flex-1 overflow-y-auto p-6 transition-all duration-300 ${
+              <div className={`flex-1 overflow-y-auto overscroll-contain p-6 transition-all duration-300 ${
                 !isConnected ? 'blur-sm pointer-events-none' : ''
               }`}>
                 <div key={activeTab} className="tab-content">
