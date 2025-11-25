@@ -43,81 +43,41 @@ Key components:
 
 ## Pipeline Diagram
 
-Mermaid diagram (for supported renderers):
-
-```mermaid
-flowchart LR
-  subgraph FE [Frontend]
-    UI[Next.js Chat UI]
-  end
-
-  subgraph BE [Backend]
-    API[FastAPI API]
-    RAG[LangGraph RAG Pipeline]
-    RET[Retriever (vector search)]
-    EXP[Graph Expansion / Multi-hop]
-    RR[Reranker (FlashRank, optional)]
-    GEN[LLM Generation]
-    QS[Quality Scoring]
-    FH[Follow-up Generation]
-  end
-
-  subgraph GRAPH [Graph]
-    NEO[Neo4j (Docs / Chunks / Entities)]
-  end
-
-  subgraph LLM [LLM Provider]
-    LLM[OpenAI / Ollama / Local Model]
-    EMB[Embedding Service / Model]
-  end
-
-  UI -->|POST chat query| API
-  API --> RAG
-  RAG -->|embedding lookup| RET
-  RET --> NEO
-  RET --> EXP
-  EXP --> NEO
-  EXP -->|candidates| RR
-  RR --> GEN
-  GEN -->|tokens| API
-  GEN --> QS
-  QS --> API
-  GEN --> FH
-  API -->|SSE stream| UI
-  NEO -->|graph data| RAG
-  LLM --> GEN
-  EMB --> RET
 ```
-
-Fallback ASCII diagram:
-
-```
-Frontend (Next.js UI)
-        |
-        v
-    FastAPI API
-        |
-        v
-   LangGraph RAG Pipeline
-        |
-  -------------------------------
-  |       Retrieval & Ranking    |
-  |  - Vector Retriever (embeddings)
-  |  - Graph Expansion (Neo4j multi-hop)
-  |  - Optional Reranker (FlashRank)
-  -------------------------------
-        |
-        v
-    LLM Generation (OpenAI/Ollama)
-        |
-  -------------------------------
-  |  Post-processing & UX events |
-  |  - Quality Scoring           |
-  |  - Follow-up Suggestion      |
-  |  - SSE token streaming to UI |
-  -------------------------------
-
-Graph storage: Neo4j stores Documents, Chunks, Entities, and relationships used by the retriever and graph expansion.
+┌─────────────────────────────────────────────────────────────┐
+│                        Frontend                             │
+│                   (Next.js 14 + React)                      │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  Chat Interface  │  History  │  Upload  │  Database  │   │
+│  └──────────────────────────────────────────────────────┘   │
+└────────────────┬────────────────────────────────────────────┘
+                 │ REST API + SSE
+                 │
+┌────────────────▼────────────────────────────────────────────┐
+│                      Backend API                            │
+│                    (FastAPI + Python)                       │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Chat │ History │ Database │ Upload │ Classification │    │
+│  └─────────────────────────────────────────────────────┘    │
+└────────┬────────────────────────────┬───────────────────────┘
+         │                            │
+         │ LangGraph                  │ Neo4j Driver
+         │ Pipeline                   │
+         │                            │
+┌────────▼──────────────┐    ┌────────▼──────────────────────┐
+│ Query Analysis &      │    │ Hybrid Retriever + ComBlocks  │
+│ Orchestration         │    │ (vector, graph, rerank)       │
+└────────┬──────────────┘    └────────┬──────────────────────┘
+         │                            │
+┌────────▼─────────────┐    ┌──────────▼───────────────┐
+│ Generation &         │    │ Classification Services   │
+│ Follow-up Logic      │    │ (document & message tags) │
+└────────┬─────────────┘    └──────────┬───────────────┘
+         │                            │
+┌────────▼───────────┐      ┌──────────▼──────────────┐
+│ LangChain/OpenAI   │      │          Neo4j          │
+│ (LLM & Embeddings) │      │      (Graph Database)   │
+└────────────────────┘      └─────────────────────────┘
 ```
 
 ## Quick Start (Docker Compose)
