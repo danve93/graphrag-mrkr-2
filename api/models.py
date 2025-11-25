@@ -62,6 +62,14 @@ class ChatRequest(BaseModel):
         default=settings.default_context_restriction,
         description="Restrict retrieval to provided context documents",
     )
+    llm_model: Optional[str] = Field(
+        default=getattr(settings, 'openai_model', None),
+        description="Override LLM model to use for generation",
+    )
+    embedding_model: Optional[str] = Field(
+        default=getattr(settings, 'embedding_model', None),
+        description="Override embedding model to use for query embedding",
+    )
     stream: bool = Field(True, description="Enable streaming response")
     context_documents: List[str] = Field(
         default_factory=list,

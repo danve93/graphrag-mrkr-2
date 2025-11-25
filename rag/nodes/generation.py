@@ -17,6 +17,7 @@ def generate_response(
     query_analysis: Dict[str, Any],
     temperature: float = 0.7,
     chat_history: List[Dict[str, str]] = None,
+    llm_model: str | None = None,
 ) -> Dict[str, Any]:
     """
     Generate response using retrieved context and query analysis.
@@ -32,6 +33,16 @@ def generate_response(
         Dictionary containing response and metadata
     """
     try:
+        # Debug: log incoming context chunk summary
+        try:
+            sample_ctx = [
+                {"chunk_id": c.get("chunk_id") or c.get("id"), "similarity": c.get("similarity", c.get("hybrid_score", 0.0))}
+                for c in (context_chunks or [])[:5]
+            ]
+            logger.info("Generation node received %d context chunks. Sample: %s", len(context_chunks or []), sample_ctx)
+        except Exception:
+            logger.debug("Failed to log context chunk sample in generation node")
+
         if not context_chunks:
             return {
                 "response": "I couldn't find any relevant information to answer your question.",
@@ -69,6 +80,7 @@ def generate_response(
             include_sources=True,
             temperature=temperature,
             chat_history=chat_history if query_analysis.get("is_follow_up") else None,
+            model_override=llm_model,
         )
 
         # Prepare sources information with entity support

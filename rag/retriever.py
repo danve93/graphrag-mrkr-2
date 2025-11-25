@@ -839,6 +839,23 @@ class DocumentRetriever:
                 + f", {hybrid_count} overlapping)"
             )
 
+            # Optionally rerank top candidates using FlashRank (runs in threadpool)
+            if getattr(settings, "flashrank_enabled", False) and final_results:
+                try:
+                    import asyncio
+
+                    from rag.rerankers.flashrank_reranker import rerank_with_flashrank
+
+                    cap = min(len(final_results), getattr(settings, "flashrank_max_candidates", 100))
+                    loop = asyncio.get_running_loop()
+                    # execute the synchronous reranker in a thread to avoid blocking
+                    reranked = await loop.run_in_executor(None, rerank_with_flashrank, query, final_results, cap)
+                    if isinstance(reranked, list) and reranked:
+                        final_results = reranked
+                        logger.info("Applied FlashRank reranker to top %d candidates", cap)
+                except Exception as e:
+                    logger.warning("FlashRank reranker failed (continuing without it): %s", e)
+
             return final_results[:top_k]
 
         except Exception as e:

@@ -4,6 +4,7 @@
       "key": "chunk_weight",
       "label": "Chunk Weight",
       "value": 0.6,
+      "options": null,
       "min": 0.0,
       "max": 1.0,
       "step": 0.1,
@@ -15,6 +16,7 @@
       "key": "entity_weight",
       "label": "Entity Weight",
       "value": 0.4,
+      "options": null,
       "min": 0.0,
       "max": 1.0,
       "step": 0.1,
@@ -26,6 +28,7 @@
       "key": "path_weight",
       "label": "Path Weight",
       "value": 0.6,
+      "options": null,
       "min": 0.0,
       "max": 1.0,
       "step": 0.1,
@@ -37,6 +40,7 @@
       "key": "max_hops",
       "label": "Max Hops",
       "value": 2,
+      "options": null,
       "min": 1.0,
       "max": 5.0,
       "step": 1.0,
@@ -48,6 +52,7 @@
       "key": "beam_size",
       "label": "Beam Size",
       "value": 8,
+      "options": null,
       "min": 1.0,
       "max": 20.0,
       "step": 1.0,
@@ -59,6 +64,7 @@
       "key": "graph_expansion_depth",
       "label": "Graph Expansion Depth",
       "value": 2,
+      "options": null,
       "min": 0.0,
       "max": 5.0,
       "step": 1.0,
@@ -67,15 +73,138 @@
       "tooltip": "Maximum depth for expanding the knowledge graph around retrieved chunks. 0 disables expansion, higher values find more related context."
     },
     {
+      "key": "top_k",
+      "label": "Top K Results",
+      "value": 5,
+      "options": null,
+      "min": 1.0,
+      "max": 50.0,
+      "step": 1.0,
+      "type": "slider",
+      "category": "Retriever Settings",
+      "tooltip": "Number of top chunks to return from the vector/entity retrieval step before any reranking or graph expansion. Larger values increase recall but also cost."
+    },
+    {
+      "key": "max_expanded_chunks",
+      "label": "Max Expanded Chunks",
+      "value": 500,
+      "options": null,
+      "min": 50.0,
+      "max": 2000.0,
+      "step": 50.0,
+      "type": "slider",
+      "category": "Retriever Settings",
+      "tooltip": "Maximum number of chunks to keep after graph expansion. Limits memory and downstream LLM context size."
+    },
+    {
+      "key": "expansion_similarity_threshold",
+      "label": "Expansion Similarity Threshold",
+      "value": 0.1,
+      "options": null,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01,
+      "type": "slider",
+      "category": "Retriever Settings",
+      "tooltip": "Minimum similarity required for chunks to be considered during graph expansion. Higher values produce tighter, more relevant expansions."
+    },
+    {
+      "key": "min_retrieval_similarity",
+      "label": "Min Retrieval Similarity",
+      "value": 0.1,
+      "options": null,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01,
+      "type": "slider",
+      "category": "Retriever Settings",
+      "tooltip": "Minimum similarity cutoff for retrieved chunks to be considered relevant. Lower values increase recall."
+    },
+    {
+      "key": "flashrank_enabled",
+      "label": "Enable FlashRank Reranker",
+      "value": false,
+      "options": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "toggle",
+      "category": "Retriever Settings",
+      "tooltip": "Toggle to enable FlashRank post-retrieval reranking. Requires FlashRank to be installed on the server."
+    },
+    {
+      "key": "flashrank_blend_weight",
+      "label": "FlashRank Blend Weight",
+      "value": 0.0,
+      "options": null,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "type": "slider",
+      "category": "Retriever Settings",
+      "tooltip": "Blend weight between the original hybrid score and the rerank score (0 = use rerank ordering)."
+    },
+    {
+      "key": "flashrank_model_name",
+      "label": "FlashRank Model",
+      "value": "ms-marco-TinyBERT-L-2-v2",
+      "options": [
+        "ms-marco-TinyBERT-L-2-v2",
+        "ms-marco-MiniLM-L-12-v2",
+        "ms-marco-MultiBERT-L-12",
+        "rank-T5-flan"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "select",
+      "category": "Retriever Settings",
+      "tooltip": "Select which FlashRank model to use for reranking. The model must be available in the server cache or will be downloaded on first use."
+    },
+    {
       "key": "restrict_to_context",
       "label": "Restrict to Context Documents",
       "value": true,
+      "options": null,
       "min": null,
       "max": null,
       "step": null,
       "type": "toggle",
       "category": "Context Filtering",
       "tooltip": "When enabled, limits retrieval to documents explicitly provided in the chat context. Disable to search across all ingested documents."
+    },
+    {
+      "key": "llm_model",
+      "label": "LLM Model",
+      "value": "gpt-4o-mini",
+      "options": [
+        "gpt-5-mini",
+        "gpt-4o-mini",
+        "gpt-4o",
+        "custom"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "select",
+      "category": "Model Selection",
+      "tooltip": "Select the LLM model used for generation. Use 'custom' to enter a custom model name in the embedding model field."
+    },
+    {
+      "key": "embedding_model",
+      "label": "Embedding Model",
+      "value": "text-embedding-ada-002",
+      "options": [
+        "text-embedding-ada-002",
+        "text-embedding-3-large",
+        "nomic-embed-text"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "select",
+      "category": "Model Selection",
+      "tooltip": "Select the text embedding model used for query and chunk embeddings. Changing this affects retrieval quality and may require re-ingestion of documents."
     }
   ]
 }

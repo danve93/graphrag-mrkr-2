@@ -170,6 +170,36 @@ class Settings(BaseSettings):
         default=0.6, description="Weight for path-based results in hybrid mode"
     )
 
+    # FlashRank reranker configuration (optional)
+    flashrank_enabled: bool = Field(
+        default=False,
+        description="Enable FlashRank reranker for post-retrieval re-ranking (disabled by default)",
+    )
+    flashrank_model_name: str = Field(
+        default="ms-marco-TinyBERT-L-2-v2",
+        description="Default FlashRank model name (tiny by default)",
+    )
+    flashrank_cache_dir: Optional[str] = Field(
+        default=None,
+        description="Optional cache directory for FlashRank / HF model downloads",
+    )
+    flashrank_max_candidates: int = Field(
+        default=100,
+        description="Maximum number of top candidates to send to the reranker",
+    )
+    flashrank_blend_weight: float = Field(
+        default=0.0,
+        description="Blend weight between hybrid_score and rerank_score (0.0 = use reranker ordering)",
+    )
+    flashrank_max_length: int = Field(
+        default=128,
+        description="Max token length passed to the reranker for (query+passage) pairs",
+    )
+    flashrank_batch_size: int = Field(
+        default=32,
+        description="Batch size for reranker calls (where applicable)",
+    )
+
     # Application Configuration
     log_level: str = Field(default="INFO", description="Logging level")
     max_upload_size: int = Field(

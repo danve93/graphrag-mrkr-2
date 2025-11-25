@@ -1,0 +1,42 @@
+[
+  {
+    "i": 1,
+    "http_status": 200,
+    "elapsed_ms": 18447.0,
+    "chunks_used": 12,
+    "first_source": "317ca3324c133faeb3efea04279a359a_tu_0_725_9cea049a",
+    "first_rerank": null
+  },
+  {
+    "i": 2,
+    "http_status": 200,
+    "elapsed_ms": 19818.4,
+    "chunks_used": 12,
+    "first_source": "317ca3324c133faeb3efea04279a359a_tu_0_725_9cea049a",
+    "first_rerank": null
+  },
+  {
+    "i": 3,
+    "http_status": 200,
+    "elapsed_ms": 18919.9,
+    "chunks_used": 12,
+    "first_source": "317ca3324c133faeb3efea04279a359a_tu_0_725_9cea049a",
+    "first_rerank": null
+  },
+  {
+    "i": 4,
+    "http_status": 200,
+    "elapsed_ms": 21571.8,
+    "chunks_used": 12,
+    "first_source": "317ca3324c133faeb3efea04279a359a_tu_0_725_9cea049a",
+    "first_rerank": null
+  },
+  {
+    "i": 5,
+    "http_status": 200,
+    "elapsed_ms": 18279.5,
+    "chunks_used": 12,
+    "first_source": "317ca3324c133faeb3efea04279a359a_tu_0_725_9cea049a",
+    "first_rerank": null
+  }
+]

@@ -31,6 +31,19 @@ async def lifespan(app: FastAPI):
         logger.info("Job user token (store this securely if needed): %s", user_token)
     except Exception:
         logger.exception("Failed to ensure user token on startup")
+    # Optionally pre-warm the FlashRank reranker if enabled
+    try:
+        if getattr(settings, "flashrank_enabled", False):
+            logger.info("FlashRank enabled in settings — pre-warming ranker on startup...")
+            try:
+                # Import locally to avoid bringing optional deps into module import time
+                from rag.rerankers.flashrank_reranker import prewarm_ranker
+
+                prewarm_ranker()
+            except Exception as e:
+                logger.warning("Failed to pre-warm FlashRank ranker at startup: %s", e)
+    except Exception:
+        logger.exception("Unexpected error while attempting to pre-warm FlashRank")
     yield
     logger.info("Shutting down GraphRAG API...")
 

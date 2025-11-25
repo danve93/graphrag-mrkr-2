@@ -30,6 +30,7 @@ async def retrieve_documents_async(
     restrict_to_context: bool = True,
     expansion_depth: Optional[int] = None,
     context_documents: Optional[List[str]] = None,
+    embedding_model: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve relevant documents based on query and analysis using enhanced retriever.
@@ -122,6 +123,7 @@ async def retrieve_documents_async(
                 restrict_to_context=restrict_to_context,
                 expand_depth=expansion_depth or settings.max_expansion_depth,
                 allowed_document_ids=allowed_ids,
+                embedding_model=embedding_model,
             )
         else:
             # Pass chunk_weight and multi_hop through to hybrid retriever if present
@@ -137,6 +139,7 @@ async def retrieve_documents_async(
                 beam_size=beam_size,
                 restrict_to_context=restrict_to_context,
                 allowed_document_ids=allowed_ids,
+                embedding_model=embedding_model,
             )
 
         logger.info(
@@ -170,6 +173,7 @@ def retrieve_documents(
     restrict_to_context: bool = True,
     expansion_depth: Optional[int] = None,
     context_documents: Optional[List[str]] = None,
+    embedding_model: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Synchronous wrapper for document retrieval.
@@ -203,44 +207,46 @@ def retrieve_documents(
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run,
-                    retrieve_documents_async(
-                    query,
-                    query_analysis,
-                    retrieval_mode,
-                    top_k,
-                    chunk_weight,
-                    graph_expansion,
-                    use_multi_hop,
-                    expansion_depth=expansion_depth,
+                # Build the coroutine with explicit keyword args to avoid positional/keyword conflicts
+                coro = retrieve_documents_async(
+                    query=query,
+                    query_analysis=query_analysis,
+                    retrieval_mode=retrieval_mode,
+                    top_k=top_k,
+                    chunk_weight=chunk_weight,
                     entity_weight=entity_weight,
                     path_weight=path_weight,
+                    graph_expansion=graph_expansion,
+                    use_multi_hop=use_multi_hop,
                     max_hops=max_hops,
                     beam_size=beam_size,
                     restrict_to_context=restrict_to_context,
+                    expansion_depth=expansion_depth,
                     context_documents=allowed_docs,
-                ),
-            )
-            return future.result()
+                    embedding_model=embedding_model,
+                )
+
+                future = executor.submit(asyncio.run, coro)
+                return future.result()
         except RuntimeError:
             # No event loop running - safe to use asyncio.run()
             return asyncio.run(
                 retrieve_documents_async(
-                    query,
-                    query_analysis,
-                    retrieval_mode,
-                    top_k,
-                    chunk_weight,
-                    graph_expansion,
-                    use_multi_hop,
-                    expansion_depth=expansion_depth,
+                    query=query,
+                    query_analysis=query_analysis,
+                    retrieval_mode=retrieval_mode,
+                    top_k=top_k,
+                    chunk_weight=chunk_weight,
                     entity_weight=entity_weight,
                     path_weight=path_weight,
+                    graph_expansion=graph_expansion,
+                    use_multi_hop=use_multi_hop,
                     max_hops=max_hops,
                     beam_size=beam_size,
                     restrict_to_context=restrict_to_context,
+                    expansion_depth=expansion_depth,
                     context_documents=allowed_docs,
+                    embedding_model=embedding_model,
                 )
             )
     except Exception as e:

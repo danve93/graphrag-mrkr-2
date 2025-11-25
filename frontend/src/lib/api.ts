@@ -30,6 +30,8 @@ export const api = {
       beam_size?: number
       graph_expansion_depth?: number
       restrict_to_context?: boolean
+      llm_model?: string
+      embedding_model?: string
       llm_overrides?: {
         model?: string
         temperature?: number

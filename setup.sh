@@ -9,7 +9,7 @@ BRANDING_TITLE=$(python3 - <<'PY'
 import json
 import sys
 try:
-    b = json.load(open('branding.json'))
+    b = json.load(open('frontend/public/branding.json'))
     print(b.get('setup_title') or b.get('title'))
 except Exception:
     print('GraphRAG v2.0 Setup')

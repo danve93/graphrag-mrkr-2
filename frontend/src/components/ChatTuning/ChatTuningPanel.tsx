@@ -6,11 +6,13 @@ import { InformationCircleIcon } from '@heroicons/react/24/outline'
 interface ChatParameter {
   key: string
   label: string
-  value: number | boolean
+  value: number | boolean | string
+  options?: string[]
   min?: number
   max?: number
   step?: number
   type: 'slider' | 'toggle'
+  | 'select'
   category: string
   tooltip: string
 }
@@ -74,7 +76,7 @@ export default function ChatTuningPanel() {
     }
   }
 
-  const handleValueChange = (key: string, value: number | boolean) => {
+  const handleValueChange = (key: string, value: number | boolean | string) => {
     if (!config) return
 
     setConfig({
@@ -166,52 +168,68 @@ export default function ChatTuningPanel() {
               {category}
             </h2>
 
-            {params.map((param) => (
-              <div key={param.key} className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
-                      {param.label}
-                    </label>
-                    <Tooltip content={param.tooltip} />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {params.map((param) => (
+                <div key={param.key} className="space-y-2 p-3 rounded-lg bg-white dark:bg-secondary-900 border border-secondary-100 dark:border-secondary-800">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
+                        {param.label}
+                      </label>
+                      <Tooltip content={param.tooltip} />
+                    </div>
+                    {param.type === 'slider' && (
+                      <span className="text-sm font-mono text-secondary-600 dark:text-secondary-400">
+                        {param.value}
+                      </span>
+                    )}
                   </div>
+
                   {param.type === 'slider' && (
-                    <span className="text-sm font-mono text-secondary-600 dark:text-secondary-400">
-                      {param.value}
-                    </span>
+                    <input
+                      type="range"
+                      min={param.min}
+                      max={param.max}
+                      step={param.step}
+                      value={param.value as number}
+                      onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
+                      className="w-full h-2 bg-secondary-200 dark:bg-secondary-700 rounded-lg appearance-none cursor-pointer slider"
+                    />
+                  )}
+
+                  {param.type === 'select' && param.options && (
+                    <select
+                      value={String(param.value)}
+                      onChange={(e) => handleValueChange(param.key, e.target.value)}
+                      className="w-full p-2 bg-white dark:bg-secondary-800 border border-secondary-200 dark:border-secondary-700 rounded"
+                    >
+                      {param.options.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {param.type === 'toggle' && (
+                    <button
+                      onClick={() => handleValueChange(param.key, !param.value)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        param.value
+                          ? 'bg-primary-600'
+                          : 'bg-secondary-300 dark:bg-secondary-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          param.value ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
                   )}
                 </div>
-
-                {param.type === 'slider' && (
-                  <input
-                    type="range"
-                    min={param.min}
-                    max={param.max}
-                    step={param.step}
-                    value={param.value as number}
-                    onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
-                    className="w-full h-2 bg-secondary-200 dark:bg-secondary-700 rounded-lg appearance-none cursor-pointer slider"
-                  />
-                )}
-
-                {param.type === 'toggle' && (
-                  <button
-                    onClick={() => handleValueChange(param.key, !param.value)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      param.value
-                        ? 'bg-primary-600'
-                        : 'bg-secondary-300 dark:bg-secondary-600'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        param.value ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         ))}
       </div>

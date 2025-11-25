@@ -36,6 +36,8 @@ export default function ChatInterface() {
     beam_size: 8,
     graph_expansion_depth: 2,
     restrict_to_context: true,
+    llm_model: undefined as string | undefined,
+    embedding_model: undefined as string | undefined,
   })
   const healthCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -71,6 +73,8 @@ export default function ChatInterface() {
             beam_size: values.beam_size ?? prev.beam_size,
             graph_expansion_depth: values.graph_expansion_depth ?? prev.graph_expansion_depth,
             restrict_to_context: values.restrict_to_context ?? prev.restrict_to_context,
+                llm_model: values.llm_model ?? prev.llm_model,
+                embedding_model: values.embedding_model ?? prev.embedding_model,
           }))
         }
       } catch (error) {
@@ -258,6 +262,8 @@ export default function ChatInterface() {
           beam_size: chatTuningParams.beam_size,
           graph_expansion_depth: chatTuningParams.graph_expansion_depth,
           restrict_to_context: chatTuningParams.restrict_to_context,
+          llm_model: chatTuningParams.llm_model,
+          embedding_model: chatTuningParams.embedding_model,
         },
         { signal: controller.signal }
       )

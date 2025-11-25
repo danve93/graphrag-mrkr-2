@@ -119,13 +119,14 @@ services:
     volumes:
       - ./:/app
       - ./data:/app/data
+    working_dir: /app
     networks:
       - graphrag_network
     depends_on:
       - redis
       - backend
     restart: unless-stopped
-    command: ["python", "scripts/run_redis_job_worker.py"]
+    command: ["python", "-m", "scripts.run_redis_job_worker"]
 
 networks:
   graphrag_network:

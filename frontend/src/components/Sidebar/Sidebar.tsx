@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import {
   Bars3Icon,
@@ -13,7 +13,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import HistoryTab from './HistoryTab'
 import DatabaseTab from './DatabaseTab'
 import { useChatStore } from '@/store/chatStore'
-import branding from '../../../../branding.json'
+import { useBranding } from '@/components/Branding/BrandingProvider'
 
 interface SidebarProps {
   open: boolean
@@ -38,6 +38,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<'chat' | 'database'>('chat')
   const [isResizing, setIsResizing] = useState(false)
+  const branding = useBranding()
   
   const isConnected = useChatStore((state) => state.isConnected)
 
@@ -155,16 +156,12 @@ export default function Sidebar({
               {/* Logo/Brand */}
               <div className="p-6 border-b border-secondary-200 dark:border-secondary-700">
                 <h1 className="text-xl font-bold text-secondary-900 dark:text-secondary-50 flex items-center">
-                  {branding.use_image && branding.image_path ? (
-                    <img
-                      src={branding.image_path}
-                      alt={branding.short_name || branding.heading}
-                      className="w-6 h-6 mr-2"
-                    />
+                  {branding?.use_image && branding.image_path ? (
+                    <img src={branding.image_path} alt={branding.short_name || branding.heading} className="w-6 h-6 mr-2" />
                   ) : null}
-                  <span>{branding.use_image ? (branding.short_name || branding.heading) : branding.heading}</span>
+                  <span>{branding?.use_image ? (branding.short_name || branding.heading) : branding?.heading}</span>
                 </h1>
-                <p className="text-sm text-secondary-600 dark:text-secondary-400 mt-1">{branding.tagline}</p>
+                <p className="text-sm text-secondary-600 dark:text-secondary-400 mt-1">{branding?.tagline}</p>
               </div>
 
               {/* Tabs */}

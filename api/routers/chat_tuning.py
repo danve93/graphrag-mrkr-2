@@ -24,6 +24,7 @@ class ChatParameter(BaseModel):
     key: str
     label: str
     value: Any
+    options: List[str] | None = None
     min: float | None = None
     max: float | None = None
     step: float | None = None

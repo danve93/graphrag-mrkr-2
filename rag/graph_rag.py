@@ -123,9 +123,27 @@ class GraphRAG:
                 beam_size=beam_size,
                 restrict_to_context=restrict_to_context,
                 expansion_depth=expansion_depth,
+                embedding_model=state.get("embedding_model", None),
                 context_documents=state.get("context_documents", []),
             )
-            
+            # Debug: log retrieved chunk summary (count + sample ids/similarities)
+            try:
+                retrieved = state.get("retrieved_chunks", []) or []
+                sample_info = [
+                    {
+                        "chunk_id": c.get("chunk_id") or c.get("id"),
+                        "similarity": c.get("similarity", c.get("hybrid_score", 0.0)),
+                    }
+                    for c in retrieved[:5]
+                ]
+                logger.info(
+                    "Post-retrieval: %d chunks retrieved. Sample: %s",
+                    len(retrieved),
+                    sample_info,
+                )
+            except Exception:
+                logger.debug("Failed to log retrieved chunk sample")
+
             return state
         except Exception as e:
             logger.error(f"Document retrieval failed: {e}")
@@ -151,6 +169,16 @@ class GraphRAG:
                 state.get("query_analysis", {}),
                 state.get("retrieval_mode", "graph_enhanced"),
             )
+            # Debug: log graph context summary
+            try:
+                graph_ctx = state.get("graph_context", []) or []
+                sample_graph = [
+                    {"chunk_id": c.get("chunk_id") or c.get("id"), "similarity": c.get("similarity", c.get("hybrid_score", 0.0))}
+                    for c in graph_ctx[:5]
+                ]
+                logger.info("Post-graph-reasoning: %d items in graph_context. Sample: %s", len(graph_ctx), sample_graph)
+            except Exception:
+                logger.debug("Failed to log graph_context sample")
             return state
         except Exception as e:
             logger.error(f"Graph reasoning failed: {e}")
@@ -169,13 +197,25 @@ class GraphRAG:
             # Track stage
             state["stages"].append("generation")
             logger.info(f"Stage generation completed, current stages: {state['stages']}")
-            
+            # Debug: log what will be passed to generation
+            try:
+                retrieved = state.get("retrieved_chunks", []) or []
+                graph_ctx = state.get("graph_context", []) or []
+                logger.info(
+                    "About to generate response — retrieved_chunks=%d, graph_context=%d",
+                    len(retrieved),
+                    len(graph_ctx),
+                )
+            except Exception:
+                logger.debug("Failed to log pre-generation context sizes")
+
             response_data = generate_response(
                 state.get("query", ""),
                 state.get("graph_context", []),
                 state.get("query_analysis", {}),
                 state.get("temperature", 0.7),
                 state.get("chat_history", []),
+                llm_model=state.get("llm_model", None),
             )
 
             state["response"] = response_data.get("response", "")
@@ -209,6 +249,8 @@ class GraphRAG:
         graph_expansion_depth: Optional[int] = None,
         chat_history: Optional[List[Dict[str, Any]]] = None,
         context_documents: Optional[List[str]] = None,
+        llm_model: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process a user query through the RAG pipeline.
@@ -255,6 +297,11 @@ class GraphRAG:
             # Add chat history for follow-up questions
             state["chat_history"] = chat_history or []
             state["context_documents"] = context_documents or []
+            # Allow per-request model overrides for LLM and embeddings
+            if llm_model:
+                state["llm_model"] = llm_model
+            if embedding_model:
+                state["embedding_model"] = embedding_model
 
             # Run the workflow with a dict-based state
             logger.info(f"Processing query through RAG pipeline: {user_query}")

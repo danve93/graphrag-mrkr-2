@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.models import ChatRequest, ChatResponse, FollowUpRequest, FollowUpResponse
+from api.routers.chat_tuning import load_config as load_chat_tuning_config
+from config.settings import settings
 from api.services.chat_history_service import chat_history_service
 from api.services.follow_up_service import follow_up_service
 from core.quality_scorer import quality_scorer
@@ -225,19 +227,81 @@ async def _prepare_chat_context(
     context_document_labels = request.context_document_labels or []
     context_hashtags = request.context_hashtags or []
 
+    # Load chat tuning config values and use them as runtime defaults when the
+    # incoming request fields equal the original application defaults. This
+    # lets the UI change behavior immediately without restarting the server.
+    try:
+        cfg = load_chat_tuning_config()
+        param_values = {p["key"]: p["value"] for p in cfg.get("parameters", [])}
+    except Exception:
+        param_values = {}
+
+    # Helper to prefer request value unless it equals the server default
+    def _prefer_request_or_cfg(key: str, req_val, default_val):
+        if req_val is None or req_val == default_val:
+            return param_values.get(key, req_val)
+        return req_val
+
+    # Compute effective retrieval parameters
+    effective_top_k = _prefer_request_or_cfg("top_k", request.top_k, 5)
+    effective_chunk_weight = _prefer_request_or_cfg(
+        "chunk_weight", request.chunk_weight, settings.hybrid_chunk_weight
+    )
+    effective_entity_weight = _prefer_request_or_cfg(
+        "entity_weight", request.entity_weight, settings.hybrid_entity_weight
+    )
+    effective_path_weight = _prefer_request_or_cfg(
+        "path_weight", request.path_weight, settings.hybrid_path_weight
+    )
+    effective_max_hops = _prefer_request_or_cfg(
+        "max_hops", request.max_hops, settings.multi_hop_max_hops
+    )
+    effective_beam_size = _prefer_request_or_cfg(
+        "beam_size", request.beam_size, settings.multi_hop_beam_size
+    )
+    effective_graph_expansion_depth = _prefer_request_or_cfg(
+        "graph_expansion_depth", request.graph_expansion_depth, settings.max_expansion_depth
+    )
+    effective_restrict_to_context = _prefer_request_or_cfg(
+        "restrict_to_context", request.restrict_to_context, settings.default_context_restriction
+    )
+
+    # Apply other tuning that the retriever reads from `settings` directly
+    # so that DocumentRetriever and expansion logic pick them up immediately.
+    try:
+        if "min_retrieval_similarity" in param_values:
+            settings.min_retrieval_similarity = float(param_values["min_retrieval_similarity"])
+        if "max_expanded_chunks" in param_values:
+            settings.max_expanded_chunks = int(param_values["max_expanded_chunks"])
+        if "expansion_similarity_threshold" in param_values:
+            settings.expansion_similarity_threshold = float(param_values["expansion_similarity_threshold"])
+        if "flashrank_enabled" in param_values:
+            settings.flashrank_enabled = bool(param_values["flashrank_enabled"])
+        if "flashrank_blend_weight" in param_values:
+            settings.flashrank_blend_weight = float(param_values["flashrank_blend_weight"])
+        if "flashrank_model_name" in param_values:
+            try:
+                settings.flashrank_model_name = str(param_values["flashrank_model_name"])
+            except Exception:
+                logger.warning("Invalid flashrank_model_name provided in chat tuning config; ignoring")
+    except Exception as exc:
+        logger.warning(f"Failed to apply chat-tuning retriever overrides to settings: {exc}")
+
     result = graph_rag.query(
         user_query=request.message,
         retrieval_mode=request.retrieval_mode,
-        top_k=request.top_k,
+        top_k=effective_top_k,
         temperature=request.temperature,
         use_multi_hop=request.use_multi_hop,
-        chunk_weight=request.chunk_weight,
-        entity_weight=request.entity_weight,
-        path_weight=request.path_weight,
-        max_hops=request.max_hops,
-        beam_size=request.beam_size,
-        restrict_to_context=request.restrict_to_context,
-        graph_expansion_depth=request.graph_expansion_depth,
+        chunk_weight=effective_chunk_weight,
+        entity_weight=effective_entity_weight,
+        path_weight=effective_path_weight,
+        max_hops=effective_max_hops,
+        beam_size=effective_beam_size,
+        restrict_to_context=effective_restrict_to_context,
+        graph_expansion_depth=effective_graph_expansion_depth,
+        llm_model=request.llm_model,
+        embedding_model=request.embedding_model,
         chat_history=chat_history,
         context_documents=context_documents,
     )
@@ -253,6 +317,8 @@ async def _prepare_chat_context(
         "beam_size": request.beam_size,
         "graph_expansion_depth": request.graph_expansion_depth,
         "restrict_to_context": request.restrict_to_context,
+        "llm_model": request.llm_model,
+        "embedding_model": request.embedding_model,
     }
 
     quality_score = result.get("quality_score")

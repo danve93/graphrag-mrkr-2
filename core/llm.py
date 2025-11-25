@@ -47,6 +47,7 @@ class LLMManager:
         system_message: Optional[str] = None,
         temperature: float = 0.1,
         max_tokens: int = 1000,
+        model_override: Optional[str] = None,
     ) -> str:
         """
         Generate a response using the configured LLM.
@@ -63,11 +64,11 @@ class LLMManager:
         try:
             if self.provider == "ollama":
                 return self._generate_ollama_response(
-                    prompt, system_message, temperature, max_tokens
+                    prompt, system_message, temperature, max_tokens, model_override
                 )
             else:
                 return self._generate_openai_response(
-                    prompt, system_message, temperature, max_tokens
+                    prompt, system_message, temperature, max_tokens, model_override
                 )
 
         except Exception as e:
@@ -80,6 +81,7 @@ class LLMManager:
         system_message: Optional[str],
         temperature: float,
         max_tokens: int,
+        model_override: Optional[str] = None,
     ) -> str:
         """Generate response using OpenAI with retry logic."""
         messages = []
@@ -93,7 +95,7 @@ class LLMManager:
         for attempt in range(max_retries):
             try:
                 response = openai.chat.completions.create(
-                    model=str(self.model),
+                    model=str(model_override or self.model),
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
@@ -143,6 +145,7 @@ class LLMManager:
         system_message: Optional[str],
         temperature: float,
         max_tokens: int,
+        model_override: Optional[str] = None,
     ) -> str:
         """Generate response using Ollama."""
         full_prompt = ""
@@ -153,7 +156,7 @@ class LLMManager:
         response = requests.post(
             f"{self.ollama_base_url}/api/generate",
             json={
-                "model": self.model,
+                "model": model_override or self.model,
                 "prompt": full_prompt,
                 "options": {"temperature": temperature, "num_predict": max_tokens},
                 "stream": False,
@@ -170,6 +173,7 @@ class LLMManager:
         include_sources: bool = True,
         temperature: float = 0.3,
         chat_history: list = None,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate a RAG response using retrieved context chunks.
@@ -204,13 +208,14 @@ Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and
                 logger.info(
                     "Request exceeds token limit, splitting into multiple requests"
                 )
-                return self._generate_rag_response_split(
+                return self._generate_rag_response_single(
                     query,
                     context_chunks,
                     system_message,
                     include_sources,
                     temperature,
                     chat_history,
+                    model_override,
                 )
             else:
                 return self._generate_rag_response_single(
@@ -220,6 +225,7 @@ Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and
                     include_sources,
                     temperature,
                     chat_history,
+                    model_override,
                 )
 
         except Exception as e:
@@ -234,6 +240,7 @@ Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and
         include_sources: bool,
         temperature: float,
         chat_history: list = None,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate RAG response for a single request that fits within token limits."""
         try:
@@ -288,6 +295,7 @@ Please provide a comprehensive answer based on the context provided above."""
                 system_message=system_message,
                 temperature=temperature,
                 max_tokens=max_out,
+                model_override=model_override,
             )
 
             # If response looks truncated, try a short continuation
@@ -392,6 +400,7 @@ Please provide a comprehensive answer based on the context provided above."""
                     system_message=system_message,
                     temperature=temperature,
                     max_tokens=max_out,
+                    model_override=model_override,
                 )
 
                 # Attempt to continue if truncated
