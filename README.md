@@ -128,13 +128,13 @@ Run the full stack (backend, frontend, Neo4j) locally:
 docker compose up -d
 ```
 
-Rebuild images after changing Dockerfiles:
+Rebuild images after Dockerfile changes:
 
 ```bash
 docker compose up -d --build
 ```
 
-Stream logs:
+Tail logs:
 
 ```bash
 docker compose logs -f
