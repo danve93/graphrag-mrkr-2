@@ -165,7 +165,7 @@ def run_leiden_clustering(
     partition = graph.community_leiden(
         objective_function="modularity",
         weights=graph.es[weight_field] if weight_field in graph.es.attributes() else None,
-        resolution_parameter=resolution,
+        resolution=resolution,
     )
 
     membership = {
