@@ -1,6 +1,12 @@
 ## Project Overview
 Amber is a document intelligence platform implementing graph-enhanced Retrieval-Augmented Generation (RAG). It combines vector search, graph expansion, entity reasoning, and LLMs to provide contextual, sourced, and high-quality answers over ingested document collections. Amber is built with LangGraph, FastAPI, Next.js, and Neo4j.
 
+## Documentation Updates
+
+- The root `README.md` is the primary onboarding guide. It now highlights quick-start commands (Docker Compose), local development steps for both backend and frontend, and pointers to advanced features like clustering and reranking.
+- Keep the README and this file aligned: when you add new capabilities to the RAG pipeline, ingestion flow, or clustering utilities, update both documents with a brief summary and the relevant entry points.
+- When documenting commands, prefer concise bash snippets that can be copied verbatim.
+
 ## Architecture
 
 ### Core Pipeline (LangGraph State Machine)
