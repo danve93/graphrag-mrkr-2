@@ -50,6 +50,8 @@ services:
       - ENABLE_CLUSTERING=${ENABLE_CLUSTERING:-true}
       - ENABLE_GRAPH_CLUSTERING=${ENABLE_GRAPH_CLUSTERING:-true}
       - SUMMARIZATION_BATCH_SIZE=${SUMMARIZATION_BATCH_SIZE:-20}
+      # Redis URL for background job processing (worker uses the same URL)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"  # FastAPI port
     volumes:
@@ -57,8 +59,8 @@ services:
     networks:
       - graphrag_network
     depends_on:
-      neo4j:
-        condition: service_healthy
+      - neo4j
+      - redis
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
@@ -76,6 +78,7 @@ services:
       - ./.env
     environment:
       - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL_SERVER=http://backend:8000
     ports:
       - "3000:3000"  # Next.js port
     networks:
@@ -90,6 +93,39 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: graphrag-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - graphrag_network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: graphrag-worker
+    env_file:
+      - ./.env
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
+      - NEO4J_USERNAME=${NEO4J_USERNAME}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - ./data:/app/data
+    networks:
+      - graphrag_network
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+    command: ["python", "scripts/run_redis_job_worker.py"]
 
 networks:
   graphrag_network:

@@ -1,0 +1,10 @@
+{
+  "title": "Amber - Chat with the Docs",
+  "description": "Intelligent document Q&A powered by graph-based RAG",
+  "heading": "Amber",
+  "tagline": "Document Intelligence",
+  "setup_title": "Amber v2.0 Setup",
+  "use_image": true,
+  "image_path": "/amber.svg",
+  "short_name": "Amber"
+}

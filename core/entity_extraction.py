@@ -3,17 +3,45 @@ Entity and relationship extraction using LLM for GraphRAG pipeline.
 """
 
 import asyncio
+import json
 import logging
 import random
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.settings import settings
 from core.llm import llm_manager
 
 logger = logging.getLogger(__name__)
+
+
+def load_classification_config() -> Dict[str, Any]:
+    """
+    Load classification configuration from JSON file with fallback to defaults.
+    
+    Returns:
+        Dictionary containing entity_types, entity_type_overrides, 
+        relationship_suggestions, and low_value_patterns.
+    """
+    config_path = Path(__file__).parent.parent / "config" / "classification_config.json"
+    
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            logger.info(f"Loaded classification config from {config_path}")
+            return config
+    except FileNotFoundError:
+        logger.warning(f"Classification config not found at {config_path}, using hardcoded defaults")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in classification config: {e}, using hardcoded defaults")
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to load classification config: {e}, using hardcoded defaults")
+        return {}
 
 
 def retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0):
@@ -335,7 +363,34 @@ class EntityExtractor:
 
     def __init__(self, entity_types: Optional[List[str]] = None):
         """Initialize entity extractor."""
-        self.entity_types = entity_types or self.DEFAULT_ENTITY_TYPES
+        # Load configuration from JSON file with fallback to hardcoded defaults
+        config = load_classification_config()
+        
+        # Use provided entity_types, then config, then hardcoded defaults
+        self.entity_types = entity_types or config.get("entity_types", self.DEFAULT_ENTITY_TYPES)
+        
+        # Update class-level mappings if config is available
+        if config:
+            # Merge config overrides with hardcoded ones (config takes precedence)
+            if "entity_type_overrides" in config:
+                self.ENTITY_TYPE_MAPPING = {
+                    **{
+                        "SECTION": "CONCEPT",
+                        "SERVICE": "PRODUCT",
+                        "CONTACT": "TECHNOLOGY",
+                    },
+                    **config["entity_type_overrides"]
+                }
+            
+            # Update relationship suggestions if provided
+            if "relationship_suggestions" in config:
+                self.RELATION_TYPE_SUGGESTIONS = config["relationship_suggestions"]
+            
+            # Update low value patterns if provided
+            if "low_value_patterns" in config:
+                self.LOW_VALUE_PATTERNS = config["low_value_patterns"]
+        
+        logger.debug(f"EntityExtractor initialized with {len(self.entity_types)} entity types")
 
     def _normalize_entity_name(self, name: str) -> str:
         """Normalize entity name to reduce duplicates."""

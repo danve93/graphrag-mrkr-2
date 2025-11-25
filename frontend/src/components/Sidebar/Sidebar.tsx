@@ -5,15 +5,15 @@ import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } fro
 import {
   Bars3Icon,
   XMarkIcon,
-  ClockIcon,
+  ChatBubbleLeftIcon,
   CircleStackIcon,
-  ChartBarIcon,
+  PlusCircleIcon,
 } from '@heroicons/react/24/outline'
-import GraphView from '@/components/Graph/GraphView'
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import HistoryTab from './HistoryTab'
 import DatabaseTab from './DatabaseTab'
 import { useChatStore } from '@/store/chatStore'
+import branding from '../../../../branding.json'
 
 interface SidebarProps {
   open: boolean
@@ -22,6 +22,8 @@ interface SidebarProps {
   onWidthChange: (width: number) => void
   minWidth?: number
   maxWidth?: number
+  collapsed?: boolean
+  onCollapseToggle?: () => void
 }
 
 export default function Sidebar({
@@ -31,17 +33,21 @@ export default function Sidebar({
   onWidthChange,
   minWidth = 260,
   maxWidth = 480,
+  collapsed = false,
+  onCollapseToggle = () => {},
 }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<'history' | 'database' | 'graph'>('history')
+  const [activeTab, setActiveTab] = useState<'chat' | 'database'>('chat')
   const [isResizing, setIsResizing] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  
   const isConnected = useChatStore((state) => state.isConnected)
 
   const tabs = [
-    { id: 'history' as const, label: 'History', icon: ClockIcon },
+    { id: 'chat' as const, label: 'Chat', icon: ChatBubbleLeftIcon },
     { id: 'database' as const, label: 'Database', icon: CircleStackIcon },
-    { id: 'graph' as const, label: 'Graph', icon: ChartBarIcon },
   ]
+
+  const clearChat = useChatStore((state) => state.clearChat)
+  const setActiveView = useChatStore((state) => state.setActiveView)
 
   const resizeWithinBounds = useCallback(
     (nextWidth: number) => {
@@ -132,7 +138,7 @@ export default function Sidebar({
         <div className="flex flex-col h-full">
           {/* Collapse button (desktop) */}
           <button
-            onClick={() => setCollapsed((c) => !c)}
+            onClick={() => onCollapseToggle()}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             className="hidden lg:flex absolute top-4 right-4 z-50 items-center justify-center p-2 rounded bg-white dark:bg-secondary-700 border border-secondary-200 dark:border-secondary-600 hover:bg-secondary-50 dark:hover:bg-secondary-600"
           >
@@ -148,8 +154,17 @@ export default function Sidebar({
             <>
               {/* Logo/Brand */}
               <div className="p-6 border-b border-secondary-200 dark:border-secondary-700">
-                <h1 className="text-xl font-bold text-secondary-900 dark:text-secondary-50">🚀 GraphRAG</h1>
-                <p className="text-sm text-secondary-600 dark:text-secondary-400 mt-1">Document Intelligence</p>
+                <h1 className="text-xl font-bold text-secondary-900 dark:text-secondary-50 flex items-center">
+                  {branding.use_image && branding.image_path ? (
+                    <img
+                      src={branding.image_path}
+                      alt={branding.short_name || branding.heading}
+                      className="w-6 h-6 mr-2"
+                    />
+                  ) : null}
+                  <span>{branding.use_image ? (branding.short_name || branding.heading) : branding.heading}</span>
+                </h1>
+                <p className="text-sm text-secondary-600 dark:text-secondary-400 mt-1">{branding.tagline}</p>
               </div>
 
               {/* Tabs */}
@@ -172,14 +187,32 @@ export default function Sidebar({
                 ))}
               </div>
 
+              {/* New Chat button in sidebar, shown under tabs when Chat tab is active */}
+              {activeTab === 'chat' && (
+                <div className="px-6 py-3 border-b border-secondary-200 dark:border-secondary-700">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearChat()
+                      setActiveView('chat')
+                      setActiveTab('chat')
+                    }}
+                    className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-primary-700 bg-primary-100 hover:bg-primary-200 dark:bg-primary-900 dark:text-primary-300"
+                    aria-label="Start a new chat"
+                  >
+                    <PlusCircleIcon className="w-5 h-5" />
+                    New Chat
+                  </button>
+                </div>
+              )}
+
               {/* Tab Content */}
               <div className={`flex-1 overflow-y-auto p-6 transition-all duration-300 ${
                 !isConnected ? 'blur-sm pointer-events-none' : ''
               }`}>
                 <div key={activeTab} className="tab-content">
-                  {activeTab === 'history' && <HistoryTab />}
+                  {activeTab === 'chat' && <HistoryTab />}
                   {activeTab === 'database' && <DatabaseTab />}
-                  {activeTab === 'graph' && <GraphView />}
                 </div>
               </div>
             </>
@@ -189,12 +222,13 @@ export default function Sidebar({
         {/* Resize handle (hidden when collapsed) */}
         {!collapsed && (
           <div
-            className={`hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize ${
-              isResizing ? 'bg-primary-100 dark:bg-primary-900/60' : 'bg-transparent'
-            }`}
-            onMouseDown={onMouseDown}
-            onTouchStart={onTouchStart}
-          >
+              className={`hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize ${
+                isResizing ? 'bg-primary-100 dark:bg-primary-900/60' : 'bg-transparent'
+              }`}
+              style={{ zIndex: 60 }}
+              onMouseDown={onMouseDown}
+              onTouchStart={onTouchStart}
+            >
             <div className="h-16 w-1 rounded bg-secondary-300 dark:bg-secondary-600" />
           </div>
         )}

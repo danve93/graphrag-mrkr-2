@@ -58,3 +58,6 @@ mypy>=1.5.0
 
 # Optional: Jupyter for development
 jupyter>=1.0.0
+
+# Redis for job queue (optional)
+redis>=4.6.0

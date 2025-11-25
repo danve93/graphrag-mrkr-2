@@ -1,4 +1,6 @@
-'use client'
+/* Replaced duplicate/corrupted content with a single clean implementation below */
+
+ 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
@@ -26,6 +28,9 @@ export default function DocumentGraph({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [width, setWidth] = useState(800)
+  const [computedHeight, setComputedHeight] = useState(height)
+  const [expanded, setExpanded] = useState(false)
+  const [modalLoading, setModalLoading] = useState(false)
 
   useEffect(() => {
     const loadGraph = async () => {
@@ -51,7 +56,7 @@ export default function DocumentGraph({
     const handleResize = () => {
       const container = document.getElementById(`graph-${documentId}`)
       if (container) {
-        setWidth(container.offsetWidth - 2)
+        setWidth(Math.max(300, container.offsetWidth - 2))
       }
     }
 
@@ -60,14 +65,46 @@ export default function DocumentGraph({
     return () => window.removeEventListener('resize', handleResize)
   }, [documentId])
 
+  useEffect(() => {
+    // clamp embedded graph height to available viewport space so it doesn't push the page
+    const clampToViewport = () => {
+      const container = document.getElementById(`graph-${documentId}`)
+      const top = container ? container.getBoundingClientRect().top : 0
+      const viewportAvailable = typeof window !== 'undefined' ? Math.floor(window.innerHeight - top - 32) : height
+      const maxByRatio = typeof window !== 'undefined' ? Math.floor(window.innerHeight * 0.55) : height
+      const max = Math.min(maxByRatio, viewportAvailable)
+      setComputedHeight(Math.min(height, Math.max(200, Math.floor(max))))
+    }
+
+    clampToViewport()
+    window.addEventListener('resize', clampToViewport)
+    return () => window.removeEventListener('resize', clampToViewport)
+  }, [height, documentId])
+
+  // ESC handling and modal loading spinner for fullscreen viewer
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', onKey)
+    setModalLoading(true)
+    const tm = window.setTimeout(() => setModalLoading(false), 350)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      clearTimeout(tm)
+      setModalLoading(false)
+    }
+  }, [expanded])
+
   const getCommunityColor = (communityId?: number | null) => {
     if (communityId === undefined || communityId === null) return '#9ca3af'
-    return COMMUNITY_COLORS[communityId % COMMUNITY_COLORS.length]
+    return COMMUNITY_COLORS[Math.abs(communityId) % COMMUNITY_COLORS.length]
   }
 
   const graphPayload = useMemo(() => {
     if (!graphData) return { nodes: [], links: [] }
-    
+
     return {
       nodes: graphData.nodes.map((node) => ({
         id: node.id,
@@ -152,33 +189,79 @@ export default function DocumentGraph({
   }
 
   return (
-    <div id={`graph-${documentId}`} className="w-full border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
-      <div style={{ height: `${height}px`, width: `${width}px` }}>
-        <ForceGraph3D
-          graphData={graphPayload}
-          nodeLabel={(node: any) => `${node.name} (${node.type})`}
-          nodeColor={(node: any) => node.color}
-          nodeVal={(node: any) => node.val}
-          linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
-          linkColor={() => '#cbd5e1'}
-          linkOpacity={0.5}
-          backgroundColor="#f8fafc"
-          height={height}
-          width={width}
-          {...({} as any)}
-        />
+    <>
+      <div id={`graph-${documentId}`} className="relative w-full border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div style={{ height: `${computedHeight}px`, width: '100%' }}>
+          <ForceGraph3D
+            graphData={graphPayload}
+            nodeLabel={(node: any) => `${node.name} (${node.type})`}
+            nodeColor={(node: any) => node.color}
+            nodeVal={(node: any) => node.val}
+            linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
+            linkColor={() => '#cbd5e1'}
+            linkOpacity={0.5}
+            backgroundColor="#f8fafc"
+            height={computedHeight}
+            width={width}
+            {...({} as any)}
+          />
+        </div>
+        <div className="absolute top-2 right-2">
+          <button
+            onClick={() => setExpanded(true)}
+            className="rounded bg-white/90 px-2 py-1 text-xs font-medium shadow dark:bg-secondary-800"
+          >
+            Expand
+          </button>
+        </div>
+        <div className="text-xs text-slate-500 dark:text-slate-400 p-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+          <span>{graphData.nodes.length} entities</span>
+          {' · '}
+          <span>{graphData.edges.length} relationships</span>
+          {graphData.communities && graphData.communities.length > 0 && (
+            <>
+              {' · '}
+              <span>{graphData.communities.length} communities</span>
+            </>
+          )}
+        </div>
       </div>
-      <div className="text-xs text-slate-500 dark:text-slate-400 p-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-        <span>{graphData.nodes.length} entities</span>
-        {' · '}
-        <span>{graphData.edges.length} relationships</span>
-        {graphData.communities && graphData.communities.length > 0 && (
-          <>
-            {' · '}
-            <span>{graphData.communities.length} communities</span>
-          </>
-        )}
-      </div>
-    </div>
+
+      {expanded && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          {/* overlay-level close button so it stays above the canvas */}
+          <button
+            onClick={() => setExpanded(false)}
+            aria-label="Close fullscreen graph"
+            className="absolute top-4 right-4 z-60 pointer-events-auto rounded bg-white/90 px-3 py-1 text-sm font-medium shadow dark:bg-secondary-800"
+          >
+            Close
+          </button>
+          <div className="relative w-[95%] h-[95%] rounded-lg bg-black/90 p-4">
+            <div className="w-full h-full relative">
+              {modalLoading && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40">
+                  <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-white" />
+                </div>
+              )}
+              <div className="absolute inset-0 z-10">
+                <ForceGraph3D
+                  width={Math.floor(window.innerWidth * 0.9)}
+                  height={Math.floor(window.innerHeight * 0.9)}
+                  graphData={graphPayload}
+                  nodeLabel={(node: any) => `${node.name} (${node.type})`}
+                  nodeColor={(node: any) => node.color}
+                  nodeVal={(node: any) => node.val}
+                  linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
+                  linkColor={() => '#cbd5e1'}
+                  linkOpacity={0.5}
+                  backgroundColor="#f8fafc"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }

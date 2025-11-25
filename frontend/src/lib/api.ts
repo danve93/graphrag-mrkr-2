@@ -2,7 +2,10 @@ import type { DocumentDetails, DocumentChunk, DocumentTextPayload } from '@/type
 import type { ProcessingProgressResponse } from '@/types/upload'
 import type { GraphResponse } from '@/types/graph'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Use an empty default so client-side code issues relative requests
+// (e.g. `/api/...`) which are proxied by Next.js. If you need to override
+// (e.g. remote API), set `NEXT_PUBLIC_API_URL` at build/runtime.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 export const api = {
   // Chat endpoints

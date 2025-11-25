@@ -1,10 +1,22 @@
 #!/bin/bash
 
-# GraphRAG v2.0 Quick Start Script
+# Graph quick start script (branding pulled from `branding.json`)
 
 set -e
 
-echo "🚀 GraphRAG v2.0 Setup"
+# Read branding title from branding.json (falls back to `title` if `setup_title` missing)
+BRANDING_TITLE=$(python3 - <<'PY'
+import json
+import sys
+try:
+    b = json.load(open('branding.json'))
+    print(b.get('setup_title') or b.get('title'))
+except Exception:
+    print('GraphRAG v2.0 Setup')
+PY
+)
+
+echo "$BRANDING_TITLE"
 echo "====================="
 echo ""
 

@@ -375,3 +375,36 @@ class GraphResponse(BaseModel):
     edges: List[GraphEdge]
     communities: List[GraphCommunity]
     node_types: List[str]
+
+
+class ReindexResult(BaseModel):
+    """Response model for the reindex operation."""
+
+    status: Literal["success", "partial", "failed"] = Field(
+        ..., description="Outcome status of the reindex operation"
+    )
+    message: str = Field(..., description="Human readable summary of the operation")
+    documents_processed: int = Field(0, description="Number of documents processed during extraction")
+    entities_cleared: int = Field(0, description="Number of entities removed during the clearing step")
+    extraction_result: Optional[Dict[str, Any]] = Field(
+        None, description="Optional raw extraction result payload"
+    )
+    clustering_result: Optional[Dict[str, Any]] = Field(
+        None, description="Optional clustering result payload"
+    )
+
+
+class ReindexJobStatus(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    created_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    result: Optional[ReindexResult] = None
+
+
+class ReindexJobResponse(BaseModel):
+    job_id: str
+    status_url: str
+    status: str

@@ -1,0 +1,81 @@
+{
+  "parameters": [
+    {
+      "key": "chunk_weight",
+      "label": "Chunk Weight",
+      "value": 0.6,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.1,
+      "type": "slider",
+      "category": "Hybrid Retrieval Weights",
+      "tooltip": "Weight for chunk-based results in hybrid retrieval. Higher values prioritize direct document matches over entity-filtered results."
+    },
+    {
+      "key": "entity_weight",
+      "label": "Entity Weight",
+      "value": 0.4,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.1,
+      "type": "slider",
+      "category": "Hybrid Retrieval Weights",
+      "tooltip": "Weight for entity-filtered results. Higher values prioritize results that match extracted entities from your query."
+    },
+    {
+      "key": "path_weight",
+      "label": "Path Weight",
+      "value": 0.6,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.1,
+      "type": "slider",
+      "category": "Hybrid Retrieval Weights",
+      "tooltip": "Weight for path-based results in multi-hop reasoning. Higher values prioritize results found through entity relationship traversal."
+    },
+    {
+      "key": "max_hops",
+      "label": "Max Hops",
+      "value": 2,
+      "min": 1.0,
+      "max": 5.0,
+      "step": 1.0,
+      "type": "slider",
+      "category": "Multi-Hop Reasoning",
+      "tooltip": "Maximum number of relationship hops to traverse when following entity connections. Higher values explore deeper relationships but increase query time."
+    },
+    {
+      "key": "beam_size",
+      "label": "Beam Size",
+      "value": 8,
+      "min": 1.0,
+      "max": 20.0,
+      "step": 1.0,
+      "type": "slider",
+      "category": "Multi-Hop Reasoning",
+      "tooltip": "Number of top paths to maintain during multi-hop search. Higher values explore more alternative paths but increase computation."
+    },
+    {
+      "key": "graph_expansion_depth",
+      "label": "Graph Expansion Depth",
+      "value": 2,
+      "min": 0.0,
+      "max": 5.0,
+      "step": 1.0,
+      "type": "slider",
+      "category": "Graph Expansion",
+      "tooltip": "Maximum depth for expanding the knowledge graph around retrieved chunks. 0 disables expansion, higher values find more related context."
+    },
+    {
+      "key": "restrict_to_context",
+      "label": "Restrict to Context Documents",
+      "value": true,
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "toggle",
+      "category": "Context Filtering",
+      "tooltip": "When enabled, limits retrieval to documents explicitly provided in the chat context. Disable to search across all ingested documents."
+    }
+  ]
+}

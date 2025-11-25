@@ -15,4 +15,27 @@
 /scripts/__pycache__
 /frontend/.next/cache
 /rag/__pycache__
-/frontend/.next/cache
+ /frontend/.next/cache
+
+# Common caches, build artifacts, and OS/generated binary files
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+node_modules/
+frontend/node_modules/
+.next/
+build/
+dist/
+neo4j/
+*.log
+*.so
+
+# Virtual envs and env files
+.venv/
+venv/
+env/
+.env
+
+/frontend/.next

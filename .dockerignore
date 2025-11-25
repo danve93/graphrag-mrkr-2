@@ -88,5 +88,9 @@ logs/
 tmp/
 temp/
 
+# Frontend build artifacts and dependencies
+frontend/.next
+frontend/node_modules
+
 # Neo4j data (if local)
 neo4j/

@@ -81,17 +81,65 @@ class GraphDB:
 
     def connect(self) -> None:
         """Establish connection to Neo4j database."""
-        try:
-            self.driver = GraphDatabase.driver(
-                settings.neo4j_uri,
-                auth=(settings.neo4j_username, settings.neo4j_password),
-            )
-            # Test the connection
-            self.driver.verify_connectivity()
-            logger.info("Successfully connected to Neo4j database")
-        except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
-            raise
+        # Attempt connecting with retries (exponential backoff) because
+        # Neo4j service may take longer to become available when starting
+        # via Docker Compose. This reduces spurious failures at startup.
+        from urllib.parse import urlparse
+
+        uri = settings.neo4j_uri
+        username = settings.neo4j_username
+        password = settings.neo4j_password
+
+        max_attempts = 8
+        delay = 1.0
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.debug("Attempting to connect to Neo4j (attempt %s) at %s", attempt, uri)
+                self.driver = GraphDatabase.driver(uri, auth=(username, password))
+                # Test the connection
+                self.driver.verify_connectivity()
+                logger.info("Successfully connected to Neo4j database at %s", uri)
+                return
+            except Exception as e:
+                last_exc = e
+                logger.warning(
+                    "Neo4j connection attempt %s failed: %s", attempt, e
+                )
+                # If configured host is the Docker service name 'neo4j', try a
+                # fallback to 'localhost' once after the first failure since
+                # some environments prefer localhost bindings.
+                try:
+                    parsed = urlparse(uri)
+                    host = parsed.hostname
+                    if attempt == 1 and host and host.lower() == "neo4j":
+                        fallback = uri.replace(host, "localhost")
+                        logger.info(
+                            "Attempting fallback to localhost Neo4j URI: %s",
+                            fallback,
+                        )
+                        uri = fallback
+                        # try next iteration with fallback
+                        attempt += 0
+                        time_to_sleep = delay
+                        delay = min(delay * 2, 8.0)
+                        import time
+
+                        time.sleep(time_to_sleep)
+                        continue
+                except Exception:
+                    pass
+
+                # Exponential backoff before retrying
+                import time
+
+                time.sleep(delay)
+                delay = min(delay * 2, 8.0)
+
+        # If we reach here, all attempts failed
+        logger.error("Failed to connect to Neo4j after %s attempts: %s", max_attempts, last_exc)
+        raise last_exc
 
     def close(self) -> None:
         """Close database connection."""

@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InformationCircleIcon } from '@heroicons/react/24/outline'
 
 import { api } from '@/lib/api'
@@ -45,6 +45,10 @@ export default function GraphView() {
   const [error, setError] = useState<string | null>(null)
   const [hoverNode, setHoverNode] = useState<GraphNode | null>(null)
   const [hoverEdge, setHoverEdge] = useState<GraphEdge | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [dimensions, setDimensions] = useState({ width: 400, height: 400 })
+  const [expanded, setExpanded] = useState(false)
+  const [modalLoading, setModalLoading] = useState(false)
 
   const fetchGraph = useCallback(async () => {
     setIsLoading(true)
@@ -68,6 +72,41 @@ export default function GraphView() {
   useEffect(() => {
     void fetchGraph()
   }, [fetchGraph])
+
+  // Resize observer to keep the 3D canvas within parent bounds and avoid horizontal scroll
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect()
+      // Prevent the graph from expanding past the bottom of the viewport.
+      const availableHeight = typeof window !== 'undefined' ? Math.floor(window.innerHeight - rect.top - 32) : rect.height
+      const height = Math.max(200, Math.min(Math.floor(rect.height), availableHeight))
+      setDimensions({ width: Math.max(200, Math.floor(rect.width)), height })
+    })
+    ro.observe(el)
+    // set initial
+    const r = el.getBoundingClientRect()
+    const available = typeof window !== 'undefined' ? Math.floor(window.innerHeight - r.top - 32) : r.height
+    setDimensions({ width: Math.max(200, Math.floor(r.width)), height: Math.max(200, Math.min(Math.floor(r.height), available)) })
+    return () => ro.disconnect()
+  }, [containerRef])
+
+  // Close modal on Escape and show a brief modal loading spinner
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', onKey)
+    setModalLoading(true)
+    const tm = window.setTimeout(() => setModalLoading(false), 350)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      clearTimeout(tm)
+      setModalLoading(false)
+    }
+  }, [expanded])
 
   const graphPayload = useMemo(
     () => ({
@@ -193,7 +232,7 @@ export default function GraphView() {
   }, [hoverEdge, hoverNode])
 
   return (
-    <div className="flex h-full flex-col gap-4 p-6">
+    <div className="flex-1 h-full flex flex-col gap-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-secondary-900 dark:text-secondary-50">Graph Explorer</h2>
@@ -254,7 +293,11 @@ export default function GraphView() {
         </div>
       </div>
 
-      <div className="relative min-h-[640px] overflow-hidden rounded-xl border border-secondary-200 bg-secondary-900 shadow-inner dark:border-secondary-700">
+      <div
+        ref={containerRef}
+        className="relative flex-1 min-h-0 overflow-hidden rounded-xl border border-secondary-200 bg-secondary-900 shadow-inner dark:border-secondary-700"
+        style={{ maxWidth: '100%', boxSizing: 'border-box' }}
+      >
         {isLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70 text-secondary-50">
             Loading graph…
@@ -268,6 +311,8 @@ export default function GraphView() {
           </div>
         )}
         <ForceGraph3D
+          width={dimensions.width}
+          height={dimensions.height}
           graphData={graphPayload as any}
           // Use property accessors where possible to avoid TS generic mismatch
           nodeColor={(node: any) => getCommunityColor(node.community_id || undefined)}
@@ -288,9 +333,55 @@ export default function GraphView() {
         />
 
         {hoveredPanel && (
-          <div className="pointer-events-none absolute right-4 top-4 z-20 w-80">{hoveredPanel}</div>
+          <div className="pointer-events-none absolute right-4 top-12 z-20 w-80">{hoveredPanel}</div>
         )}
+
+        {/* Expand button */}
+        <button
+          aria-label="Open graph fullscreen"
+          onClick={() => setExpanded(true)}
+          className="absolute top-4 right-4 z-30 rounded bg-white/90 p-2 text-xs font-semibold shadow hover:bg-white dark:bg-secondary-800 dark:text-secondary-100"
+        >
+          Expand
+        </button>
       </div>
+
+      {/* Fullscreen modal */}
+      {expanded && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          {/* Close button placed at overlay level so it is always above the ForceGraph canvas */}
+          <button
+            onClick={() => setExpanded(false)}
+            aria-label="Close fullscreen graph"
+            className="absolute top-4 right-4 z-60 pointer-events-auto rounded bg-white/90 px-3 py-1 text-sm font-medium shadow dark:bg-secondary-800"
+          >
+            Close
+          </button>
+          <div className="relative w-[95%] h-[95%] rounded-lg bg-black/90 p-4">
+            <div className="w-full h-full relative">
+              {modalLoading && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40">
+                  <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-white" />
+                </div>
+              )}
+              <div className="absolute inset-0 z-10">
+                <ForceGraph3D
+                  width={Math.floor(window.innerWidth * 0.9)}
+                  height={Math.floor(window.innerHeight * 0.9)}
+                  graphData={graphPayload as any}
+                  nodeColor={(node: any) => getCommunityColor(node.community_id || undefined)}
+                  linkColor={() => '#94a3b8'}
+                  nodeVal={(node: any) => node.val ?? Math.max(node.degree ?? 1, 1)}
+                  linkWidth={(link: any) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
+                  nodeLabel={(node: any) => nodeLabel(node as GraphNode)}
+                  linkLabel={(link: any) => linkLabel(link as GraphEdge)}
+                  backgroundColor="#0b1120"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
