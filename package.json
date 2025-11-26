@@ -1,0 +1,14 @@
+{
+  "name": "graphrag-dev",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bash ./scripts/dev.sh all",
+    "dev:both": "bash ./scripts/dev.sh all",
+    "dev:frontend": "bash ./scripts/dev.sh frontend",
+    "dev:backend": "bash ./scripts/dev.sh backend",
+    "dev:bg": "bash ./scripts/dev.sh bg",
+    "dev:stop": "bash ./scripts/dev.sh stop",
+    "dev:restart": "bash ./scripts/dev.sh restart"
+  }
+}
