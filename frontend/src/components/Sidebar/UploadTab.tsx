@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import { showToast } from '@/components/Toast/ToastContainer'
+import Loader from '@/components/Utils/Loader'
+import Tooltip from '@/components/Utils/Tooltip'
 import {
   CloudArrowUpIcon,
   XCircleIcon,
@@ -12,10 +14,12 @@ export default function UploadTab() {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   const handleFiles = async (files: FileList | File[]) => {
     setUploadError(null)
     setUploadSuccess(null)
+    setUploading(true)
 
     const fileArray = Array.from(files)
 
@@ -46,6 +50,7 @@ export default function UploadTab() {
         showToast('error', `Failed to upload ${file.name}`, errorMsg)
       }
     }
+    setUploading(false)
   }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,11 +85,8 @@ export default function UploadTab() {
     <div className="space-y-4">
       {/* Drop Zone */}
       <div
-        className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-          isDragging
-            ? 'border-primary-500 bg-primary-50'
-            : 'border-secondary-300 hover:border-primary-500'
-        }`}
+        className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors accent-hover`}
+        style={isDragging ? { borderColor: 'var(--primary-500)', backgroundColor: 'var(--neon-glow)' } : undefined}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -101,12 +103,22 @@ export default function UploadTab() {
           htmlFor="file-upload"
           className="cursor-pointer flex flex-col items-center"
         >
-          <CloudArrowUpIcon className="w-12 h-12 text-secondary-400 mb-3" />
-          <span className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
-            {isDragging
-              ? 'Drop files here'
-              : 'Click to upload or drag and drop'}
-          </span>
+          <Tooltip content="Upload documents for processing">
+            <div className="flex flex-col items-center">
+              {uploading ? (
+                <Loader size={28} label="Uploading..." />
+              ) : (
+                <>
+                  <CloudArrowUpIcon className="w-12 h-12 text-secondary-400 mb-3" />
+                  <span className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
+                    {isDragging
+                      ? 'Drop files here'
+                      : 'Click to upload or drag and drop'}
+                  </span>
+                </>
+              )}
+            </div>
+          </Tooltip>
           <span className="text-xs text-secondary-500 dark:text-secondary-400 mt-1">
             PDF, DOCX, TXT, MD, PPT, XLS, Images
           </span>

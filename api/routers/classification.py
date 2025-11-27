@@ -125,9 +125,25 @@ async def trigger_reindex(confirmation: Dict[str, bool], background_tasks: Backg
             logger.warning("Background reindex started")
 
             # Step 1: Get all document IDs
-            with graph_db.driver.session() as session:  # type: ignore
-                result = session.run("MATCH (d:Document) RETURN d.id as doc_id, d.filename as filename")
-                documents = [{"doc_id": record["doc_id"], "filename": record["filename"]} for record in result]
+            try:
+                with graph_db.driver.session() as session:  # type: ignore
+                    result = session.run("MATCH (d:Document) RETURN d.id as doc_id, d.filename as filename")
+                    documents = [{"doc_id": record["doc_id"], "filename": record["filename"]} for record in result]
+            except Exception as exc:
+                # If Neo4j is unavailable, mark job failed and exit early
+                try:
+                    # avoid circular import if ServiceUnavailable not available here
+                    from neo4j.exceptions import ServiceUnavailable
+                    if isinstance(exc, ServiceUnavailable):
+                        logger.error("Graph DB unavailable during reindex start: %s", exc)
+                        job_manager.set_job_failed(job_id, "Graph database unavailable")
+                        return
+                except Exception:
+                    pass
+                # For other errors, surface and fail the job
+                logger.error("Failed to list documents for reindex: %s", exc)
+                job_manager.set_job_failed(job_id, str(exc))
+                return
 
             if not documents:
                 res = {

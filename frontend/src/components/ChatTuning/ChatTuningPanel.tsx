@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import Tooltip from '@/components/Utils/Tooltip'
+import Loader from '@/components/Utils/Loader'
 
 interface ChatParameter {
   key: string
@@ -97,8 +99,7 @@ export default function ChatTuningPanel() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
-          <p className="text-secondary-600 dark:text-secondary-400">Loading configuration...</p>
+          <Loader size={48} label="Loading configuration..." />
         </div>
       </div>
     )
@@ -112,7 +113,7 @@ export default function ChatTuningPanel() {
           <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
           <button
             onClick={loadConfig}
-            className="px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700"
+            className="small-button small-button-primary"
           >
             Retry
           </button>
@@ -161,7 +162,7 @@ export default function ChatTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
+      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-8">
         {Object.entries(groupedParams).map(([category, params]) => (
           <div key={category} className="space-y-4">
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 border-b border-secondary-200 dark:border-secondary-700 pb-2">
@@ -176,7 +177,11 @@ export default function ChatTuningPanel() {
                       <label className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
                         {param.label}
                       </label>
-                      <Tooltip content={param.tooltip} />
+                      <Tooltip content={param.tooltip}>
+                        <button className="text-secondary-400 hover:text-secondary-600 dark:hover:text-secondary-300" type="button">
+                          <InformationCircleIcon className="w-4 h-4" />
+                        </button>
+                      </Tooltip>
                     </div>
                     {param.type === 'slider' && (
                       <span className="text-sm font-mono text-secondary-600 dark:text-secondary-400">
@@ -215,9 +220,7 @@ export default function ChatTuningPanel() {
                     <button
                       onClick={() => handleValueChange(param.key, !param.value)}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        param.value
-                          ? 'bg-primary-600'
-                          : 'bg-secondary-300 dark:bg-secondary-600'
+                        param.value ? 'toggle-on' : 'toggle-off'
                       }`}
                     >
                       <span
@@ -239,14 +242,14 @@ export default function ChatTuningPanel() {
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+          className="flex-1 button-primary"
         >
-          {isSaving ? 'Saving...' : 'Save Configuration'}
+          {isSaving ? <Loader size={14} label="Saving..." /> : 'Save Configuration'}
         </button>
         <button
           onClick={handleReset}
           disabled={isSaving}
-          className="px-4 py-2 bg-secondary-200 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-300 rounded-lg hover:bg-secondary-300 dark:hover:bg-secondary-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+          className="small-button small-button-secondary"
         >
           Reset
         </button>
@@ -254,28 +257,4 @@ export default function ChatTuningPanel() {
     </div>
   )
 }
-
-function Tooltip({ content }: { content: string }) {
-  const [isVisible, setIsVisible] = useState(false)
-
-  return (
-    <div className="relative inline-block">
-      <button
-        onMouseEnter={() => setIsVisible(true)}
-        onMouseLeave={() => setIsVisible(false)}
-        onFocus={() => setIsVisible(true)}
-        onBlur={() => setIsVisible(false)}
-        className="text-secondary-400 hover:text-secondary-600 dark:hover:text-secondary-300"
-        type="button"
-      >
-        <InformationCircleIcon className="w-4 h-4" />
-      </button>
-      {isVisible && (
-        <div className="absolute left-6 top-0 z-50 w-64 p-3 text-xs bg-secondary-800 dark:bg-secondary-700 text-white rounded-lg shadow-lg">
-          {content}
-          <div className="absolute left-0 top-2 -translate-x-1 w-2 h-2 bg-secondary-800 dark:bg-secondary-700 rotate-45"></div>
-        </div>
-      )}
-    </div>
-  )
-}
+ 

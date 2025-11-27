@@ -643,12 +643,14 @@ class DocumentRetriever:
             multi_hop_recommended = query_analysis.get("multi_hop_recommended", True)
             query_type = query_analysis.get("query_type", "factual")
 
+            # Only apply restriction if both enabled AND there are actual documents to restrict to
+            # Empty list means "no context documents selected" -> should search all docs
             allowed_set = (
                 set(allowed_document_ids)
-                if (allowed_document_ids and restrict_to_context)
+                if (allowed_document_ids and len(allowed_document_ids) > 0 and restrict_to_context)
                 else None
             )
-            if not restrict_to_context:
+            if not restrict_to_context or not allowed_document_ids:
                 allowed_document_ids = None
 
             # Override multi-hop decision based on query analysis

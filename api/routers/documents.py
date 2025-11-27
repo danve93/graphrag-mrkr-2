@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from neo4j.exceptions import ServiceUnavailable
 
 from api.models import DocumentMetadataResponse, UpdateHashtagsRequest
 from core.document_summarizer import document_summarizer
@@ -26,6 +27,8 @@ async def get_document_metadata(document_id: str) -> DocumentMetadataResponse:
     except ValueError:
         raise HTTPException(status_code=404, detail="Document not found") from None
     except Exception as exc:  # pragma: no cover - defensive logging
+        if isinstance(exc, ServiceUnavailable):
+            raise
         logger.error("Failed to load document %s: %s", document_id, exc)
         raise HTTPException(status_code=500, detail="Failed to retrieve document") from exc
 
@@ -64,6 +67,8 @@ async def generate_document_summary(document_id: str):
     except HTTPException:
         raise
     except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
         logger.error("Failed to generate summary for %s: %s", document_id, exc)
         raise HTTPException(
             status_code=500,
@@ -112,6 +117,8 @@ async def get_document_chunk_similarities(document_id: str):
     except HTTPException:
         raise
     except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
         logger.error("Failed to get chunk similarities for %s: %s", document_id, exc)
         raise HTTPException(
             status_code=500,
@@ -137,6 +144,8 @@ async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequ
     except HTTPException:
         raise
     except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
         logger.error("Failed to update hashtags for %s: %s", document_id, exc)
         raise HTTPException(status_code=500, detail="Failed to update hashtags") from exc
 
@@ -233,6 +242,8 @@ async def get_document_preview(
         except ValueError:
             raise HTTPException(status_code=404, detail="Chunk not found")
         except Exception as exc:
+            if isinstance(exc, ServiceUnavailable):
+                raise
             logger.exception("Failed to get chunk preview for %s", document_id)
             raise HTTPException(status_code=500, detail="Failed to retrieve chunk preview") from exc
 
@@ -242,6 +253,8 @@ async def get_document_preview(
     except ValueError:
         raise HTTPException(status_code=404, detail="Document not found") from None
     except Exception as exc:  # pragma: no cover - defensive logging
+        if isinstance(exc, ServiceUnavailable):
+            raise
         logger.error("Failed to load preview info for %s: %s", document_id, exc)
         raise HTTPException(status_code=500, detail="Failed to prepare preview") from exc
 

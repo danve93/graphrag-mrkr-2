@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from neo4j import Driver, GraphDatabase
+from neo4j.exceptions import ServiceUnavailable
+from contextlib import contextmanager
 
 from config.settings import settings
 from core.embeddings import embedding_manager
@@ -104,32 +106,7 @@ class GraphDB:
                 return
             except Exception as e:
                 last_exc = e
-                logger.warning(
-                    "Neo4j connection attempt %s failed: %s", attempt, e
-                )
-                # If configured host is the Docker service name 'neo4j', try a
-                # fallback to 'localhost' once after the first failure since
-                # some environments prefer localhost bindings.
-                try:
-                    parsed = urlparse(uri)
-                    host = parsed.hostname
-                    if attempt == 1 and host and host.lower() == "neo4j":
-                        fallback = uri.replace(host, "localhost")
-                        logger.info(
-                            "Attempting fallback to localhost Neo4j URI: %s",
-                            fallback,
-                        )
-                        uri = fallback
-                        # try next iteration with fallback
-                        attempt += 0
-                        time_to_sleep = delay
-                        delay = min(delay * 2, 8.0)
-                        import time
-
-                        time.sleep(time_to_sleep)
-                        continue
-                except Exception:
-                    pass
+                logger.warning("Neo4j connection attempt %s failed: %s", attempt, e)
 
                 # Exponential backoff before retrying
                 import time
@@ -140,6 +117,82 @@ class GraphDB:
         # If we reach here, all attempts failed
         logger.error("Failed to connect to Neo4j after %s attempts: %s", max_attempts, last_exc)
         raise last_exc
+
+    def ensure_connected(self) -> None:
+        """Ensure there is an active Neo4j connection, connecting if necessary.
+
+        This helper is safe to call from request handlers and will raise the
+        underlying exception if a connection cannot be established so the
+        caller can handle it and return a proper HTTP error rather than
+        allowing an implicit fallback to another host.
+        """
+        if self.driver is None:
+            try:
+                self.connect()
+            except Exception as e:
+                logger.error("ensure_connected: unable to establish Neo4j connection: %s", e)
+                raise
+
+    @contextmanager
+    def session_scope(self, max_attempts: int = 3, initial_backoff: float = 0.5):
+        """Context manager to provide a session with transient reconnect retries.
+
+        Usage:
+            with graph_db.session_scope() as session:
+                session.run(...)
+
+        This will attempt to ensure a connection, create a session, and on
+        transient failures (ServiceUnavailable) will retry establishing a new
+        connection up to `max_attempts` times with exponential backoff.
+        """
+        attempts = 0
+        backoff = initial_backoff
+        while True:
+            attempts += 1
+            try:
+                # Ensure the driver is available (may raise)
+                self.ensure_connected()
+
+                session = self.driver.session()  # type: ignore
+                try:
+                    yield session
+                    return
+                finally:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+
+            except ServiceUnavailable as e:
+                logger.warning(
+                    "session_scope: ServiceUnavailable on attempt %s/%s: %s",
+                    attempts,
+                    max_attempts,
+                    e,
+                )
+                # Close driver and attempt fresh connect on next iteration
+                try:
+                    if self.driver:
+                        try:
+                            self.driver.close()
+                        except Exception:
+                            pass
+                        self.driver = None
+                except Exception:
+                    pass
+
+                if attempts >= max_attempts:
+                    logger.exception("session_scope: exceeded max attempts (%s)", max_attempts)
+                    raise
+
+                import time
+
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 8.0)
+                continue
+            except Exception:
+                # Non-transient exception - re-raise
+                raise
 
     def close(self) -> None:
         """Close database connection."""
@@ -636,7 +689,7 @@ class GraphDB:
             result = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
-                RETURN c.id as chunk_id, c.content as content
+                RETURN c.id as chunk_id, c.content as content, c.embedding as embedding
                 ORDER BY c.chunk_index ASC
                 """,
                 doc_id=doc_id,
@@ -844,7 +897,18 @@ class GraphDB:
     def get_communities_for_level(self, level: int) -> List[Dict[str, Any]]:
         """Return community assignments and entity metadata for a given level."""
 
-        with self.driver.session() as session:  # type: ignore
+        # Basic validation
+        if level is None:
+            raise ValueError("level must be provided")
+        try:
+            level_int = int(level)
+        except Exception:
+            raise ValueError("level must be an integer")
+
+        # Ensure we have an active connection before running queries
+        self.ensure_connected()
+
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (e:Entity)
@@ -859,12 +923,14 @@ class GraphDB:
                        }) AS entities
                 ORDER BY community_id
                 """,
-                level=level,
+                level=level_int,
             )
 
             communities = []
+            total_entities = 0
             for record in result:
                 entities: List[Dict[str, Any]] = record.get("entities", [])
+                total_entities += len(entities)
                 communities.append(
                     {
                         "community_id": record.get("community_id"),
@@ -872,7 +938,87 @@ class GraphDB:
                         "entity_count": len(entities),
                     }
                 )
+
+            logger.info(
+                "get_communities_for_level(level=%s) -> %s communities, %s entities",
+                level_int,
+                len(communities),
+                total_entities,
+            )
+
             return communities
+
+    def get_communities_aggregates_for_level(self, level: int) -> List[Dict[str, Any]]:
+        """Return communities with aggregated intra-community relationships and text_unit ids.
+
+        This method performs a single aggregated query to collect relationships that
+        exist between entities inside the same community (at the requested level) and
+        returns for each community: community_id, entities (list of basic metadata),
+        relationships (id, source, target, type, text_unit_ids) and counts.
+        """
+
+        if level is None:
+            raise ValueError("level must be provided")
+        try:
+            level_int = int(level)
+        except Exception:
+            raise ValueError("level must be an integer")
+
+        # Ensure DB connection is available
+        self.ensure_connected()
+
+        query = """
+        MATCH (e1:Entity)-[r:RELATED_TO]-(e2:Entity)
+        WHERE e1.community_id IS NOT NULL
+          AND e1.level = $level
+          AND e2.level = $level
+          AND e1.community_id = e2.community_id
+        WITH e1.community_id AS community_id,
+             collect(DISTINCT {id: e1.id, name: coalesce(e1.name, ''), type: coalesce(e1.type, ''), importance_score: coalesce(e1.importance_score, 0.0)}) AS members,
+             collect(DISTINCT r) AS rels
+        WITH community_id, members, rels
+        UNWIND rels AS rel
+        WITH community_id, members, collect(DISTINCT {
+            id: id(rel),
+            source: startNode(rel).id,
+            target: endNode(rel).id,
+            type: type(rel),
+            text_unit_ids: coalesce(rel.source_text_units, [])
+        }) AS relationships
+        RETURN community_id, members AS entities, relationships
+        ORDER BY community_id ASC
+        """
+
+        with self.session_scope() as session:
+            try:
+                result = session.run(query, level=level_int)
+                communities = []
+                total_rels = 0
+                for record in result:
+                    rels = record.get("relationships") or []
+                    total_rels += len(rels)
+                    entities = record.get("entities") or []
+                    communities.append(
+                        {
+                            "community_id": record.get("community_id"),
+                            "entities": entities,
+                            "entity_count": len(entities),
+                            "relationships": rels,
+                            "relationship_count": len(rels),
+                        }
+                    )
+
+                logger.info(
+                    "get_communities_aggregates_for_level(level=%s) -> %s communities, %s relationships",
+                    level_int,
+                    len(communities),
+                    total_rels,
+                )
+
+                return communities
+            except Exception as exc:
+                logger.exception("Failed to aggregate communities for level %s: %s", level_int, exc)
+                return []
 
     def get_text_units_for_entities(
         self, entity_ids: List[str], limit: int = 5
@@ -1056,7 +1202,10 @@ class GraphDB:
                 }}) AS edges
         """
 
-        with self.driver.session() as session:  # type: ignore
+        # Ensure DB connection is available before opening a session
+        self.ensure_connected()
+
+        with self.session_scope() as session:
             graph_result = session.run(query, **params).single()
             nodes = graph_result["nodes"] if graph_result else []
             edges = graph_result["edges"] if graph_result else []

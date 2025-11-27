@@ -3,13 +3,22 @@
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import Loader from '@/components/Utils/Loader'
 
 import { api } from '@/lib/api'
 import type { GraphCommunity, GraphEdge, GraphNode } from '@/types/graph'
 
-const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
-  ssr: false,
-})
+const ForceGraph3D = dynamic(
+  () => import('react-force-graph-3d').then((mod) => mod.default),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full w-full items-center justify-center">
+        <Loader size={28} label="Loading 3D graph..." />
+      </div>
+    ),
+  }
+)
 
 const COMMUNITY_COLORS = [
   '#22d3ee',
@@ -179,11 +188,12 @@ export default function GraphView() {
                     </span>
                     {doc.document_id && (
                       <a
-                        className="text-primary-600 hover:underline dark:text-primary-400"
-                        href={`/?doc=${doc.document_id}`}
-                      >
-                        Open
-                      </a>
+                          className="hover:underline"
+                          href={`/?doc=${doc.document_id}`}
+                          style={{ color: 'var(--primary-500)' }}
+                        >
+                          Open
+                        </a>
                     )}
                   </li>
                 ))}
@@ -213,11 +223,12 @@ export default function GraphView() {
                     </span>
                     {unit.document_id && (
                       <a
-                        className="text-primary-600 hover:underline dark:text-primary-400"
-                        href={`/?doc=${unit.document_id}`}
-                      >
-                        {unit.document_name || 'Open document'}
-                      </a>
+                          className="hover:underline"
+                          href={`/?doc=${unit.document_id}`}
+                          style={{ color: 'var(--primary-500)' }}
+                        >
+                          {unit.document_name || 'Open document'}
+                        </a>
                     )}
                   </li>
                 ))}
@@ -232,7 +243,8 @@ export default function GraphView() {
   }, [hoverEdge, hoverNode])
 
   return (
-    <div className="flex-1 h-full flex flex-col gap-4 p-6">
+    <div className="flex-1 h-full flex flex-col gap-6 p-6 bg-white dark:bg-secondary-900">
+      {/* Header Section */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-secondary-900 dark:text-secondary-50">Graph Explorer</h2>
@@ -246,13 +258,14 @@ export default function GraphView() {
         </div>
       </div>
 
+      {/* Filters */}
       <div className="flex flex-wrap gap-3 rounded-lg border border-secondary-200 bg-white p-4 shadow-sm dark:border-secondary-700 dark:bg-secondary-800">
         <div className="flex min-w-[200px] flex-col gap-1">
           <label className="text-xs font-semibold text-secondary-700 dark:text-secondary-300">Community</label>
           <select
             value={selectedCommunity}
             onChange={(event) => setSelectedCommunity(event.target.value)}
-            className="rounded border border-secondary-300 px-3 py-2 text-sm text-secondary-900 shadow-sm focus:border-primary-500 focus:outline-none dark:border-secondary-700 dark:bg-secondary-900 dark:text-secondary-100"
+            className="rounded border border-secondary-300 px-3 py-2 text-sm text-secondary-900 shadow-sm focus-primary dark:border-secondary-700 dark:bg-secondary-900 dark:text-secondary-100"
           >
             <option value="all">All communities</option>
             {communities.map((community) => (
@@ -269,7 +282,7 @@ export default function GraphView() {
           <select
             value={selectedNodeType}
             onChange={(event) => setSelectedNodeType(event.target.value)}
-            className="rounded border border-secondary-300 px-3 py-2 text-sm text-secondary-900 shadow-sm focus:border-primary-500 focus:outline-none dark:border-secondary-700 dark:bg-secondary-900 dark:text-secondary-100"
+            className="rounded border border-secondary-300 px-3 py-2 text-sm text-secondary-900 shadow-sm focus-primary dark:border-secondary-700 dark:bg-secondary-900 dark:text-secondary-100"
           >
             <option value="all">All types</option>
             {nodeTypes.map((type) => (
@@ -286,21 +299,22 @@ export default function GraphView() {
           <button
             type="button"
             onClick={() => void fetchGraph()}
-            className="rounded bg-primary-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-primary-500"
+            className="rounded px-3 py-2 text-xs font-semibold text-white shadow-sm transition button-primary"
           >
             Refresh
           </button>
         </div>
       </div>
 
+      {/* Graph Visualization */}
       <div
         ref={containerRef}
-        className="relative flex-1 min-h-0 overflow-hidden rounded-xl border border-secondary-200 bg-secondary-900 shadow-inner dark:border-secondary-700"
+        className="flex-1 relative overflow-hidden rounded-xl border border-secondary-200 bg-secondary-900 shadow-inner dark:border-secondary-700"
         style={{ maxWidth: '100%', boxSizing: 'border-box' }}
       >
         {isLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70 text-secondary-50">
-            Loading graph…
+            <Loader size={28} label="Loading graph…" />
           </div>
         )}
         {error && (
@@ -361,7 +375,7 @@ export default function GraphView() {
             <div className="w-full h-full relative">
               {modalLoading && (
                 <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40">
-                  <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-white" />
+                  <Loader size={40} />
                 </div>
               )}
               <div className="absolute inset-0 z-10">

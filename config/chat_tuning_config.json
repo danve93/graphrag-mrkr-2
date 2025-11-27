@@ -135,7 +135,7 @@
     {
       "key": "flashrank_blend_weight",
       "label": "FlashRank Blend Weight",
-      "value": 0.0,
+      "value": 0,
       "options": null,
       "min": 0.0,
       "max": 1.0,
@@ -164,7 +164,7 @@
     {
       "key": "restrict_to_context",
       "label": "Restrict to Context Documents",
-      "value": true,
+      "value": false,
       "options": null,
       "min": null,
       "max": null,
@@ -178,9 +178,9 @@
       "label": "LLM Model",
       "value": "gpt-4o-mini",
       "options": [
-        "gpt-5-mini",
         "gpt-4o-mini",
         "gpt-4o",
+        "gpt-4-turbo",
         "custom"
       ],
       "min": null,

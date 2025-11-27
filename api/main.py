@@ -7,6 +7,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from neo4j.exceptions import ServiceUnavailable
 
 from api.routers import chat, database, documents, graph, history, classification, chat_tuning, jobs
 from config.settings import settings
@@ -54,6 +57,12 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(ServiceUnavailable)
+async def neo4j_service_unavailable_handler(request: Request, exc: ServiceUnavailable):
+    logger.error("Graph DB unavailable (global handler): %s", exc)
+    return JSONResponse(status_code=503, content={"detail": "Graph database unavailable"})
 
 # Configure CORS
 app.add_middleware(

@@ -135,7 +135,7 @@ export default function ClassificationPanel() {
           <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
           <button
             onClick={loadConfig}
-            className="px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700"
+            className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
           >
             Retry
           </button>
@@ -148,127 +148,127 @@ export default function ClassificationPanel() {
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-secondary-900">
-      {/* Header */}
-      <div className="border-b border-secondary-200 dark:border-secondary-700 p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-secondary-900 dark:text-secondary-50 mb-2">
-              Classification Configuration
-            </h1>
-            <p className="text-sm text-secondary-600 dark:text-secondary-400">
-              Manage entity types, overrides, relationships, and clustering parameters
-            </p>
+          {/* Header */}
+          <div className="border-b border-secondary-200 dark:border-secondary-700 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-secondary-900 dark:text-secondary-50 mb-2">
+                  Classification Configuration
+                </h1>
+                <p className="text-sm text-secondary-600 dark:text-secondary-400">
+                  Manage entity types, overrides, relationships, and clustering parameters
+                </p>
+              </div>
+              <button
+                onClick={() => setShowReindexModal(true)}
+                disabled={isSaving}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                <ArrowPathIcon className="w-5 h-5" />
+                Update & Reindex
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => setShowReindexModal(true)}
-            disabled={isSaving}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-          >
-            <ArrowPathIcon className="w-5 h-5" />
-            Update & Reindex
-          </button>
-        </div>
-      </div>
 
-      {/* Messages */}
-      {(error || successMessage) && (
-        <div className="px-6 pt-4">
-          {error && (
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
-              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+          {/* Messages */}
+          {(error || successMessage) && (
+            <div className="px-6 pt-4">
+              {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                </div>
+              )}
+              {successMessage && (
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-green-600 dark:text-green-400">{successMessage}</p>
+                </div>
+              )}
             </div>
           )}
-          {successMessage && (
-            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 mb-4">
-              <p className="text-sm text-green-600 dark:text-green-400">{successMessage}</p>
-            </div>
+
+          {/* Tabs */}
+          <div className="flex border-b border-secondary-200 dark:border-secondary-700 px-6">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  setActiveTab(tab.id)
+                  setSearchQuery('')
+                }}
+                className={`px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === tab.id
+                    ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-600 dark:border-primary-400'
+                    : 'text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-6">
+            {activeTab === 'entity_types' && (
+              <EntityTypesEditor
+                entityTypes={config.entity_types}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                onChange={(types) => setConfig({ ...config, entity_types: types })}
+              />
+            )}
+            {activeTab === 'overrides' && (
+              <OverridesEditor
+                overrides={config.entity_type_overrides}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                onChange={(overrides) => setConfig({ ...config, entity_type_overrides: overrides })}
+              />
+            )}
+            {activeTab === 'relationships' && (
+              <RelationshipsEditor
+                relationships={config.relationship_suggestions}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                onChange={(rels) => setConfig({ ...config, relationship_suggestions: rels })}
+              />
+            )}
+            {activeTab === 'leiden' && (
+              <LeidenConfigEditor
+                config={config.leiden_parameters}
+                onChange={(leiden) => setConfig({ ...config, leiden_parameters: leiden })}
+              />
+            )}
+          </div>
+
+          {/* Footer Actions */}
+          <div className="border-t border-secondary-200 dark:border-secondary-700 p-6 flex gap-4">
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+            >
+              {isSaving ? 'Saving...' : 'Save Configuration'}
+            </button>
+            <button
+              onClick={() => {
+                loadConfig()
+                setSuccessMessage(null)
+                setError(null)
+              }}
+              disabled={isSaving}
+              className="px-4 py-2 bg-secondary-200 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-300 rounded-lg hover:bg-secondary-300 dark:hover:bg-secondary-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+            >
+              Reset
+            </button>
+          </div>
+
+          {/* Reindex Confirmation Modal */}
+          {showReindexModal && (
+            <ReindexModal
+              onConfirm={handleReindex}
+              onCancel={() => setShowReindexModal(false)}
+            />
           )}
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="flex border-b border-secondary-200 dark:border-secondary-700 px-6">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id)
-              setSearchQuery('')
-            }}
-            className={`px-4 py-3 text-sm font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-600 dark:border-primary-400'
-                : 'text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {activeTab === 'entity_types' && (
-          <EntityTypesEditor
-            entityTypes={config.entity_types}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onChange={(types) => setConfig({ ...config, entity_types: types })}
-          />
-        )}
-        {activeTab === 'overrides' && (
-          <OverridesEditor
-            overrides={config.entity_type_overrides}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onChange={(overrides) => setConfig({ ...config, entity_type_overrides: overrides })}
-          />
-        )}
-        {activeTab === 'relationships' && (
-          <RelationshipsEditor
-            relationships={config.relationship_suggestions}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onChange={(rels) => setConfig({ ...config, relationship_suggestions: rels })}
-          />
-        )}
-        {activeTab === 'leiden' && (
-          <LeidenConfigEditor
-            config={config.leiden_parameters}
-            onChange={(leiden) => setConfig({ ...config, leiden_parameters: leiden })}
-          />
-        )}
-      </div>
-
-      {/* Footer Actions */}
-      <div className="border-t border-secondary-200 dark:border-secondary-700 p-6 flex gap-4">
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-        >
-          {isSaving ? 'Saving...' : 'Save Configuration'}
-        </button>
-        <button
-          onClick={() => {
-            loadConfig()
-            setSuccessMessage(null)
-            setError(null)
-          }}
-          disabled={isSaving}
-          className="px-4 py-2 bg-secondary-200 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-300 rounded-lg hover:bg-secondary-300 dark:hover:bg-secondary-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-        >
-          Reset
-        </button>
-      </div>
-
-      {/* Reindex Confirmation Modal */}
-      {showReindexModal && (
-        <ReindexModal
-          onConfirm={handleReindex}
-          onCancel={() => setShowReindexModal(false)}
-        />
-      )}
     </div>
   )
 }

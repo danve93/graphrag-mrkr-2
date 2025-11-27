@@ -34,6 +34,12 @@ class TokenManager:
         "gpt-oss-120b": 128000,
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
+        "gpt-4-turbo": 128000,
+        "gpt-4-turbo-preview": 128000,
+        # GPT-5 family placeholders (models don't exist yet)
+        # "gpt-5": 262144,
+        # "gpt-5-mini": 65536,
+        # "gpt-5-nano": 16384,
         "gpt-3.5-turbo": 16385,
         "gpt-3.5-turbo-16k": 16385,
         "gpt-3.5-turbo-1106": 16385,

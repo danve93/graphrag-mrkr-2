@@ -7,6 +7,8 @@ import { api } from '@/lib/api'
 import { DocumentSummary } from '@/types'
 import { showToast } from '@/components/Toast/ToastContainer'
 import { useChatStore } from '@/store/chatStore'
+import Loader from '@/components/Utils/Loader'
+import Tooltip from '@/components/Utils/Tooltip'
 
 type SelectedDocMap = Record<string, { filename: string; original_filename?: string }>
 
@@ -468,18 +470,19 @@ export default function ChatInput({
     <div className="relative">
       <form onSubmit={handleSubmit} className="relative">
         <div
-          className={`relative transition-all ${
-            isDragging ? 'ring-2 ring-primary-500 rounded-lg' : ''
-          }`}
+          className={`relative transition-all grid grid-cols-[1fr_auto] gap-2 ${isDragging ? 'is-dragging-ring rounded-lg' : ''}`}
+          style={isDragging ? { boxShadow: '0 0 0 3px rgba(36,198,230,0.12)' } : undefined}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           {isDragging && (
-            <div className="absolute inset-0 bg-primary-50 dark:bg-primary-900/30 border-2 border-dashed border-primary-500 rounded-lg flex items-center justify-center z-10">
+            <div className="absolute inset-0 border-2 border-dashed rounded-lg flex items-center justify-center z-10"
+              style={{ backgroundColor: 'var(--neon-glow)', borderColor: 'var(--primary-500)' }}
+            >
               <div className="text-center">
-                <DocumentArrowUpIcon className="w-8 h-8 text-primary-600 dark:text-primary-400 mx-auto mb-2" />
-                <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
+                <DocumentArrowUpIcon className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--primary-500)' }} />
+                <p className="text-sm font-medium" style={{ color: 'var(--primary-500)' }}>
                   Drop files to upload, or drop documents to add to context
                 </p>
               </div>
@@ -494,7 +497,8 @@ export default function ChatInput({
               {selectedDocEntries.map(([docId, info]) => (
                 <span
                   key={docId}
-                  className="inline-flex max-w-full items-center gap-2 rounded-full bg-primary-50 dark:bg-primary-900/30 px-3 py-1 text-xs text-primary-700 dark:text-primary-300"
+                  className="inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs"
+                  style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}
                 >
                   <span className="truncate" title={info.original_filename || info.filename}>
                     {info.original_filename || info.filename}
@@ -502,8 +506,9 @@ export default function ChatInput({
                   <button
                     type="button"
                     onClick={() => handleRemoveDoc(docId)}
-                    className="rounded-full p-0.5 text-primary-600 dark:text-primary-400 transition hover:bg-primary-100 dark:hover:bg-primary-900/50 focus:outline-none focus:ring-1 focus:ring-primary-400"
+                    className="rounded-full p-0.5 transition focus:outline-none"
                     aria-label={`Remove ${info.original_filename || info.filename} from forced context`}
+                    style={{ color: 'var(--primary-500)' }}
                   >
                     <XMarkIcon className="h-3.5 w-3.5" />
                   </button>
@@ -556,10 +561,10 @@ export default function ChatInput({
                         handleSelectHashtag(tag)
                       }}
                       className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition ${
-                        idx === mentionIndex
-                          ? 'bg-primary-50 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
-                          : 'hover:bg-secondary-100'
-                      }`}
+                          idx === mentionIndex
+                            ? 'accent-selected'
+                            : 'hover:bg-secondary-100'
+                        }`}
                     >
                       <span className="truncate" title={tag}>
                         {tag.startsWith('#') ? tag : `#${tag}`}
@@ -589,7 +594,7 @@ export default function ChatInput({
                       }}
                       className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
                         idx === mentionIndex
-                          ? 'bg-primary-50 text-primary-700'
+                          ? 'accent-selected'
                           : 'hover:bg-secondary-100'
                       }`}
                     >
@@ -616,31 +621,32 @@ export default function ChatInput({
             placeholder={isConnected ? "Ask a question about your documents... (@ for documents, # for tags)" : "Server is offline - chat unavailable"}
             disabled={disabled || isStreaming || uploadingFile || !isConnected}
             rows={1}
-            className="input-field pr-24 resize-none overflow-hidden disabled:opacity-50"
+            className="input-field w-full resize-none overflow-hidden disabled:opacity-50"
           />
 
           <div
-            className="absolute right-3 bottom-3 flex items-center gap-2"
-            style={{ transform: 'translateY(-1px)' }}
+            className="col-start-2 self-end flex items-center gap-2"
           >
             {/* File Upload Button */}
-            <label
-              className={`cursor-pointer p-2 text-secondary-400 hover:text-primary-600 transition-colors ${
-                disabled || isStreaming || uploadingFile || !isConnected
-                  ? 'opacity-50 pointer-events-none'
-                  : ''
-              }`}
-            >
-              <input
-                type="file"
-                className="hidden"
-                onChange={handleFileInput}
-                disabled={disabled || isStreaming || uploadingFile || !isConnected}
-                accept=".pdf,.txt,.md,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
-                multiple
-              />
-              <DocumentArrowUpIcon className="w-5 h-5" />
-            </label>
+            <Tooltip content={disabled || isStreaming || uploadingFile || !isConnected ? 'Upload disabled' : 'Upload documents'}>
+                <label
+                  className={`cursor-pointer p-2 text-secondary-400 transition-colors ${
+                  disabled || isStreaming || uploadingFile || !isConnected
+                    ? 'opacity-50 pointer-events-none'
+                    : ''
+                }`}
+              >
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={handleFileInput}
+                  disabled={disabled || isStreaming || uploadingFile || !isConnected}
+                  accept=".pdf,.txt,.md,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
+                  multiple
+                />
+                    <DocumentArrowUpIcon className="w-5 h-5" style={{ color: 'var(--primary-500)' }} />
+              </label>
+            </Tooltip>
 
             {/* Send/Stop Button */}
             {isStreaming ? (
@@ -667,9 +673,9 @@ export default function ChatInput({
 
       {uploadingFile && (
         <div className="absolute -top-8 left-0 right-0 text-center">
-          <span className="text-xs text-secondary-600 bg-white dark:bg-secondary-800 px-2 py-1 rounded shadow-sm">
-            Uploading files...
-          </span>
+          <div className="inline-flex items-center justify-center">
+            <Loader size={14} label="Uploading files..." />
+          </div>
         </div>
       )}
     </div>

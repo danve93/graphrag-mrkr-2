@@ -20,57 +20,74 @@ class CommunitySummarizer:
 
     def summarize_levels(self, levels: Optional[List[int]] = None) -> List[Dict[str, Any]]:
         """Walk communities from lowest to higher levels and summarize each one."""
-
         levels_to_process = levels or graph_db.get_community_levels()
         summaries: List[Dict[str, Any]] = []
 
+        # Validate levels to process
+        if not levels_to_process:
+            logger.info("No community levels available to summarize")
+            return summaries
+
         for level in sorted(levels_to_process):
-            communities = graph_db.get_communities_for_level(level)
-            logger.info(
-                "Summarizing %s communities at level %s", len(communities), level
-            )
+            try:
+                # Prefer aggregated community+relationship data to reduce DB round-trips
+                communities = graph_db.get_communities_aggregates_for_level(level)
+                if not communities:
+                    # Fallback to the per-community entity list if aggregates are not available
+                    communities = graph_db.get_communities_for_level(level)
 
-            for community in communities:
-                community_id = community.get("community_id")
-                entities = community.get("entities", [])
+                logger.info("Summarizing %s communities at level %s", len(communities), level)
 
-                if community_id is None:
-                    logger.warning(
-                        "Skipping community without identifier at level %s", level
+                # Precompute mapping of entity_id -> exemplar text units to reduce DB calls
+                # We'll fetch per-community text units but skip empty communities quickly
+                for community in communities:
+                    community_id = community.get("community_id")
+                    entities = community.get("entities", [])
+
+                    if community_id is None:
+                        logger.warning("Skipping community without identifier at level %s", level)
+                        continue
+
+                    if not entities:
+                        logger.warning("Community %s at level %s has no entities; skipping summary", community_id, level)
+                        continue
+
+                    entity_ids = [e.get("id") for e in entities if e.get("id")]
+                    if not entity_ids:
+                        logger.warning("No valid entity ids for community %s at level %s", community_id, level)
+                        continue
+
+                    # Request exemplar text units for this community (limited)
+                    text_units = graph_db.get_text_units_for_entities(entity_ids, limit=self.text_unit_limit)
+                    text_unit_payloads = self._build_text_unit_payloads(text_units)
+
+                    summary_text = self._generate_summary(
+                        community_id=community_id,
+                        level=level,
+                        entities=entities,
+                        text_units=text_units,
                     )
-                    continue
 
-                text_units = graph_db.get_text_units_for_entities(
-                    [entity.get("id") for entity in entities if entity.get("id")],
-                    limit=self.text_unit_limit,
-                )
+                    graph_db.upsert_community_summary(
+                        community_id=community_id,
+                        level=level,
+                        summary=summary_text,
+                        member_entities=entities,
+                        exemplar_text_units=text_unit_payloads,
+                    )
 
-                text_unit_payloads = self._build_text_unit_payloads(text_units)
+                    summaries.append(
+                        {
+                            "community_id": community_id,
+                            "level": level,
+                            "summary": summary_text,
+                            "member_entities": entities,
+                            "exemplar_text_units": text_unit_payloads,
+                        }
+                    )
 
-                summary_text = self._generate_summary(
-                    community_id=community_id,
-                    level=level,
-                    entities=entities,
-                    text_units=text_units,
-                )
-
-                graph_db.upsert_community_summary(
-                    community_id=community_id,
-                    level=level,
-                    summary=summary_text,
-                    member_entities=entities,
-                    exemplar_text_units=text_unit_payloads,
-                )
-
-                summaries.append(
-                    {
-                        "community_id": community_id,
-                        "level": level,
-                        "summary": summary_text,
-                        "member_entities": entities,
-                        "exemplar_text_units": text_unit_payloads,
-                    }
-                )
+            except Exception as exc:
+                logger.exception("Failed to summarize communities at level %s: %s", level, exc)
 
         return summaries
 

@@ -23,6 +23,7 @@ from api.models import (
 )
 from config.settings import settings
 from core.graph_db import graph_db
+from neo4j.exceptions import ServiceUnavailable
 from ingestion.document_processor import EntityExtractionState, document_processor
 
 logger = logging.getLogger(__name__)
@@ -552,6 +553,8 @@ async def get_database_stats():
         )
 
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to get database stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -617,7 +620,18 @@ async def upload_document(file: UploadFile = File(...)):
                 error=error_msg,
             )
 
+    except ServiceUnavailable as e:
+        logger.error("Graph DB unavailable during document upload: %s", e)
+        return DocumentUploadResponse(
+            filename=filename,
+            status="error",
+            chunks_created=0,
+            error="Graph database unavailable",
+        )
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            # Let global handler handle DB unavailability for uniform 503 responses
+            raise
         logger.error(f"Document upload failed: {e}")
         return DocumentUploadResponse(
             filename=filename,
@@ -649,6 +663,8 @@ async def delete_document(document_id: str):
         return {"status": "success", "message": f"Document {document_id} deleted"}
 
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to delete document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -672,6 +688,8 @@ async def clear_database():
         return {"status": "success", "message": "Database cleared"}
 
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to clear database: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -689,6 +707,8 @@ async def list_documents():
         return {"documents": documents}
 
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to list documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -706,6 +726,8 @@ async def list_hashtags():
         return {"hashtags": hashtags}
 
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to list hashtags: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -782,7 +804,19 @@ async def stage_document(file: UploadFile = File(...)):
             processing_stage="queued" if enqueued else "staged",
         )
 
+    except ServiceUnavailable as e:
+        logger.error("Graph DB unavailable when staging document: %s", e)
+        return StageDocumentResponse(
+            file_id="",
+            filename=filename,
+            status="error",
+            processing_status="error",
+            processing_stage="error",
+            error="Graph database unavailable",
+        )
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to stage document: {e}")
         return StageDocumentResponse(
             file_id="",
@@ -845,6 +879,8 @@ async def delete_staged_document(file_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to delete staged document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -881,6 +917,8 @@ async def process_documents(request: ProcessDocumentsRequest):
     except HTTPException:
         raise
     except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
         logger.error(f"Failed to start processing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

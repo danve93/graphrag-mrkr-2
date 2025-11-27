@@ -94,12 +94,30 @@ class LLMManager:
 
         for attempt in range(max_retries):
             try:
-                response = openai.chat.completions.create(
-                    model=str(model_override or self.model),
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                # Use max_completion_tokens for newer models (gpt-4o, gpt-4-turbo, o1, etc.)
+                # For safety, use max_completion_tokens for unknown models too
+                model_name = str(model_override or self.model)
+                # Only use old max_tokens for legacy models (gpt-3.5, gpt-4 non-turbo)
+                use_old_param = (
+                    model_name.startswith("gpt-3.5") or 
+                    (model_name.startswith("gpt-4") and "turbo" not in model_name and "gpt-4o" not in model_name)
                 )
+                
+                if use_old_param:
+                    response = openai.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                else:
+                    # Use max_completion_tokens for all newer/unknown models
+                    response = openai.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        max_completion_tokens=max_tokens,
+                    )
                 return response.choices[0].message.content or ""
             except openai.RateLimitError:
                 if attempt < max_retries - 1:

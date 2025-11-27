@@ -86,12 +86,14 @@ export default function ChatInterface() {
     fetchChatTuningConfig()
   }, [])
 
-  // Health check monitoring with adaptive interval
+  // Health check monitoring with adaptive interval and debouncing
   useEffect(() => {
     let isUnmounted = false;
+    let consecutiveFailures = 0;
+    const MAX_FAILURES_BEFORE_DISCONNECT = 2; // Require 2 consecutive failures
 
-    const HEALTHY_INTERVAL = 30000; // 30 seconds when connected
-    const UNHEALTHY_INTERVAL = 5000; // 5 seconds when disconnected
+    const HEALTHY_INTERVAL = 60000; // 60 seconds when connected (reduced frequency)
+    const UNHEALTHY_INTERVAL = 10000; // 10 seconds when disconnected (less aggressive)
 
     const scheduleNextCheck = (delay: number) => {
       if (healthCheckIntervalRef.current) {
@@ -102,22 +104,45 @@ export default function ChatInterface() {
 
     const runHealthCheck = async () => {
       if (isUnmounted) return;
+      
+      // Skip health check if actively loading (query in progress)
+      if (isLoading) {
+        scheduleNextCheck(HEALTHY_INTERVAL); // Check again later
+        return;
+      }
+      
       const isHealthy = await api.checkHealth()
-      setIsConnected(isHealthy)
-      // Schedule next check based on health
-      scheduleNextCheck(isHealthy ? HEALTHY_INTERVAL : UNHEALTHY_INTERVAL)
+      
+      if (isHealthy) {
+        consecutiveFailures = 0;
+        setIsConnected(true)
+        scheduleNextCheck(HEALTHY_INTERVAL)
+      } else {
+        consecutiveFailures++;
+        // Only mark as disconnected after multiple consecutive failures
+        if (consecutiveFailures >= MAX_FAILURES_BEFORE_DISCONNECT) {
+          setIsConnected(false)
+        }
+        scheduleNextCheck(UNHEALTHY_INTERVAL)
+      }
     }
 
-    // Start health check loop
-    runHealthCheck()
+    // Initial optimistic connection state
+    setIsConnected(true)
+    
+    // Start health check loop after a delay (let app load first)
+    const initialDelay = setTimeout(() => {
+      if (!isUnmounted) runHealthCheck()
+    }, 3000);
 
     return () => {
       isUnmounted = true;
+      clearTimeout(initialDelay);
       if (healthCheckIntervalRef.current) {
         clearTimeout(healthCheckIntervalRef.current as unknown as number)
       }
     }
-  }, [setIsConnected])
+  }, [setIsConnected, isLoading])
 
   // Trigger refresh when connection is restored
   useEffect(() => {
@@ -427,16 +452,17 @@ export default function ChatInterface() {
       {/* New Chat button is shown in empty-state below the tabs */}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="w-16 h-16 bg-primary-100 dark:bg-primary-900/40 rounded-full flex items-center justify-center mb-4">
-              <svg
-                className="w-8 h-8 text-primary-500 dark:text-primary-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
+                  <svg
+                    className="w-8 h-8"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    style={{ color: 'var(--primary-500)' }}
+                  >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -491,7 +517,7 @@ export default function ChatInterface() {
       </div>
 
       {/* Input */}
-      <div className="border-t border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4">
+      <div className="flex-shrink-0 border-t border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4">
         <div className="max-w-4xl mx-auto">
           <ChatInput
             onSend={handleSendMessage}

@@ -100,10 +100,13 @@ export default function HistoryTab() {
             <div
               key={session.session_id}
               className={`card p-3 flex items-center justify-between transition-all cursor-pointer group ${
-                activeSessionId === session.session_id
-                  ? 'border-primary-300 shadow-primary-100 ring-1 ring-primary-100'
-                  : 'hover:shadow-md'
+                activeSessionId === session.session_id ? '' : 'hover:shadow-md'
               }`}
+              style={
+                activeSessionId === session.session_id
+                  ? { borderColor: 'rgba(36,198,230,0.18)', boxShadow: '0 6px 18px rgba(36,198,230,0.12)' }
+                  : undefined
+              }
               onClick={async () => {
                 if (activeSessionId === session.session_id) {
                   return

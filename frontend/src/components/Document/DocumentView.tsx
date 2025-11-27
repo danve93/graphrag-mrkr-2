@@ -5,11 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeftIcon,
   DocumentTextIcon,
-  Squares2X2Icon,
   MagnifyingGlassIcon,
   ClipboardIcon,
   ExclamationCircleIcon,
 } from '@heroicons/react/24/outline'
+import Loader from '@/components/Utils/Loader'
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/solid'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -597,7 +597,7 @@ export default function DocumentView() {
           Back to chat
         </button>
         <div className="flex items-center gap-3">
-          <DocumentTextIcon className="w-6 h-6 text-primary-500" />
+          <DocumentTextIcon className="w-6 h-6" style={{ color: 'var(--primary-500)' }} />
           <div>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50">
               {documentData?.title || documentData?.original_filename || documentData?.file_name || 'Unnamed document'}
@@ -630,11 +630,10 @@ export default function DocumentView() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6 bg-secondary-50 dark:bg-secondary-900">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 bg-secondary-50 dark:bg-secondary-900">
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 text-secondary-500 dark:text-secondary-400">
-            <Squares2X2Icon className="w-10 h-10 animate-spin" />
-            <p className="mt-3 text-sm">Loading document metadata…</p>
+            <Loader size={40} label="Loading document metadata…" />
           </div>
         )}
 
@@ -717,7 +716,8 @@ export default function DocumentView() {
                       {(documentData.hashtags || []).map((tag, index) => (
                         <span
                           key={index}
-                          className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 dark:bg-primary-900/30 text-primary-800 dark:text-primary-300"
+                          className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                          style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}
                         >
                           {tag}
                         </span>
@@ -734,7 +734,8 @@ export default function DocumentView() {
                       {(documentData.hashtags || []).map((tag, index) => (
                         <span
                           key={index}
-                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 dark:bg-primary-900/30 text-primary-800 dark:text-primary-300"
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium"
+                          style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}
                         >
                           {tag}
                           <button
@@ -744,7 +745,7 @@ export default function DocumentView() {
                               e.stopPropagation()
                               handleRemoveHashtag(tag)
                             }}
-                            className="hover:text-primary-900"
+                            className="hover:opacity-80"
                           >
                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -760,7 +761,7 @@ export default function DocumentView() {
                           onKeyDown={handleHashtagInputKeyDown}
                           onBlur={() => setIsEditingHashtags(false)}
                           placeholder="Add tag..."
-                          className="px-2.5 py-0.5 text-xs border border-secondary-300 rounded-full focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                          className="px-2.5 py-0.5 text-xs border border-secondary-300 rounded-full focus:outline-none focus-primary"
                           autoFocus
                         />
                         <button
@@ -769,7 +770,8 @@ export default function DocumentView() {
                             e.preventDefault()
                             handleAddHashtag()
                           }}
-                          className="text-primary-600 hover:text-primary-700"
+                          className=""
+                          style={{ color: 'var(--primary-500)' }}
                           disabled={!newHashtagInput.trim()}
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -794,7 +796,7 @@ export default function DocumentView() {
                         {documentData.document_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                       </span>
                     )}
-                    {!documentData.summary && documentData.chunks.length > 0 && documentData.metadata?.processing_status !== 'staged' && (
+                      {!documentData.summary && documentData.chunks.length > 0 && documentData.metadata?.processing_status !== 'staged' && (
                       <button
                         type="button"
                         onClick={handleGenerateSummary}
@@ -802,7 +804,7 @@ export default function DocumentView() {
                         disabled={disableManualActions}
                         title={manualActionTitle}
                       >
-                        Generate summary
+                        {isActionPending ? <Loader size={14} label="Processing..." /> : 'Generate summary'}
                       </button>
                     )}
                   </div>
@@ -847,7 +849,7 @@ export default function DocumentView() {
                       disabled={disableManualActions}
                       title={manualActionTitle}
                     >
-                      Process chunks
+                      {isActionPending ? <Loader size={14} label="Processing..." /> : 'Process chunks'}
                     </button>
                   )}
                   <span className="text-xs text-secondary-500 dark:text-secondary-400">{documentData.chunks.length} entries</span>
@@ -973,7 +975,7 @@ export default function DocumentView() {
                       disabled={entityButtonDisabled}
                       title={entityButtonTitle}
                     >
-                      Process entities
+                      {isActionPending ? <Loader size={14} label="Processing..." /> : 'Process entities'}
                     </button>
                   )}
                   <span className="text-xs text-secondary-500 dark:text-secondary-400">
@@ -1056,16 +1058,17 @@ export default function DocumentView() {
                         </p>
                         {doc.link && (
                           <a
-                            href={doc.link}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-primary-600 hover:underline inline-flex items-center gap-1 mt-1"
-                          >
-                            <span>Open external link</span>
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
-                          </a>
+                              href={doc.link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs hover:underline inline-flex items-center gap-1 mt-1"
+                              style={{ color: 'var(--primary-500)' }}
+                            >
+                              <span>Open external link</span>
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
+                            </a>
                         )}
                       </div>
                       <button

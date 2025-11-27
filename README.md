@@ -210,21 +210,50 @@ Key environment variables (see `config/settings.py` for full list):
 
 ## Testing and Code Quality
 
-Backend tests:
+### Backend Tests
+
+Run all backend tests:
 
 ```bash
 source .venv/bin/activate
 pytest api/tests/
 ```
 
-Frontend tests:
+### Chat Pipeline Integration Test
+
+Test the complete RAG pipeline end-to-end with "What is Carbonio?":
+
+```bash
+# Using the test runner script (starts Neo4j if needed)
+./scripts/test_chat_pipeline.sh
+
+# Or manually with Docker
+docker-compose up -d neo4j
+export NEO4J_URI="bolt://localhost:7687"
+python -m pytest api/tests/test_chat_pipeline.py -v -s
+```
+
+This comprehensive test validates:
+- ✅ Document ingestion and chunking
+- ✅ Vector retrieval
+- ✅ Entity extraction and retrieval
+- ✅ Hybrid retrieval (vectors + entities)
+- ✅ Graph expansion and reasoning
+- ✅ Reranking (when enabled)
+- ✅ Response generation
+- ✅ Quality scoring
+- ✅ Multi-turn conversations
+
+See [`api/tests/README_CHAT_PIPELINE_TEST.md`](api/tests/README_CHAT_PIPELINE_TEST.md) for detailed documentation.
+
+### Frontend Tests
 
 ```bash
 cd frontend
 npm run test
 ```
 
-Linting and formatting examples:
+### Linting and Formatting
 
 ```bash
 source .venv/bin/activate

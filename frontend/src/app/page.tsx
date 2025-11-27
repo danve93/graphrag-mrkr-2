@@ -3,6 +3,7 @@
 import ChatInterface from '@/components/Chat/ChatInterface'
 import DocumentView from '@/components/Document/DocumentView'
 import GraphView from '@/components/Graph/GraphView'
+import ComblocksPanel from '@/components/Comblocks/ComblocksPanel'
 import ChatTuningPanel from '@/components/ChatTuning/ChatTuningPanel'
 import ClassificationPanel from '@/components/Classification/ClassificationPanel'
 import Sidebar from '@/components/Sidebar/Sidebar'
@@ -23,12 +24,6 @@ export default function Home() {
   const MAX_WIDTH = 480
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH)
   const [userResized, setUserResized] = useState(false)
-  const navigation = [
-    { id: 'graph', label: 'Graph' },
-    { id: 'chatTuning', label: 'Chat Tuning' },
-    { id: 'classification', label: 'Classification' },
-  ] as const
-
   useEffect(() => {
     const storedWidth = typeof window !== 'undefined' ? window.localStorage.getItem('sidebar-width') : null
     if (storedWidth) {
@@ -64,46 +59,17 @@ export default function Home() {
     }
   }, [sidebarWidth])
 
-  // Poll backend health and set global connected state
-  useEffect(() => {
-    let mounted = true
-    async function check() {
-      try {
-        const ok = await api.checkHealth()
-        if (mounted) setIsConnected(ok)
-      } catch (err) {
-        if (mounted) setIsConnected(false)
-      }
-    }
-
-    // initial check
-    void check()
-    const id = setInterval(() => {
-      void check()
-    }, 4000)
-    return () => {
-      mounted = false
-      clearInterval(id)
-    }
-  }, [setIsConnected])
+  // Health check is now managed by ChatInterface to avoid race conditions
+  // Initial connection state is optimistic (true) until proven otherwise
 
   const clampWidth = (next: number) => Math.min(Math.max(next, MIN_WIDTH), MAX_WIDTH)
 
+  const mainMarginLeft = sidebarOpen ? (sidebarCollapsed ? 72 : sidebarWidth) : 0
+
   return (
-    <div
-      className="grid h-screen bg-secondary-50 dark:bg-secondary-900"
-      style={{
-        // Left column: sidebar (fixed pixel or collapsed width), right column: main (1fr)
-        gridTemplateColumns: `${sidebarOpen ? (sidebarCollapsed ? '72px' : `${sidebarWidth}px`) : '0px'} 1fr`,
-      }}
-    >
-      {/* Top-level connection banner/loader */}
-      {!isConnected && (
-        <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded bg-yellow-100 px-4 py-2 text-sm font-medium text-yellow-800 shadow dark:bg-yellow-900/80 dark:text-yellow-200">
-          Reconnecting to backend... some features may be unavailable
-        </div>
-      )}
-      {/* Sidebar */}
+    <div className="h-screen overflow-hidden bg-secondary-50 dark:bg-secondary-900">
+      {/* Connection status is shown in the chat UI via `ConnectionStatus` component */}
+      {/* Sidebar (fixed to left edge) */}
       <Sidebar
         open={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
@@ -117,32 +83,17 @@ export default function Home() {
         minWidth={MIN_WIDTH}
         maxWidth={MAX_WIDTH}
       />
-
-      {/* Main Content (grid column 2) */}
-      <main className={`min-w-0 min-h-0 flex flex-col transition-all duration-300`}>
-        <div className="flex items-center gap-3 border-b border-secondary-200 bg-white px-6 py-4 dark:border-secondary-800 dark:bg-secondary-900">
-          {navigation.map((view) => (
-            <button
-              key={view.id}
-              onClick={() => setActiveView(view.id)}
-              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                activeView === view.id
-                  ? 'bg-primary-600 text-white shadow'
-                  : 'bg-secondary-100 text-secondary-700 hover:bg-secondary-200 dark:bg-secondary-800 dark:text-secondary-300 dark:hover:bg-secondary-700'
-              }`}
-            >
-              {view.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-auto overscroll-contain min-h-0 bg-secondary-50 dark:bg-secondary-900">
-          {activeView === 'graph' && <GraphView />}
-          {activeView === 'chatTuning' && <ChatTuningPanel />}
-          {activeView === 'classification' && <ClassificationPanel />}
-          {activeView === 'chat' && <ChatInterface />}
-          {activeView === 'document' && <DocumentView />}
-        </div>
+      {/* Main Content (offset by sidebar) */}
+      <main
+        className="h-full overflow-hidden transition-all duration-300 bg-secondary-50 dark:bg-secondary-900"
+        style={{ marginLeft: `${mainMarginLeft}px` }}
+      >
+        {activeView === 'graph' && <GraphView />}
+        {activeView === 'chatTuning' && <ChatTuningPanel />}
+        {activeView === 'classification' && <ClassificationPanel />}
+        {activeView === 'comblocks' && <ComblocksPanel />}
+        {activeView === 'chat' && <ChatInterface />}
+        {activeView === 'document' && <DocumentView />}
       </main>
 
       {/* Theme Toggle */}

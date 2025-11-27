@@ -77,6 +77,11 @@ function start_frontend_bg() {
     return
   fi
 
+  # Kill any existing process on port 3000
+  echo "Checking for processes on port 3000..."
+  lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+  sleep 1
+
   echo "Starting frontend (npm run dev) in background..."
   nohup sh -c "cd '$ROOT_DIR/frontend' && npm run dev" > "$LOG_DIR/dev-frontend.log" 2>&1 &
   FRONTEND_PID=$!
@@ -85,6 +90,11 @@ function start_frontend_bg() {
 }
 
 function start_frontend_fg() {
+  # Kill any existing process on port 3000
+  echo "Checking for processes on port 3000..."
+  lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+  sleep 1
+  
   echo "Starting frontend (npm run dev) in foreground..."
   cd "$ROOT_DIR/frontend"
   npm run dev

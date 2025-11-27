@@ -68,9 +68,25 @@ class DocumentChunker:
 
     def __init__(self):
         """Initialize the document chunker."""
+        # Validate chunking settings early to fail fast for misconfiguration
+        try:
+            cs = int(settings.chunk_size)
+        except Exception:
+            raise ValueError("Invalid settings.chunk_size; must be an integer > 0")
+
+        try:
+            co = int(settings.chunk_overlap)
+        except Exception:
+            raise ValueError("Invalid settings.chunk_overlap; must be an integer >= 0")
+
+        if cs <= 0:
+            raise ValueError("settings.chunk_size must be > 0")
+        if co < 0:
+            raise ValueError("settings.chunk_overlap must be >= 0")
+
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap,
+            chunk_size=cs,
+            chunk_overlap=co,
             separators=["\n\n", "\n", " ", ""],
         )
 

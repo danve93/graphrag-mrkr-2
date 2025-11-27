@@ -206,8 +206,8 @@ export default function LoadingIndicator({
         {/* Current stage with pulsing indicator */}
         <div className="flex items-center gap-3 animate-slide-in">
           <div className="relative">
-            <div className="w-3 h-3 bg-primary-500 rounded-full animate-pulse-glow"></div>
-            <div className="absolute inset-0 w-3 h-3 bg-primary-500 rounded-full opacity-30"></div>
+            <div className="w-3 h-3 rounded-full animate-pulse-glow" style={{ backgroundColor: 'var(--primary-500)' }}></div>
+            <div className="absolute inset-0 w-3 h-3 rounded-full opacity-30" style={{ backgroundColor: 'var(--primary-500)' }}></div>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-lg animate-bounce-smooth">{stage.emoji}</span>
@@ -241,10 +241,11 @@ export default function LoadingIndicator({
                   className={`w-2 h-2 rounded-full transition-all duration-300 ${
                     isCompleted
                       ? 'bg-green-500 scale-100'
-                      : isCurrent
-                        ? 'bg-primary-500 dark:bg-primary-400 scale-125 animate-pulse-glow'
-                        : 'bg-secondary-300 dark:bg-secondary-600 scale-75'
+                      : !isCurrent
+                        ? 'bg-secondary-300 dark:bg-secondary-600 scale-75'
+                        : 'scale-125 animate-pulse-glow'
                   }`}
+                  style={isCurrent ? { backgroundColor: 'var(--primary-500)' } : undefined}
                 ></div>
                 <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 bg-secondary-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                   {s.label}

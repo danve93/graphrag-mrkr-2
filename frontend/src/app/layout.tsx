@@ -2,12 +2,13 @@ import type { Metadata } from 'next'
 import './globals.css'
 import ToastContainer from '@/components/Toast/ToastContainer'
 import { ThemeProvider } from '@/components/Theme/ThemeProvider'
+import StatusIndicator from '@/components/Theme/StatusIndicator'
 import fs from 'fs'
 import path from 'path'
 import BrandingProvider from '@/components/Branding/BrandingProvider'
 
 // Read branding.json from the Next.js `public` folder at build/server time
-const brandingPath = path.join(process.cwd(), 'frontend', 'public', 'branding.json')
+const brandingPath = path.join(process.cwd(), 'public', 'branding.json')
 let branding = { title: 'GraphRAG', description: '', use_image: false } as any
 try {
   const raw = fs.readFileSync(brandingPath, 'utf8')
@@ -19,15 +20,26 @@ try {
 export const metadata: Metadata = {
   title: branding.title,
   description: branding.description,
-  icons: branding.use_image ? { icon: branding.image_path, shortcut: branding.image_path } : undefined,
+  icons: {
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: branding.use_image && branding.image_path ? branding.image_path : '/favicon.svg' }
+    ],
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+      </head>
       <body>
         <ThemeProvider>
           <BrandingProvider branding={branding}>
+            <StatusIndicator />
             {children}
             <ToastContainer />
           </BrandingProvider>

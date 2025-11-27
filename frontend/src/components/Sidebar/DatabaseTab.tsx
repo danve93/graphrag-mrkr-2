@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { api } from '@/lib/api'
 import { DatabaseStats, ProcessingSummary } from '@/types'
 import { TrashIcon, DocumentArrowUpIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import Loader from '@/components/Utils/Loader'
 import { useChatStore } from '@/store/chatStore'
 import { showToast } from '@/components/Toast/ToastContainer'
 
@@ -331,16 +332,19 @@ export default function DatabaseTab() {
 
   return (
     <div
-      className={`relative transition-all ${isDragging ? 'ring-2 ring-primary-500 rounded-lg' : ''}`}
+      className={`relative transition-all ${isDragging ? 'is-dragging-ring rounded-lg' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       {isDragging && (
-        <div className="absolute inset-0 bg-primary-50 border-2 border-dashed border-primary-500 rounded-lg flex items-center justify-center z-10">
+        <div
+          className="absolute inset-0 accent-selected border-2 border-dashed rounded-lg flex items-center justify-center z-10"
+          style={{ borderColor: 'var(--primary-500)' }}
+        >
           <div className="text-center">
-            <DocumentArrowUpIcon className="w-8 h-8 text-primary-600 mx-auto mb-2" />
-            <p className="text-sm font-medium text-primary-700">
+            <DocumentArrowUpIcon className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--primary-600)' }} />
+            <p className="text-sm font-medium" style={{ color: 'var(--primary-700)' }}>
               Drop files to upload
             </p>
           </div>
@@ -354,8 +358,14 @@ export default function DatabaseTab() {
             <div className={`button-primary py-2 px-3 text-center text-sm flex items-center justify-center gap-2 ${
               uploadingFile ? 'opacity-50 pointer-events-none' : ''
             }`}>
-              <DocumentArrowUpIcon className="w-4 h-4" />
-              <span>{uploadingFile ? 'Uploading...' : 'Upload Files'}</span>
+              {uploadingFile ? (
+                <Loader size={14} label="Uploading..." />
+              ) : (
+                <>
+                  <DocumentArrowUpIcon className="w-4 h-4" />
+                  <span>Upload Files</span>
+                </>
+              )}
             </div>
             <input
               type="file"
@@ -368,12 +378,12 @@ export default function DatabaseTab() {
           </label>
         </div>
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-primary-50 dark:bg-primary-900/20 rounded-lg p-4">
-          <div className="text-2xl font-bold text-primary-700 dark:text-primary-400">
+        <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
+          <div className="text-2xl font-bold" style={{ color: 'var(--primary-700)' }}>
             {stats?.total_documents || 0}
           </div>
-          <div className="text-xs text-primary-600 dark:text-primary-400 mt-1">Documents</div>
+          <div className="text-xs mt-1" style={{ color: 'var(--primary-600)' }}>Documents</div>
         </div>
         <div className="bg-secondary-100 dark:bg-secondary-700 rounded-lg p-4">
           <div className="text-2xl font-bold text-secondary-700 dark:text-secondary-200">
@@ -401,9 +411,7 @@ export default function DatabaseTab() {
             ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400' 
             : 'border-secondary-200 bg-white dark:bg-secondary-800 text-secondary-700 dark:text-secondary-300'
         }`}>
-          <span className={`inline-flex h-2 w-2 rounded-full ${
-            isStuck ? 'bg-red-500' : 'bg-primary-500 animate-pulse'
-          }`} />
+          <span className={`inline-flex h-2 w-2 rounded-full ${isStuck ? 'bg-red-500' : 'animate-pulse'}`} style={!isStuck ? { backgroundColor: 'var(--primary-500)' } : undefined} />
           <div className="flex-1">
             {isStuck ? (
               <>
@@ -464,7 +472,7 @@ export default function DatabaseTab() {
                       setSearchQuery('')
                     }
                   }}
-                  className="w-full px-3 py-2 text-sm border border-secondary-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  className="w-full px-3 py-2 text-sm border border-secondary-300 rounded-md focus:outline-none focus-primary"
                 />
               </div>
               <button
@@ -506,13 +514,17 @@ export default function DatabaseTab() {
                   onClick={() => handleSelectDocument(doc.document_id)}
                   className={`card p-3 flex flex-col gap-2 transition-all cursor-move group ${
                     isActive
-                      ? 'border-primary-300 shadow-primary-100 ring-1 ring-primary-100'
+                      ? ''
                       : 'hover:shadow-md hover:cursor-grab active:cursor-grabbing'
                   }`}
+                  style={isActive ? { borderColor: 'rgba(36,198,230,0.18)', boxShadow: '0 6px 18px rgba(36,198,230,0.12)' } : undefined}
                 >
                   <div className="flex w-full items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      <div className="relative">
+                      <div className="relative flex items-center gap-2">
+                        {status === 'processing' && (
+                          <Loader size={14} />
+                        )}
                         <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50 truncate">
                           {doc.original_filename || doc.filename}
                         </p>
@@ -525,15 +537,7 @@ export default function DatabaseTab() {
                           : 'Unknown type'}
                       </p>
                       {statusLabel && status !== 'queued' && status !== 'staged' && (
-                        <p
-                          className={`text-[11px] mt-1 ${
-                            status === 'error'
-                              ? 'text-red-600'
-                              : status === 'processing'
-                              ? 'text-primary-600'
-                              : 'text-secondary-500 dark:text-secondary-400'
-                          }`}
-                        >
+                        <p className={`text-[11px] mt-1 ${status === 'error' ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}`} style={status === 'processing' ? { color: 'var(--primary-600)' } : undefined}>
                           {statusLabel}
                         </p>
                       )}
@@ -564,8 +568,8 @@ export default function DatabaseTab() {
                       </div>
                       <div className="h-1.5 w-full rounded-full bg-secondary-200">
                         <div
-                          className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : 'bg-primary-500'}`}
-                          style={{ width: `${progress}%` }}
+                          className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : ''}`}
+                          style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--primary-500)' }}
                         />
                       </div>
                     </div>

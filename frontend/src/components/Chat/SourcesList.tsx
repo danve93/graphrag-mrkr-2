@@ -125,7 +125,7 @@ export default function SourcesList({ sources }: SourcesListProps) {
                       </span>
                     </div>
                     {doc.avgSimilarity > 0 && (
-                      <span className="shrink-0 text-xs px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded">
+                      <span className="shrink-0 text-xs px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}>
                         {(doc.avgSimilarity * 100).toFixed(0)}% match
                       </span>
                     )}
@@ -246,7 +246,8 @@ export default function SourcesList({ sources }: SourcesListProps) {
           {!expanded && groupedSources.length > 3 && (
             <button
               onClick={() => setExpanded(true)}
-              className="text-sm text-primary-600 hover:text-primary-700"
+              className="text-sm"
+              style={{ color: 'var(--primary-500)' }}
             >
               Show {groupedSources.length - 3} more documents
             </button>

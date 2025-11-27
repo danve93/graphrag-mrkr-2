@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { Message } from '@/types'
 import { api } from '@/lib/api'
 
-type ActiveView = 'chat' | 'document' | 'graph' | 'chatTuning' | 'classification'
+type ActiveView = 'chat' | 'document' | 'graph' | 'chatTuning' | 'classification' | 'comblocks' | 'template'
 
 interface ChatStore {
   messages: Message[]

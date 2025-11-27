@@ -14,6 +14,7 @@ import HistoryTab from './HistoryTab'
 import DatabaseTab from './DatabaseTab'
 import { useChatStore } from '@/store/chatStore'
 import { useBranding } from '@/components/Branding/BrandingProvider'
+import Tooltip from '@/components/Utils/Tooltip'
 
 interface SidebarProps {
   open: boolean
@@ -122,46 +123,51 @@ export default function Sidebar({
   return (
     <>
       {/* Mobile toggle button */}
-      <button
-        onClick={onToggle}
-        className="fixed top-4 left-4 z-50 lg:hidden button-primary p-2"
-      >
-        {open ? <XMarkIcon className="w-6 h-6" /> : <Bars3Icon className="w-6 h-6" />}
-      </button>
+      <Tooltip content={open ? 'Close sidebar' : 'Open sidebar'}>
+        <button
+          onClick={onToggle}
+          className="fixed top-4 left-4 z-50 lg:hidden button-primary p-2"
+          aria-label={open ? 'Close sidebar' : 'Open sidebar'}
+        >
+          {open ? <XMarkIcon className="w-6 h-6" /> : <Bars3Icon className="w-6 h-6" />}
+        </button>
+      </Tooltip>
 
-      {/* Sidebar */}
+      {/* Sidebar (fixed to left edge and separate from content grid) */}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-40 w-80 bg-white dark:bg-secondary-800 border-r border-secondary-200 dark:border-secondary-700 transform transition-all duration-300 ease-in-out ${
-          open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        } ${isResizing ? 'no-transition' : ''} relative`}
-        style={{ width: `${collapsed ? 72 : width}px` }}
+        className={`fixed left-0 top-0 z-40 h-screen bg-white dark:bg-secondary-800 border-r border-secondary-200 dark:border-secondary-700 ${
+          isResizing ? 'no-transition' : ''
+        } overflow-hidden`}
+        style={{ width: open ? `${collapsed ? 72 : width}px` : '0px' }}
       >
         <div className="flex flex-col h-full min-h-0">
           {/* Collapse button (desktop) */}
-          <button
-            onClick={() => onCollapseToggle()}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="hidden lg:flex absolute top-4 right-4 z-50 items-center justify-center p-2 rounded bg-white dark:bg-secondary-700 border border-secondary-200 dark:border-secondary-600 hover:bg-secondary-50 dark:hover:bg-secondary-600"
-          >
-            {collapsed ? (
-              <ChevronRightIcon className="w-5 h-5" />
-            ) : (
-              <ChevronLeftIcon className="w-5 h-5" />
-            )}
-          </button>
+          <Tooltip content={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+            <button
+              onClick={() => onCollapseToggle()}
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="hidden lg:flex absolute top-4 right-4 z-50 items-center justify-center p-2 rounded bg-white dark:bg-secondary-700 border border-secondary-200 dark:border-secondary-600 hover:bg-secondary-50 dark:hover:bg-secondary-600"
+            >
+              {collapsed ? (
+                <ChevronRightIcon className="w-5 h-5" />
+              ) : (
+                <ChevronLeftIcon className="w-5 h-5" />
+              )}
+            </button>
+          </Tooltip>
 
           {/* When collapsed we hide the rest of the content entirely */}
           {!collapsed && (
             <>
               {/* Logo/Brand */}
               <div className="p-6 border-b border-secondary-200 dark:border-secondary-700">
-                <h1 className="text-xl font-bold text-secondary-900 dark:text-secondary-50 flex items-center">
+                <h1 className="text-lg branding-heading flex items-center">
                   {branding?.use_image && branding.image_path ? (
                     <img src={branding.image_path} alt={branding.short_name || branding.heading} className="w-6 h-6 mr-2" />
                   ) : null}
                   <span>{branding?.use_image ? (branding.short_name || branding.heading) : branding?.heading}</span>
                 </h1>
-                <p className="text-sm text-secondary-600 dark:text-secondary-400 mt-1">{branding?.tagline}</p>
+                <p className="text-sm text-secondary-500 mt-1">{branding?.tagline}</p>
               </div>
 
               {/* Tabs */}
@@ -173,12 +179,15 @@ export default function Sidebar({
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     className={`flex-1 flex items-center justify-center py-3 text-sm font-medium transition-colors ${
-                      activeTab === tab.id
-                        ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-600 dark:border-primary-400'
-                        : 'text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200'
+                      activeTab === tab.id ? '' : 'text-secondary-500 hover:text-secondary-200'
                     }`}
+                    style={
+                      activeTab === tab.id
+                        ? { color: 'var(--primary-accent)', borderBottom: '2px solid var(--primary-500)' }
+                        : undefined
+                    }
                   >
-                    <tab.icon className="w-5 h-5 mr-1" />
+                    <tab.icon className="w-5 h-5 mr-1 text-current" />
                     {tab.label}
                   </button>
                 ))}
@@ -194,7 +203,7 @@ export default function Sidebar({
                       setActiveView('chat')
                       setActiveTab('chat')
                     }}
-                    className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-primary-700 bg-primary-100 hover:bg-primary-200 dark:bg-primary-900 dark:text-primary-300"
+                    className="w-full button-primary"
                     aria-label="Start a new chat"
                   >
                     <PlusCircleIcon className="w-5 h-5" />
@@ -212,17 +221,46 @@ export default function Sidebar({
                   {activeTab === 'database' && <DatabaseTab />}
                 </div>
               </div>
+
+              {/* Additional Panels Navigation */}
+              <div className="border-t border-secondary-200 dark:border-secondary-700 p-4">
+                <p className="text-xs font-semibold text-secondary-500 dark:text-secondary-400 mb-2 px-2">TOOLS</p>
+                <div className="space-y-1">
+                  <button
+                    onClick={() => setActiveView('graph')}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                  >
+                    Graph Explorer
+                  </button>
+                  <button
+                    onClick={() => setActiveView('chatTuning')}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                  >
+                    Chat Tuning
+                  </button>
+                  <button
+                    onClick={() => setActiveView('classification')}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                  >
+                    Classification
+                  </button>
+                  <button
+                    onClick={() => setActiveView('comblocks')}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                  >
+                    Comblocks
+                  </button>
+                </div>
+              </div>
             </>
           )}
         </div>
 
-        {/* Resize handle (hidden when collapsed) */}
-        {!collapsed && (
+        {/* Resize handle (hidden when collapsed or when sidebar closed) */}
+        {open && !collapsed && (
           <div
-              className={`hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize ${
-                isResizing ? 'bg-primary-100 dark:bg-primary-900/60' : 'bg-transparent'
-              }`}
-              style={{ zIndex: 60 }}
+                className={`hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize`}
+                style={{ zIndex: 60, backgroundColor: isResizing ? 'var(--neon-glow)' : 'transparent' }}
               onMouseDown={onMouseDown}
               onTouchStart={onTouchStart}
             >
