@@ -11,9 +11,11 @@ Tests full workflow:
 """
 
 import logging
+import socket
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib.parse import urlparse
 
 import pytest
 
@@ -22,7 +24,33 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Optional deps and environment checks before heavy imports
+pytest.importorskip(
+    "cv2",
+    reason="OpenCV (cv2) and its system libraries are required for OCR-enabled pipeline tests.",
+    exc_type=ImportError,
+)
+
 from config.settings import settings  # noqa: E402
+
+
+def _neo4j_reachable(uri: str) -> bool:
+    parsed = urlparse(uri)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 7687
+    try:
+        with socket.create_connection((host, port), timeout=3):
+            return True
+    except OSError:
+        return False
+
+
+if not _neo4j_reachable(settings.neo4j_uri):
+    pytest.skip(
+        f"Neo4j not reachable at {settings.neo4j_uri}; skip full pipeline e2e test.",
+        allow_module_level=True,
+    )
+
 from core.graph_db import graph_db  # noqa: E402
 from ingestion.document_processor import document_processor  # noqa: E402
 

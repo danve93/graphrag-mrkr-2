@@ -1,12 +1,28 @@
 import os
+import shutil
 import socket
 import subprocess
 import time
 import logging
+from pathlib import Path
 
 import pytest
 
 LOG = logging.getLogger("tests.conftest")
+DOCKER_AVAILABLE = shutil.which("docker") is not None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip service-dependent suites when Docker is unavailable."""
+
+    if DOCKER_AVAILABLE:
+        return
+
+    skip_marker = pytest.mark.skip(reason="Docker CLI not available; skipping integration and e2e tests that require services")
+    for item in items:
+        path = Path(str(getattr(item, "fspath", "")))
+        if "integration" in path.parts or "e2e" in path.parts:
+            item.add_marker(skip_marker)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -21,6 +37,11 @@ def docker_services():
     - Tears down with `docker compose down --volumes` at the end of the session
       unless `TEST_KEEP_SERVICES` is set to a truthy value.
     """
+
+    if not DOCKER_AVAILABLE:
+        LOG.warning("Docker CLI not available; skipping docker compose startup for tests")
+        yield
+        return
 
     wait_seconds = int(os.environ.get("TEST_SERVICES_WAIT", "120"))
     keep_services = os.environ.get("TEST_KEEP_SERVICES", "0") not in ("0", "", None)
