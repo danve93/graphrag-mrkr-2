@@ -45,6 +45,7 @@ def docker_services():
 
     wait_seconds = int(os.environ.get("TEST_SERVICES_WAIT", "120"))
     keep_services = os.environ.get("TEST_KEEP_SERVICES", "0") not in ("0", "", None)
+    auto_cleanup = os.environ.get("TEST_DOCKER_CLEANUP", "1") not in ("0", "", None)
 
     # Use an isolated compose project so test containers are unique and
     # removed after the test session. Allow overriding via
@@ -55,6 +56,13 @@ def docker_services():
     skip_cleanup = os.environ.get("TEST_SKIP_CLEANUP", "0") not in ("0", "", None)
     if not skip_cleanup:
         try:
+            if auto_cleanup:
+                cleanup_script = Path(__file__).resolve().parent.parent / "scripts" / "cleanup_docker.sh"
+                if cleanup_script.exists():
+                    LOG.info("Running docker cleanup helper before starting services: %s", cleanup_script)
+                    subprocess.run(["bash", str(cleanup_script)], check=False)
+                else:
+                    LOG.debug("Cleanup helper not found at %s; skipping", cleanup_script)
             # Attempt to remove any containers that may conflict with the compose file
             # We parse common container_name entries from docker-compose.yml (best-effort)
             compose_file = os.path.join(os.getcwd(), "docker-compose.yml")

@@ -172,6 +172,16 @@ docker compose up -d neo4j
 export NEO4J_URI="bolt://localhost:7687"
 ```
 
+**Docker port conflicts (tests won't start / compose fails):**
+```bash
+# Stop lingering stacks and free common ports used by tests
+bash scripts/cleanup_docker.sh
+
+# Re-run the test suite (cleanup runs automatically before service startup;
+# disable with TEST_DOCKER_CLEANUP=0)
+pytest tests/integration
+```
+
 **Import errors:**
 ```bash
 # Ensure project root is in PYTHONPATH
