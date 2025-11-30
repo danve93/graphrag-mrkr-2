@@ -119,6 +119,16 @@ docker compose logs -f
 
 Open the frontend at `http://localhost:3000` and the backend docs at `http://localhost:8000/docs`.
 
+### Clearing stale Docker ports or containers
+
+If tests or local runs fail because ports like 3000, 8000, 7474, 7687, or 6379 are already in use, run the cleanup helper to stop any leftover Compose projects and free the ports:
+
+```bash
+./scripts/cleanup_docker.sh
+```
+
+The script attempts to shut down both the main and e2e Compose projects (including override stacks) using the current `COMPOSE_PROJECT_NAME` or the default project names, removes their volumes, and then lists any containers still publishing those ports so you can decide whether to stop them.
+
 ### Docker Compose: internal vs host networking
 
 The Compose stack defaults to container-internal service hostnames (for example `bolt://neo4j:7687`) so services communicate reliably on the Compose network. This is the recommended configuration for development and CI.
