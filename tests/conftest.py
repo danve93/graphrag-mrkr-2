@@ -1,12 +1,88 @@
 import os
+import shutil
 import socket
 import subprocess
 import time
 import logging
+from pathlib import Path
 
 import pytest
 
 LOG = logging.getLogger("tests.conftest")
+DOCKER_AVAILABLE = shutil.which("docker") is not None
+
+
+def _opencv_available() -> bool:
+    """Return True when OpenCV can be imported (including native deps)."""
+
+    try:
+        import cv2  # type: ignore
+
+        _ = cv2.__version__
+        return True
+    except Exception as exc:  # pragma: no cover - environment dependent
+        LOG.warning("OpenCV unavailable or broken for tests: %s", exc)
+        return False
+
+
+def _neo4j_reachable() -> bool:
+    """Quickly probe the local Neo4j Bolt port for availability."""
+
+    try:
+        with socket.create_connection(("localhost", 7687), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+OPENCV_AVAILABLE = _opencv_available()
+NEO4J_AVAILABLE = _neo4j_reachable()
+
+
+def pytest_ignore_collect(collection_path: Path, config):
+    """Avoid collecting integration/e2e suites when prerequisites are missing."""
+
+    parts = Path(str(collection_path)).parts
+    if "tests" not in parts:
+        return False
+
+    if "integration" in parts or "e2e" in parts:
+        if not DOCKER_AVAILABLE or not OPENCV_AVAILABLE:
+            return True
+
+    neo4j_required_files = {
+        "test_caching.py",
+        "test_caching_integration.py",
+        "test_graph_db_caching.py",
+        "test_retrieval_caching.py",
+        "test_embedding_caching.py",
+        "test_cache_metrics.py",
+        "test_stream_backpressure.py",
+        "test_streaming_cancel.py",
+        "test_response_cache.py",
+    }
+
+    if not NEO4J_AVAILABLE and Path(str(collection_path)).name in neo4j_required_files:
+        return True
+
+    return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip service-dependent suites when Docker is unavailable."""
+
+    if DOCKER_AVAILABLE and OPENCV_AVAILABLE:
+        return
+
+    reason = "Docker CLI not available; skipping integration and e2e tests that require services"
+    if DOCKER_AVAILABLE and not OPENCV_AVAILABLE:
+        reason = "OpenCV dependency missing or unusable; skipping OCR-dependent integration and e2e suites"
+
+    skip_marker = pytest.mark.skip(reason=reason)
+    for item in items:
+        path = Path(str(getattr(item, "fspath", "")))
+        if "integration" in path.parts or "e2e" in path.parts:
+            item.add_marker(skip_marker)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -21,6 +97,11 @@ def docker_services():
     - Tears down with `docker compose down --volumes` at the end of the session
       unless `TEST_KEEP_SERVICES` is set to a truthy value.
     """
+
+    if not DOCKER_AVAILABLE:
+        LOG.warning("Docker CLI not available; skipping docker compose startup for tests")
+        yield
+        return
 
     wait_seconds = int(os.environ.get("TEST_SERVICES_WAIT", "120"))
     keep_services = os.environ.get("TEST_KEEP_SERVICES", "0") not in ("0", "", None)
