@@ -13,6 +13,11 @@ from api import job_manager
 
 logger = logging.getLogger(__name__)
 
+from core.singletons import get_response_cache
+from core.cache_metrics import cache_metrics
+from core.singletons import SHUTTING_DOWN
+
+
 
 def run_reindex_job(job_id: str) -> None:
     """Perform reindex pipeline and record status to the job manager.
@@ -21,6 +26,11 @@ def run_reindex_job(job_id: str) -> None:
     or a separate process (worker script).
     """
     try:
+        # If process is shutting down, abort early to avoid races with teardown
+        if SHUTTING_DOWN:
+            logger.warning("Reindex job invoked during shutdown; aborting")
+            job_manager.set_job_failed(job_id, "shutdown_in_progress")
+            return
         job_manager.set_job_started(job_id)
         logger.info("Reindex job started: %s", job_id)
 
@@ -43,7 +53,7 @@ def run_reindex_job(job_id: str) -> None:
             return
 
         # Step 1: collect documents
-        with graph_db.driver.session() as session:  # type: ignore
+        with graph_db.session_scope() as session:
             result = session.run(
                 "MATCH (d:Document) RETURN d.id as doc_id, d.filename as filename"
             )
@@ -103,6 +113,18 @@ def run_reindex_job(job_id: str) -> None:
         }
 
         job_manager.set_job_result(job_id, res, status="success")
+        # Invalidate response cache after a full reindex to avoid stale answers
+        try:
+            cache = get_response_cache()
+            cache.clear()
+            # record invalidation for metrics
+            try:
+                cache_metrics.record_response_invalidation()
+            except Exception:
+                pass
+            logger.info("Cleared response cache after reindex job %s", job_id)
+        except Exception as e:
+            logger.warning("Failed to clear response cache after reindex: %s", e)
 
     except Exception as e:
         logger.exception("Reindex job failed: %s", e)

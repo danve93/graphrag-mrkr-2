@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config.settings import settings
 from core.graph_db import graph_db
+from core.singletons import get_blocking_executor, SHUTTING_DOWN
 
 # Configure logging
 logging.basicConfig(
@@ -50,7 +51,7 @@ def clear_database():
     """Clear all data from the database (use with caution!)."""
     try:
         logger.warning("⚠️  CLEARING ALL DATABASE DATA...")
-        with graph_db.driver.session() as session:  # type: ignore
+        with graph_db.session_scope() as session:
             # Delete all nodes and relationships
             session.run("MATCH (n) DETACH DELETE n")
 
@@ -155,8 +156,9 @@ async def afind_and_fix_bad_embeddings(session, apply: bool = False):
             # Update database in executor to avoid blocking
             loop = asyncio.get_running_loop()
             try:
+                executor = get_blocking_executor()
                 await loop.run_in_executor(
-                    None,
+                    executor,
                     _update_chunk_embedding_sync,
                     session,
                     cid,
@@ -165,9 +167,26 @@ async def afind_and_fix_bad_embeddings(session, apply: bool = False):
                 updates += 1
                 logger.info(f"Updated embedding for chunk {cid} (len={len(new_emb)})")
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update chunk {cid}: {e}")
-                return False
+            except RuntimeError as e:
+                logger.debug(f"Blocking executor unavailable while updating chunk {cid}: {e}.")
+                if SHUTTING_DOWN:
+                    logger.info("Process shutting down; aborting chunk update %s", cid)
+                    return False
+                try:
+                    executor = get_blocking_executor()
+                    await loop.run_in_executor(
+                        executor,
+                        _update_chunk_embedding_sync,
+                        session,
+                        cid,
+                        new_emb,
+                    )
+                    updates += 1
+                    logger.info(f"Updated embedding for chunk {cid} (len={len(new_emb)})")
+                    return True
+                except Exception as e2:
+                    logger.error(f"Failed to update chunk {cid}: {e2}")
+                    return False
 
         def _update_chunk_embedding_sync(session, cid, embedding):
             """Synchronous helper for updating chunk embedding."""
@@ -368,7 +387,7 @@ Examples:
         if args.fix_embeddings:
             from core.graph_db import graph_db
 
-            with graph_db.driver.session() as session:  # type: ignore
+            with graph_db.session_scope() as session:
                 find_and_fix_bad_embeddings(session, apply=args.apply)
 
         if args.clear:

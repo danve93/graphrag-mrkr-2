@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.21
+    container_name: amber_neo4j_compose
+    environment:
+      - NEO4J_AUTH=${NEO4J_AUTH}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD", "cypher-shell", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

@@ -25,6 +25,7 @@ from config.settings import settings
 from core.graph_db import graph_db
 from neo4j.exceptions import ServiceUnavailable
 from ingestion.document_processor import EntityExtractionState, document_processor
+from core.singletons import get_response_cache, get_blocking_executor, SHUTTING_DOWN
 
 logger = logging.getLogger(__name__)
 
@@ -314,9 +315,25 @@ async def _run_chunk_job(
     progress.document_id = doc_id
 
     loop = asyncio.get_running_loop()
-    estimated_chunks = await loop.run_in_executor(
-        None, partial(_estimate_total_chunks_for_path, file_path)
-    )
+    try:
+        executor = get_blocking_executor()
+        estimated_chunks = await loop.run_in_executor(
+            executor, partial(_estimate_total_chunks_for_path, file_path)
+        )
+    except RuntimeError as e:
+        logger.debug(f"Blocking executor unavailable while estimating chunks: {e}.")
+        if SHUTTING_DOWN:
+            logger.info("Process shutting down; aborting chunk estimation")
+            estimated_chunks = 0
+        else:
+            try:
+                executor = get_blocking_executor()
+                estimated_chunks = await loop.run_in_executor(
+                    executor, partial(_estimate_total_chunks_for_path, file_path)
+                )
+            except Exception as e2:
+                logger.error(f"Failed to schedule chunk estimation: {e2}")
+                estimated_chunks = 0
     if estimated_chunks:
         progress.total_chunks = estimated_chunks
 
@@ -338,7 +355,21 @@ async def _run_chunk_job(
         doc_id,
     )
 
-    result = await loop.run_in_executor(None, process_fn)
+    try:
+        executor = get_blocking_executor()
+        result = await loop.run_in_executor(executor, process_fn)
+    except RuntimeError as e:
+        logger.debug(f"Blocking executor unavailable while processing chunks: {e}.")
+        if SHUTTING_DOWN:
+            logger.info("Process shutting down; aborting chunk processing")
+            result = {"status": "error", "error": "shutting_down"}
+        else:
+            try:
+                executor = get_blocking_executor()
+                result = await loop.run_in_executor(executor, process_fn)
+            except Exception as e2:
+                logger.error(f"Failed to schedule chunk processing: {e2}")
+                result = {"status": "error", "error": str(e2)}
 
     if not result or result.get("status") != "success":
         progress.error = (
@@ -386,7 +417,21 @@ async def _run_entity_job(
         _entity_progress_callback,
     )
 
-    result = await loop.run_in_executor(None, entity_fn)
+    try:
+        executor = get_blocking_executor()
+        result = await loop.run_in_executor(executor, entity_fn)
+    except RuntimeError as e:
+        logger.debug(f"Blocking executor unavailable while extracting entities: {e}.")
+        if SHUTTING_DOWN:
+            logger.info("Process shutting down; aborting entity extraction")
+            result = {"status": "error", "error": "shutting_down"}
+        else:
+            try:
+                executor = get_blocking_executor()
+                result = await loop.run_in_executor(executor, entity_fn)
+            except Exception as e2:
+                logger.error(f"Failed to schedule entity extraction: {e2}")
+                result = {"status": "error", "error": str(e2)}
 
     status = result.get("status") if isinstance(result, dict) else "error"
 
@@ -492,6 +537,18 @@ def _is_document_processing(document_id: Optional[str]) -> bool:
     return _global_processing_state.get("current_document_id") == document_id
 
 
+@router.get("/cache-stats")
+async def get_cache_stats():
+    """
+    Get cache performance statistics.
+    
+    Returns:
+        Dictionary containing cache hit rates, sizes, and metrics
+    """
+    from core.cache_metrics import cache_metrics
+    return cache_metrics.get_report()
+
+
 @router.get("/stats", response_model=DatabaseStats)
 async def get_database_stats():
     """
@@ -590,17 +647,48 @@ async def upload_document(file: UploadFile = File(...)):
 
         # Process the file in a thread pool to avoid blocking
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            document_processor.process_file,
-            file_path,
-            filename  # Pass original filename
-        )
+        try:
+            executor = get_blocking_executor()
+            result = await loop.run_in_executor(
+                executor,
+                document_processor.process_file,
+                file_path,
+                filename,  # Pass original filename
+            )
+        except RuntimeError as e:
+            logger.debug(f"Blocking executor unavailable while processing upload: {e}.")
+            if SHUTTING_DOWN:
+                logger.info("Process shutting down; aborting upload processing")
+                result = {"status": "error", "error": "shutting_down"}
+            else:
+                try:
+                    executor = get_blocking_executor()
+                    result = await loop.run_in_executor(
+                        executor,
+                        document_processor.process_file,
+                        file_path,
+                        filename,
+                    )
+                except Exception as e2:
+                    logger.error(f"Failed to schedule upload processing: {e2}")
+                    result = {"status": "error", "error": str(e2)}
 
         # DO NOT delete the file - we need it for previews
         # The file path is stored in the database and used by the preview endpoint
 
         if result and result.get("status") == "success":
+            # Invalidate response cache on successful upload to avoid stale responses
+            try:
+                get_response_cache().clear()
+                try:
+                    from core.cache_metrics import cache_metrics
+
+                    cache_metrics.record_response_invalidation()
+                except Exception:
+                    pass
+                logger.info("Cleared response cache after document upload: %s", result.get("document_id"))
+            except Exception:
+                logger.warning("Failed to clear response cache after upload")
             return DocumentUploadResponse(
                 filename=filename,
                 status="success",
@@ -660,6 +748,17 @@ async def delete_document(document_id: str):
     
     try:
         graph_db.delete_document(document_id)
+        try:
+            get_response_cache().clear()
+            try:
+                from core.cache_metrics import cache_metrics
+
+                cache_metrics.record_response_invalidation()
+            except Exception:
+                pass
+            logger.info("Cleared response cache after document delete: %s", document_id)
+        except Exception:
+            logger.warning("Failed to clear response cache after document delete")
         return {"status": "success", "message": f"Document {document_id} deleted"}
 
     except Exception as e:
@@ -685,6 +784,17 @@ async def clear_database():
     
     try:
         graph_db.clear_database()
+        try:
+            get_response_cache().clear()
+            try:
+                from core.cache_metrics import cache_metrics
+
+                cache_metrics.record_response_invalidation()
+            except Exception:
+                pass
+            logger.info("Cleared response cache after clear_database")
+        except Exception:
+            logger.warning("Failed to clear response cache after clear_database")
         return {"status": "success", "message": "Database cleared"}
 
     except Exception as e:
@@ -1127,13 +1237,34 @@ async def _process_documents_task(file_ids: List[str]):
                     )
 
             # Process the file
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                document_processor.process_file,
-                file_path,
-                staged_doc.filename,
-                progress_callback
-            )
+            loop = asyncio.get_event_loop()
+            try:
+                executor = get_blocking_executor()
+                result = await loop.run_in_executor(
+                    executor,
+                    document_processor.process_file,
+                    file_path,
+                    staged_doc.filename,
+                    progress_callback,
+                )
+            except RuntimeError as e:
+                logger.debug(f"Blocking executor unavailable while processing file: {e}.")
+                if SHUTTING_DOWN:
+                    logger.info("Process shutting down; aborting file processing")
+                    result = {"status": "error", "error": "shutting_down"}
+                else:
+                    try:
+                        executor = get_blocking_executor()
+                        result = await loop.run_in_executor(
+                            executor,
+                            document_processor.process_file,
+                            file_path,
+                            staged_doc.filename,
+                            progress_callback,
+                        )
+                    except Exception as e2:
+                        logger.error(f"Failed to schedule file processing: {e2}")
+                        result = {"status": "error", "error": str(e2)}
 
             if result and result.get("status") == "success":
                 _processing_progress[file_id].status = "completed"

@@ -26,36 +26,35 @@ export default function CommunitiesSection({
   useEffect(() => {
     const loadCommunities = async () => {
       if (initialCommunities) return
-
       try {
         setLoading(true)
-        const graphData = await api.getGraph({ document_id: documentId, limit: 1000 })
-        
-        if (graphData.nodes.length === 0) {
-          setCommunities([])
-          return
-        }
-
-        // Extract unique communities from nodes
-        const communityMap = new Map<
-          number,
-          { community_id: number; level?: number | null; count: number }
-        >()
-
-        graphData.nodes.forEach((node) => {
-          if (node.community_id !== null && node.community_id !== undefined) {
-            const key = node.community_id
-            const existing = communityMap.get(key) || {
-              community_id: node.community_id,
-              level: node.level,
-              count: 0,
+        performance.mark('communities-load-start')
+        const communityMap = new Map<number, { community_id: number; level?: number | null; count: number }>()
+        let offset = 0
+        const limit = 500 // backend max
+        let hasMore = true
+        let pageCount = 0
+        while (hasMore) {
+          const page = await api.getDocumentEntitiesPaginated(documentId, { limit, offset })
+          pageCount++
+          page.entities.forEach(entity => {
+            if (entity.community_id !== null && entity.community_id !== undefined) {
+              const existing = communityMap.get(entity.community_id) || { community_id: entity.community_id, level: entity.level, count: 0 }
+              existing.count += 1
+              communityMap.set(entity.community_id, existing)
             }
-            existing.count += 1
-            communityMap.set(key, existing)
-          }
-        })
-
-        setCommunities(Array.from(communityMap.values()).sort((a, b) => a.community_id - b.community_id))
+          })
+          hasMore = page.has_more
+          offset += limit
+        }
+        const communitiesArray = Array.from(communityMap.values()).sort((a, b) => a.community_id - b.community_id)
+        setCommunities(communitiesArray)
+        performance.mark('communities-load-end')
+        performance.measure('communities-load', 'communities-load-start', 'communities-load-end')
+        const measure = performance.getEntriesByName('communities-load')[0]
+        if (measure) {
+          console.log(`[Performance] Communities aggregated (${communitiesArray.length} communities from ${pageCount} entity pages) in ${measure.duration.toFixed(2)}ms`)
+        }
       } catch (err) {
         console.error('Failed to load communities:', err)
         setCommunities([])
@@ -63,8 +62,7 @@ export default function CommunitiesSection({
         setLoading(false)
       }
     }
-
-    loadCommunities()
+    void loadCommunities()
   }, [documentId, initialCommunities])
 
   if (loading) {

@@ -151,7 +151,34 @@ class DocumentSummarizer:
 
     def __init__(self):
         """Initialize the document summarizer."""
-        pass
+        self.llm_model = self._load_description_enhancement_model()
+    
+    def _load_description_enhancement_model(self) -> Optional[str]:
+        """Load description enhancement LLM model from RAG tuning config."""
+        from config.settings import load_rag_tuning_config
+        
+        try:
+            rag_config = load_rag_tuning_config()
+            
+            # Check if description enhancement has a specific override
+            if rag_config.get("description_enhancement_llm_override_enabled"):
+                model = rag_config.get("description_enhancement_llm_override_value")
+                if model:
+                    logger.info(f"Using description enhancement LLM model override: {model}")
+                    return model
+            
+            # Fall back to default model from RAG config
+            default_model = rag_config.get("default_llm_model")
+            if default_model:
+                logger.info(f"Using default LLM model for description enhancement: {default_model}")
+                return default_model
+            
+            # No override specified, use system default
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to load RAG tuning config for description enhancement: {e}")
+            return None
 
     def extract_summary(
         self,
@@ -241,8 +268,9 @@ Provide a concise summary (max {max_summary_length} chars), document type, and h
             response = llm_manager.generate_response(
                 prompt=prompt,
                 system_message=system_message,
-                temperature=0.1,  # Low temperature for consistent analysis
-                max_tokens=800  # Limit response to encourage brevity
+                temperature=1.0,  # Default temperature for gpt-4o-mini compatibility
+                max_tokens=800,  # Limit response to encourage brevity
+                model_override=self.llm_model
             )
 
             # Parse the JSON response

@@ -7,7 +7,40 @@ Amber is a document intelligence platform implementing graph-enhanced Retrieval-
 - Keep the README and this file aligned: when you add new capabilities to the RAG pipeline, ingestion flow, or clustering utilities, update both documents with a brief summary and the relevant entry points.
 - When documenting commands, prefer concise bash snippets that can be copied verbatim.
 
+## Implementation Highlights
+
+The following implementation highlights summarize factual, developer-facing features currently present in the codebase:
+
+- Entity accumulation and deduplication: an in-memory graph layer accumulates extracted entities and relationships before persistence. The implementation merges duplicate entities, accumulates descriptions, sums relationship strengths, tracks provenance, and exports batch Cypher (UNWIND) to Neo4j to reduce database round-trips.
+
+- Multi-layer caching system: long-lived service instances include multiple caches — an entity-label TTL cache to reduce Neo4j lookups, an embeddings cache keyed by text+model to avoid duplicate embedding API calls, and a short-TTL retrieval cache for recent query results. Cache metrics are exported via an API endpoint for observation.
+
+- Document conversion integration: the ingestion pipeline supports a high-accuracy document conversion tool integration that can be used in-process, via CLI, or via a small server. Modes include LLM-assisted extraction, OCR, and table merging, and the integration is configurable for device and runtime settings.
+
+- UI robustness and design updates: layout corrections (removal of top padding on scroll containers), tooltip refactor to avoid adding positional wrapper elements, defensive color parsing, and community-color rendering improvements. The UI also adopts a tokenized design system (spacing, typography, color tokens) and simplified animations.
+
+These highlights are factual summaries of implemented behavior and do not reference external documentation paths.
+
 ## Architecture
+
+### Performance Caching Layer (TrustGraph-Inspired)
+Amber implements a multi-layer caching system based on TrustGraph's performance optimization patterns, providing 30-50% latency reduction for repeated queries:
+
+- **Singleton Manager** (`core/singletons.py`): Thread-safe singleton pattern for long-lived service instances:
+  - Neo4j driver with connection pooling (50 connections)
+  - Entity label cache (TTLCache: 5000 entries, 300s TTL, 70-80% hit rate)
+  - Embedding cache (LRUCache: 10000 entries, no TTL, 40-60% hit rate)
+  - Retrieval cache (TTLCache: 1000 entries, 60s TTL, 20-30% hit rate)
+
+- **Entity Label Caching** (`core/graph_db.py`): `get_entity_label_cached()` reduces database queries by caching entity name lookups. Used in multi-hop reasoning and graph expansion.
+
+- **Embedding Caching** (`core/embeddings.py`): `get_embedding()` caches embeddings by text+model hash, eliminating redundant API calls for duplicate text.
+
+- **Retrieval Caching** (`rag/retriever.py`): `hybrid_retrieval()` caches results by query+parameters hash with short TTL for consistency with document updates.
+
+- **Cache Monitoring** (`core/cache_metrics.py`): CacheMetrics tracks hit/miss rates. API endpoint at `/api/database/cache-stats` provides real-time metrics.
+
+- **Feature Flag**: `ENABLE_CACHING` setting allows instant rollback if issues occur.
 
 ### Core Pipeline (LangGraph State Machine)
 The RAG pipeline in `rag/graph_rag.py` uses LangGraph's StateGraph to implement a modular pipeline that can be observed and tuned at runtime. Typical stages include:
@@ -30,6 +63,7 @@ State Management: the pipeline uses plain dict-based `state` objects; each node 
 - **Entity extraction** (`core/entity_extraction.py`): optional LLM-based extraction that creates Entity nodes, chunk-entity relationships, and entity embeddings. Extraction may run synchronously for tests or asynchronously in background threads for production ingestion.
 - **Quality scoring & filtering** (`core/quality_scorer.py`): filters or marks low-quality chunks to improve retrieval and grounding.
 - **Graph persistence** (`core/graph_db.py`): creates Document, Chunk, and Entity nodes and the relationship edges used for expansion and clustering.
+- **Entity clustering** (`core/graph_clustering.py`): optional Leiden community detection that groups related entities into semantic clusters. After ingestion, entities connected by strong relationships are assigned `community_id` properties. These communities are visualized with distinct colors in GraphView, can be filtered in the UI, and optionally summarized with LLM-generated descriptions via `core/community_summarizer.py`.
 
 The `DocumentProcessor` exposes synchronous and asynchronous entry points, supports chunk-only ingestion, and tracks background entity extraction operations so the UI can display progress and status.
 
@@ -80,14 +114,16 @@ Settings live in `config/settings.py` and can be set through environment variabl
 - **Concurrency & Rate Limits**: `embedding_concurrency`, `llm_concurrency`, `embedding_delay_min/max`, `llm_delay_min/max`.
 - **Retrieval & Expansion**: `hybrid_chunk_weight`, `hybrid_entity_weight`, `max_expanded_chunks`, `max_expansion_depth`, `expansion_similarity_threshold`.
 - **Reranking**: `flashrank_enabled`, `flashrank_model_name`, `flashrank_max_candidates`, `flashrank_blend_weight`, `flashrank_batch_size`.
+- **Caching**: `enable_caching`, `entity_label_cache_size`, `entity_label_cache_ttl`, `embedding_cache_size`, `retrieval_cache_size`, `retrieval_cache_ttl`, `neo4j_max_connection_pool_size`.
 - **Entity / OCR**: `enable_entity_extraction`, `SYNC_ENTITY_EMBEDDINGS`, `enable_ocr`, `ocr_quality_threshold`.
+- **Clustering**: `enable_clustering`, `enable_graph_clustering`, `clustering_resolution`, `clustering_min_edge_weight`, `clustering_relationship_types`, `clustering_level`.
 
 ### Development Workflow
 - Create and activate a virtualenv: `python3 -m venv .venv && source .venv/bin/activate`.
 - Install backend deps: `pip install -r requirements.txt`.
 - Copy `.env.example` → `.env` and fill credentials (OpenAI, Neo4j, optional FlashRank cache path).
 - Start backend: `python api/main.py` (reload enabled) and frontend: `cd frontend && npm run dev`.
-- Tests: `pytest api/tests/` and `cd frontend && npm run test`.
+- Tests: `pytest tests/` and `cd frontend && npm run test`.
 - Use `SYNC_ENTITY_EMBEDDINGS=1` for deterministic entity extraction runs in test environments.
 
 ## Code Patterns & Conventions
@@ -134,6 +170,6 @@ Do NOT commit secrets or hardcoded API keys. Use environment variables and `.env
 Operational notes:
 - **Reranker prewarm**: `api/main.py` will attempt to import and prewarm FlashRank when `flashrank_enabled` is true; failures are logged and do not prevent startup.
 - **Chat tuning**: tuning values are applied as runtime defaults and can be used to override retrieval/generation parameters without restarting the server.
-- **Clustering**: Leiden clustering requires Neo4j with GDS and sufficient memory; use `scripts/run_clustering.py` and `scripts/build_leiden_projection.py`.
+- **Clustering**: Leiden community detection groups related entities into semantic clusters. Entities connected by strong relationships (via `RELATED_TO`, `SIMILAR_TO` edges) receive `community_id` assignments that are visualized with distinct colors in GraphView. Run manually via `scripts/run_clustering.py` or automatically during reindexing when `ENABLE_CLUSTERING=true`. Configure resolution (granularity), min edge weight (filter weak connections), and relationship types in settings. Optional community summaries generated via `core/community_summarizer.py` provide LLM-generated descriptions of each cluster's theme and members.
 
 For deeper details see source files under `api/`, `ingestion/`, `core/`, and `rag/`.

@@ -1,71 +1,108 @@
 name: CI
 
 on:
-  push:
-  pull_request:
+  name: CI
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    services:
-      neo4j:
-        image: neo4j:5.21
-        env:
-          NEO4J_AUTH: neo4j/test
-        ports:
-          - 7687:7687
-        options: >-
-          --health-cmd="cypher-shell --version || exit 1"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  on:
+    push:
+    pull_request:
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            gcc \
-            g++ \
-            pkg-config \
-            libgl1 \
-            libglvnd0 \
-            libglib2.0-0 \
-            libsm6 \
-            libxrender1 \
-            libxext6 \
-            poppler-utils \
-            tesseract-ocr \
-            tesseract-ocr-eng \
-            ca-certificates
+  jobs:
+    unit-tests:
+      name: Unit Tests
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+        - name: Set up Python
+          uses: actions/setup-python@v4
+          with:
+            python-version: '3.11'
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+        - name: Cache pip dependencies
+          uses: actions/cache@v4
+          with:
+            path: ~/.cache/pip
+            key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+            restore-keys: |
+              ${{ runner.os }}-pip-
 
-      - name: Install dependencies
-        run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install -r requirements.txt
+        - name: Install dependencies
+          run: |
+            python -m venv .venv
+            . .venv/bin/activate
+            pip install -r requirements.txt
 
-      - name: Run tests
-        env:
-          NEO4J_URI: bolt://localhost:7687
-          NEO4J_USER: neo4j
-          NEO4J_PASSWORD: test
-        run: |
-          . .venv/bin/activate
-          pytest -q
+        - name: Run unit tests
+          run: |
+            . .venv/bin/activate
+            pytest -q tests/unit/
+
+    e2e:
+      name: E2E Tests
+      needs: unit-tests
+      if: github.ref == 'refs/heads/main' || github.event_name == 'push'
+      runs-on: ubuntu-latest
+      services:
+        neo4j:
+          image: neo4j:5.21
+          env:
+            NEO4J_AUTH: neo4j/test
+          ports:
+            - 7687:7687
+          options: >-
+            --health-cmd="cypher-shell --version || exit 1"
+            --health-interval=10s
+            --health-timeout=5s
+            --health-retries=5
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+
+        - name: Install system dependencies
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y \
+              build-essential \
+              gcc \
+              g++ \
+              pkg-config \
+              libgl1 \
+              libglvnd0 \
+              libglib2.0-0 \
+              libsm6 \
+              libxrender1 \
+              libxext6 \
+              poppler-utils \
+              tesseract-ocr \
+              tesseract-ocr-eng \
+              ca-certificates
+
+        - name: Set up Python
+          uses: actions/setup-python@v4
+          with:
+            python-version: '3.11'
+
+        - name: Cache pip dependencies
+          uses: actions/cache@v4
+          with:
+            path: ~/.cache/pip
+            key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+            restore-keys: |
+              ${{ runner.os }}-pip-
+
+        - name: Install dependencies
+          run: |
+            python -m venv .venv
+            . .venv/bin/activate
+            pip install -r requirements.txt
+
+        - name: Run E2E tests
+          env:
+            NEO4J_URI: bolt://localhost:7687
+            NEO4J_USER: neo4j
+            NEO4J_PASSWORD: test
+          run: |
+            . .venv/bin/activate
+            pytest -q tests/e2e/

@@ -13,38 +13,38 @@ const STAGES: Record<string, Stage> = {
   query_analysis: {
     id: 'query_analysis',
     label: 'Analyzing Query',
-    emoji: '🔍',
-    color: 'from-blue-500 to-cyan-500',
+    emoji: '',
+    color: '',
   },
   retrieval: {
     id: 'retrieval',
     label: 'Retrieving Documents',
-    emoji: '📚',
-    color: 'from-purple-500 to-pink-500',
+    emoji: '',
+    color: '',
   },
   graph_reasoning: {
     id: 'graph_reasoning',
     label: 'Graph Reasoning',
-    emoji: '🧠',
-    color: 'from-indigo-500 to-purple-500',
+    emoji: '',
+    color: '',
   },
   generation: {
     id: 'generation',
     label: 'Generating Response',
-    emoji: '✍️',
-    color: 'from-yellow-500 to-orange-500',
+    emoji: '',
+    color: '',
   },
   quality_calculation: {
     id: 'quality_calculation',
     label: 'Quality Check',
-    emoji: '✅',
-    color: 'from-green-400 to-green-600',
+    emoji: '',
+    color: '',
   },
   suggestions: {
     id: 'suggestions',
     label: 'Preparing Suggestions',
-    emoji: '💡',
-    color: 'from-pink-500 to-rose-500',
+    emoji: '',
+    color: '',
   },
 }
 
@@ -102,16 +102,16 @@ export default function LoadingIndicator({
   if (!isLoading) {
     return (
       <div className="w-full space-y-2">
-        {/* Progress bar at 100% - solid green */}
-        <div className="relative h-1 bg-secondary-200 rounded-full overflow-hidden">
+        {/* Progress bar at 100% - solid color */}
+        <div className="relative h-1 rounded-full overflow-hidden" style={{ background: 'var(--gray-200)' }}>
           <div
-            className="h-full bg-gradient-to-r from-green-400 to-green-600"
-            style={{ width: '100%' }}
+            className="h-full"
+            style={{ width: '100%', background: 'var(--accent-primary)' }}
           ></div>
         </div>
 
-        {/* Stage history dots - all completed are green, skipped are grey */}
-        <div className="flex gap-2 items-center justify-center py-2">
+        {/* Stage history dots */}
+        <div className="flex items-center justify-center" style={{ gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           {Object.values(STAGES).map((s) => {
             const isCompleted = isStageCompleted(s.id)
             return (
@@ -121,11 +121,15 @@ export default function LoadingIndicator({
                 title={s.label}
               >
                 <div
-                  className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                    isCompleted ? 'bg-green-500' : 'bg-secondary-300'
-                  }`}
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: isCompleted ? 'var(--accent-primary)' : 'var(--gray-300)',
+                    transition: 'all var(--timing-normal) var(--easing-standard)'
+                  }}
                 ></div>
-                <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 bg-secondary-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" style={{ padding: 'var(--space-1) var(--space-2)', background: 'var(--gray-800)', color: 'white' }}>
                   {s.label}
                 </div>
               </div>
@@ -136,20 +140,15 @@ export default function LoadingIndicator({
     )
   }
 
-  // Loading state - show full interactive display with animations
+  // Loading state
   return (
     <div className="w-full">
       <style>{`
-        @keyframes pulse-glow {
-          0%, 100% {
-            box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
-          }
-          50% {
-            box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
-          }
+        .animate-slide-in {
+          animation: slideIn var(--timing-normal) var(--easing-standard);
         }
 
-        @keyframes slide-in {
+        @keyframes slideIn {
           from {
             opacity: 0;
             transform: translateX(-10px);
@@ -159,74 +158,29 @@ export default function LoadingIndicator({
             transform: translateX(0);
           }
         }
-
-        @keyframes bounce-smooth {
-          0%, 100% {
-            transform: translateY(0);
-          }
-          50% {
-            transform: translateY(-4px);
-          }
-        }
-
-        @keyframes shimmer {
-          0% {
-            background-position: -1000px 0;
-          }
-          100% {
-            background-position: 1000px 0;
-          }
-        }
-
-        .animate-pulse-glow {
-          animation: pulse-glow 2s infinite;
-        }
-
-        .animate-slide-in {
-          animation: slide-in 0.3s ease-out;
-        }
-
-        .animate-bounce-smooth {
-          animation: bounce-smooth 1.5s ease-in-out infinite;
-        }
-
-        .animate-shimmer {
-          background: linear-gradient(
-            90deg,
-            rgba(255, 255, 255, 0) 0%,
-            rgba(255, 255, 255, 0.3) 50%,
-            rgba(255, 255, 255, 0) 100%
-          );
-          background-size: 1000px 100%;
-          animation: shimmer 2s infinite;
-        }
       `}</style>
 
-      <div className="space-y-3">
-        {/* Current stage with pulsing indicator */}
-        <div className="flex items-center gap-3 animate-slide-in">
-          <div className="relative">
-            <div className="w-3 h-3 rounded-full animate-pulse-glow" style={{ backgroundColor: 'var(--primary-500)' }}></div>
-            <div className="absolute inset-0 w-3 h-3 rounded-full opacity-30" style={{ backgroundColor: 'var(--primary-500)' }}></div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-lg animate-bounce-smooth">{stage.emoji}</span>
-            <span className="text-sm font-medium text-secondary-700 dark:text-secondary-300">{stage.label}</span>
-          </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+        {/* Current stage with spinner */}
+        <div className="flex items-center animate-slide-in" style={{ gap: 'var(--space-3)' }}>
+          <div className="spinner" style={{ width: '12px', height: '12px' }} />
+          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--text-secondary)' }}>{stage.label}</span>
         </div>
 
-        {/* Progress bar with gradient */}
-        <div className="relative h-1 bg-secondary-200 dark:bg-secondary-700 rounded-full overflow-hidden">
+        {/* Progress bar */}
+        <div className="relative h-1 rounded-full overflow-hidden" style={{ background: 'var(--gray-200)' }}>
           <div
-            className={`h-full bg-gradient-to-r ${stage.color} animate-shimmer transition-all duration-500 ease-out`}
+            className="h-full"
             style={{
               width: `${((completedStagesCount + 1) / Object.keys(STAGES).length) * 100}%`,
+              background: 'var(--accent-primary)',
+              transition: 'width var(--timing-slow) var(--easing-standard)'
             }}
           ></div>
         </div>
 
         {/* Stage history dots */}
-        <div className="flex gap-2 items-center justify-center py-2">
+        <div className="flex items-center justify-center" style={{ gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           {Object.values(STAGES).map((s) => {
             const isCompleted = isStageCompleted(s.id)
             const isCurrent = s.id === displayedStage
@@ -234,20 +188,21 @@ export default function LoadingIndicator({
             return (
               <div
                 key={s.id}
-                className="cursor-help group relative transition-all duration-300"
+                className="cursor-help group relative"
                 title={s.label}
               >
                 <div
-                  className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                    isCompleted
-                      ? 'bg-green-500 scale-100'
-                      : !isCurrent
-                        ? 'bg-secondary-300 dark:bg-secondary-600 scale-75'
-                        : 'scale-125 animate-pulse-glow'
-                  }`}
-                  style={isCurrent ? { backgroundColor: 'var(--primary-500)' } : undefined}
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: isCompleted ? 'var(--accent-primary)' : isCurrent ? 'var(--accent-primary)' : 'var(--gray-300)',
+                    opacity: isCurrent ? 0.5 : 1,
+                    transform: isCurrent ? 'scale(1.25)' : 'scale(1)',
+                    transition: 'all var(--timing-normal) var(--easing-standard)'
+                  }}
                 ></div>
-                <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 bg-secondary-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" style={{ padding: 'var(--space-1) var(--space-2)', background: 'var(--gray-800)', color: 'white' }}>
                   {s.label}
                 </div>
               </div>
@@ -255,20 +210,9 @@ export default function LoadingIndicator({
           })}
         </div>
 
-            {/* Processing indicator with animated dots */}
-        <div className="flex items-center justify-center gap-1 text-xs text-secondary-500 dark:text-secondary-400">
+            {/* Processing indicator */}
+        <div className="flex items-center justify-center" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           <span>Processing</span>
-          <span className="inline-flex gap-0.5">
-            <span className="animate-bounce" style={{ animationDelay: '0s' }}>
-              •
-            </span>
-            <span className="animate-bounce" style={{ animationDelay: '0.15s' }}>
-              •
-            </span>
-            <span className="animate-bounce" style={{ animationDelay: '0.3s' }}>
-              •
-            </span>
-          </span>
         </div>
       </div>
     </div>

@@ -11,8 +11,13 @@ services:
     image: neo4j:5.21
     container_name: neo4j
     environment:
-      - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+      - NEO4J_AUTH=${NEO4J_AUTH}
       - NEO4J_PLUGINS=["graph-data-science"]
+      # Memory tuning (reduced defaults for local/dev Docker Desktop)
+      # Adjust these if you have more host memory available.
+      - NEO4J_dbms_memory_heap_max__size=512M
+      - NEO4J_dbms_memory_pagecache_size=512M
+      - NEO4J_dbms_memory_transaction_total_max=1G
     ports:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
@@ -23,8 +28,9 @@ services:
     networks:
       - graphrag_network
     restart: unless-stopped
+    # Use cypher-shell for healthcheck (curl isn't installed in the base image)
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "bin/cypher-shell -u neo4j -p \"$NEO4J_AUTH\" \"RETURN 1\" >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -41,7 +47,13 @@ services:
       # LLM provider selection: 'openai' or 'ollama'
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       # Neo4j Configuration - connecting to the neo4j service
-      - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
+      # Use the container-internal Neo4j address by default. This avoids
+      # accidental host-level overrides (e.g. NEO4J_URI=bolt://localhost:7687)
+      # being propagated into containers which would make them try to
+      # connect to their own localhost. To intentionally point services
+      # at a different Neo4j instance, set `NEO4J_URI` in the service
+      # `env_file` or override the compose file at deploy time.
+      - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USERNAME=${NEO4J_USERNAME}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       # Application Configuration
@@ -68,6 +80,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+    user: "0:0"  # Run as root to ensure data directory write permissions
 
   frontend:
     build:
@@ -88,7 +101,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000 || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -112,7 +125,7 @@ services:
       - ./.env
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
+      - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USERNAME=${NEO4J_USERNAME}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -127,6 +140,30 @@ services:
       - backend
     restart: unless-stopped
     command: ["python", "-m", "scripts.run_redis_job_worker"]
+    user: "0:0"  # Run as root to ensure data directory write permissions
+
+  flashrank-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: graphrag-flashrank-worker
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=${NEO4J_USERNAME}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FLASHRANK_PREWARM_IN_PROCESS=${FLASHRANK_PREWARM_IN_PROCESS:-false}
+    volumes:
+      - ./:/app
+      - ./data/flashrank_cache:/app/data/flashrank_cache
+    working_dir: /app
+    networks:
+      - graphrag_network
+    depends_on:
+      - neo4j
+    restart: "no"
+    command: ["python", "-m", "scripts.flashrank_prewarm_worker"]
+    user: "0:0"
 
 networks:
   graphrag_network:

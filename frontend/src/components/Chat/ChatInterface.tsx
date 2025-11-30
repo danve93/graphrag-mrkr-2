@@ -452,7 +452,7 @@ export default function ChatInterface() {
       {/* New Chat button is shown in empty-state below the tabs */}
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
@@ -517,7 +517,7 @@ export default function ChatInterface() {
       </div>
 
       {/* Input */}
-      <div className="flex-shrink-0 border-t border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4">
+      <div className="flex-shrink-0 border-t px-6 py-4" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
         <div className="max-w-4xl mx-auto">
           <ChatInput
             onSend={handleSendMessage}

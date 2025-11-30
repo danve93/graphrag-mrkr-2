@@ -17,8 +17,11 @@ from core.chunking import document_chunker
 from core.document_summarizer import document_summarizer
 from core.embeddings import embedding_manager
 from core.entity_extraction import EntityExtractor
+from core.singletons import get_response_cache, get_blocking_executor, SHUTTING_DOWN
+from core.entity_graph import EntityGraph
 from core.graph_db import graph_db
 from ingestion.converters import document_converter
+# (get_response_cache imported above)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,29 @@ class DocumentProcessor:
         timestamp = str(time.time())
         content = f"{doc_id}_{operation_type}_{timestamp}"
         return hashlib.md5(content.encode()).hexdigest()[:16]
+
+    def _get_gleaning_config(self, document_type: Optional[str] = None) -> tuple:
+        """
+        Determine gleaning configuration based on settings and document type.
+        
+        Returns:
+            (use_gleaning: bool, max_gleanings: int)
+        """
+        if not settings.enable_gleaning:
+            return False, 0
+        
+        # Check document-type-specific override
+        if document_type and document_type in settings.gleaning_by_doc_type:
+            max_gleanings = settings.gleaning_by_doc_type[document_type]
+            logger.info(
+                f"Using type-specific gleaning for '{document_type}': {max_gleanings} passes"
+            )
+            return max_gleanings > 0, max_gleanings
+        
+        # Use default
+        max_gleanings = settings.max_gleanings
+        logger.info(f"Using default gleaning: {max_gleanings} passes")
+        return max_gleanings > 0, max_gleanings
 
     def _prepare_chunks_for_extraction(
         self, doc_id: str, processed_chunks: Optional[List[Dict[str, Any]]] = None
@@ -453,8 +479,9 @@ class DocumentProcessor:
             loop = asyncio.get_running_loop()
             try:
                 logger.debug("Persisting chunk %s to DB (doc: %s)", chunk_id, doc_id)
+                executor = get_blocking_executor()
                 await loop.run_in_executor(
-                    None,
+                    executor,
                     graph_db.create_chunk_node,
                     chunk_id,
                     doc_id,
@@ -463,8 +490,30 @@ class DocumentProcessor:
                     metadata,
                 )
                 logger.debug("Persisted chunk %s to DB", chunk_id)
-            except Exception as e:
-                logger.error("Failed to persist chunk %s to DB: %s", chunk_id, e)
+            except RuntimeError as e:
+                logger.debug(
+                    f"Blocking executor unavailable while persisting chunk {chunk_id}: {e}."
+                )
+                if SHUTTING_DOWN:
+                    logger.info(
+                        "Process shutting down; aborting persist for chunk %s",
+                        chunk_id,
+                    )
+                else:
+                    try:
+                        executor = get_blocking_executor()
+                        await loop.run_in_executor(
+                            executor,
+                            graph_db.create_chunk_node,
+                            chunk_id,
+                            doc_id,
+                            content,
+                            embedding,
+                            metadata,
+                        )
+                        logger.debug("Persisted chunk %s to DB", chunk_id)
+                    except Exception as e2:
+                        logger.error("Failed to persist chunk %s to DB: %s", chunk_id, e2)
 
             # Report progress
             processed_count += 1
@@ -484,10 +533,159 @@ class DocumentProcessor:
 
         return processed_chunks
 
+    async def _persist_with_entity_graph(
+        self,
+        entity_dict: Dict,
+        relationship_dict: Dict,
+        doc_id: str
+    ) -> Dict[str, Any]:
+        """
+        Persist entities/relationships via NetworkX EntityGraph (Phase 2).
+        
+        Flow:
+        1. Build EntityGraph from extracted entities
+        2. Apply deduplication and accumulation
+        3. Filter by importance/strength thresholds
+        4. Convert to batch UNWIND queries
+        5. Execute in single transaction
+        6. Return metrics
+        
+        Returns:
+            Dict with metrics (entities_unique, relationships_unique, etc.)
+        """
+        try:
+            logger.info(f"Using Phase 2 (NetworkX) persistence for doc {doc_id}")
+            
+            # Build EntityGraph
+            entity_graph = EntityGraph()
+            
+            # Add all entities (with importance filtering)
+            entities_added = 0
+            for entity in entity_dict.values():
+                if entity.importance_score >= settings.importance_score_threshold:
+                    entity_graph.add_entity(
+                        name=entity.name,
+                        type=entity.type,
+                        description=entity.description,
+                        importance_score=entity.importance_score,
+                        source_chunks=entity.source_chunks or []
+                    )
+                    entities_added += 1
+            
+            logger.debug(f"Added {entities_added} entities to graph (filtered by importance >= {settings.importance_score_threshold})")
+            
+            # Add all relationships (with strength filtering)
+            relationships_added = 0
+            for relationships in relationship_dict.values():
+                for rel in relationships:
+                    if rel.strength >= settings.strength_threshold:
+                        entity_graph.add_relationship(
+                            source=rel.source_entity,
+                            target=rel.target_entity,
+                            rel_type=rel.relationship_type or "RELATED_TO",
+                            description=rel.description or "",
+                            strength=rel.strength,
+                            source_chunks=rel.source_chunks or []
+                        )
+                        relationships_added += 1
+            
+            logger.debug(f"Added {relationships_added} relationships to graph (filtered by strength >= {settings.strength_threshold})")
+            
+            # === PHASE 4: Summarize Descriptions (if enabled) ===
+            summarization_stats = {"status": "disabled"}
+            if settings.enable_description_summarization:
+                logger.info("Phase 4: Summarizing entity/relationship descriptions")
+                try:
+                    summarization_stats = await entity_graph.summarize_descriptions()
+                    logger.info(
+                        f"Summarization complete: {summarization_stats.get('entities_summarized', 0)} entities, "
+                        f"{summarization_stats.get('relationships_summarized', 0)} relationships, "
+                        f"{summarization_stats.get('average_compression_ratio', 1.0):.1%} compression"
+                    )
+                except Exception as e:
+                    logger.error(f"Phase 4 summarization failed: {e}", exc_info=True)
+                    summarization_stats = {"status": "error", "error": str(e)}
+            
+            # Get graph stats before persistence
+            stats = entity_graph.get_stats()
+            
+            # Convert to batch queries
+            entity_query, entity_params, rel_query, rel_params = \
+                entity_graph.to_neo4j_batch_queries(doc_id)
+            
+            # Execute batch insert
+            batch_result = graph_db.execute_batch_unwind(
+                entity_query, entity_params,
+                rel_query, rel_params
+            )
+            
+            logger.info(
+                f"Phase 2 persistence complete: {stats['node_count']} unique entities, "
+                f"{stats['edge_count']} unique relationships, "
+                f"{stats['orphan_count']} orphans, "
+                f"{batch_result['batches']} batches"
+            )
+            
+            # Return metrics
+            return {
+                "status": "success",
+                "phase": "phase2",
+                "entities_extracted": len(entity_dict),
+                "entities_unique": stats["node_count"],
+                "entities_merged": len(entity_dict) - stats["node_count"],
+                "relationships_extracted": sum(len(rels) for rels in relationship_dict.values()),
+                "relationships_unique": stats["edge_count"],
+                "orphan_entities": stats["orphan_count"],
+                "batches": batch_result["batches"],
+                "entities_created": batch_result.get("entities_created", stats["node_count"]),
+                "relationships_created": batch_result.get("relationships_created", stats["edge_count"]),
+                "summarization": summarization_stats  # Phase 4 stats
+            }
+        
+        except Exception as e:
+            logger.error(f"Phase 2 persistence failed for doc {doc_id}: {e}", exc_info=True)
+            raise
+    
     async def _create_entities_async(
         self, entity_dict, relationship_dict, doc_id_local: str
     ) -> tuple[int, int]:
-        """Asynchronously create entities and relationships with parallel embedding generation."""
+        """
+        Create entities and relationships - routes to Phase 1 or Phase 2.
+        
+        Phase 1 (default): Individual transactions per entity/relationship
+        Phase 2 (opt-in): NetworkX intermediate graph + batch UNWIND
+        """
+        # Check if Phase 2 is enabled
+        if settings.enable_phase2_networkx:
+            try:
+                loop = asyncio.get_event_loop()
+                try:
+                    executor = get_blocking_executor()
+                    metrics = await loop.run_in_executor(
+                        executor,
+                        lambda: asyncio.run(self._persist_with_entity_graph(
+                            entity_dict, relationship_dict, doc_id_local
+                        ))
+                    )
+                except RuntimeError as e:
+                    logger.warning(f"Blocking executor unavailable for Phase 2 persistence: {e}.")
+                    if SHUTTING_DOWN:
+                        logger.info("Process shutting down; aborting Phase 2 persistence")
+                        raise
+                    executor = get_blocking_executor()
+                    metrics = await loop.run_in_executor(
+                        executor,
+                        lambda: asyncio.run(self._persist_with_entity_graph(
+                            entity_dict, relationship_dict, doc_id_local
+                        ))
+                    )
+                return (metrics["entities_unique"], metrics["relationships_unique"])
+            except Exception as e:
+                logger.error(f"Phase 2 failed, falling back to Phase 1: {e}")
+                # Fall through to Phase 1
+        
+        # Phase 1 implementation (original)
+        logger.info(f"Using Phase 1 (direct) persistence for doc {doc_id_local}")
         created_entities = 0
         created_relationships = 0
 
@@ -517,14 +715,34 @@ class DocumentProcessor:
                         entity.source_text_units or entity.source_chunks or []
                     ):
                         try:
-                            await loop.run_in_executor(
-                                None,
-                                graph_db.create_chunk_entity_relationship,
-                                chunk_id,
-                                entity_id,
-                            )
+                            try:
+                                executor = get_blocking_executor()
+                                await loop.run_in_executor(
+                                    executor,
+                                    graph_db.create_chunk_entity_relationship,
+                                    chunk_id,
+                                    entity_id,
+                                )
+                            except RuntimeError as e:
+                                logger.debug(
+                                    f"Blocking executor unavailable while creating chunk-entity rel {chunk_id}->{entity_id}: {e}"
+                                )
+                                if SHUTTING_DOWN:
+                                    logger.info(
+                                        "Process shutting down; aborting chunk-entity rel %s->%s",
+                                        chunk_id,
+                                        entity_id,
+                                    )
+                                    continue
+                                executor = get_blocking_executor()
+                                await loop.run_in_executor(
+                                    executor,
+                                    graph_db.create_chunk_entity_relationship,
+                                    chunk_id,
+                                    entity_id,
+                                )
                         except Exception as e:
-                            logger.debug(
+                            logger.error(
                                 f"Failed to create chunk-entity rel {chunk_id}->{entity_id}: {e}"
                             )
                     created_entities += 1
@@ -735,25 +953,63 @@ class DocumentProcessor:
 
                 # Synchronous path (tests/deterministic runs) when sync_entity_embeddings enabled
                 if getattr(settings, "sync_entity_embeddings", False):
-                    logger.info(
-                        "Running synchronous entity extraction (SYNC_ENTITY_EMBEDDINGS enabled) for %s chunks...",
-                        len(chunks_for_extraction),
-                    )
+                    # Determine gleaning configuration
+                    use_gleaning, max_gleanings = self._get_gleaning_config(document_type=None)
+                    
+                    if use_gleaning:
+                        logger.info(
+                            "Running synchronous GLEANING extraction for %s chunks (max_gleanings=%s)...",
+                            len(chunks_for_extraction),
+                            max_gleanings
+                        )
+                    else:
+                        logger.info(
+                            "Running synchronous entity extraction (SYNC_ENTITY_EMBEDDINGS enabled) for %s chunks...",
+                            len(chunks_for_extraction),
+                        )
+                    
                     try:
                         try:
-                            entity_dict, relationship_dict = asyncio.run(
-                                extractor.extract_from_chunks(chunks_for_extraction)
-                            )
+                            if use_gleaning:
+                                entity_dict, relationship_dict = asyncio.run(
+                                    extractor.extract_from_chunks_with_gleaning(
+                                        chunks_for_extraction,
+                                        max_gleanings=max_gleanings,
+                                        document_type=None
+                                    )
+                                )
+                            else:
+                                entity_dict, relationship_dict = asyncio.run(
+                                    extractor.extract_from_chunks(chunks_for_extraction)
+                                )
                         except RuntimeError:
                             loop = asyncio.get_event_loop()
                             if loop.is_running():
-                                entity_dict, relationship_dict = loop.run_until_complete(
-                                    extractor.extract_from_chunks(chunks_for_extraction)
-                                )
+                                if use_gleaning:
+                                    entity_dict, relationship_dict = loop.run_until_complete(
+                                        extractor.extract_from_chunks_with_gleaning(
+                                            chunks_for_extraction,
+                                            max_gleanings=max_gleanings,
+                                            document_type=None
+                                        )
+                                    )
+                                else:
+                                    entity_dict, relationship_dict = loop.run_until_complete(
+                                        extractor.extract_from_chunks(chunks_for_extraction)
+                                    )
                             else:
-                                entity_dict, relationship_dict = loop.run_until_complete(
-                                    extractor.extract_from_chunks(chunks_for_extraction)
-                                )
+                                if use_gleaning:
+                                    entity_dict, relationship_dict = loop.run_until_complete(
+                                        extractor.extract_from_chunks_with_gleaning(
+                                            chunks_for_extraction,
+                                            max_gleanings=max_gleanings,
+                                            document_type=None
+                                        )
+                                    )
+                                else:
+                                    entity_dict, relationship_dict = loop.run_until_complete(
+                                        extractor.extract_from_chunks(chunks_for_extraction)
+                                    )
 
                         created_entities, created_relationships, metrics = self._persist_extraction_results(
                             doc_id, chunks_for_extraction, entity_dict, relationship_dict
@@ -808,16 +1064,35 @@ class DocumentProcessor:
                                 f"Background entity extraction started for document {doc_id_local} (operation: {operation_id})"
                             )
 
-                            # Phase 1: LLM extraction
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.LLM_EXTRACTION,
-                                "Running LLM entity extraction",
-                            )
-                            try:
-                                entity_dict, relationship_dict = asyncio.run(
-                                    extractor.extract_from_chunks(chunks_local)
+                            # Phase 1: LLM extraction (with optional gleaning)
+                            use_gleaning, max_gleanings = self._get_gleaning_config(document_type=None)
+                            
+                            if use_gleaning:
+                                self._update_entity_operation(
+                                    operation_id,
+                                    EntityExtractionState.LLM_EXTRACTION,
+                                    f"Running gleaning entity extraction ({max_gleanings} passes)",
                                 )
+                            else:
+                                self._update_entity_operation(
+                                    operation_id,
+                                    EntityExtractionState.LLM_EXTRACTION,
+                                    "Running LLM entity extraction",
+                                )
+                            
+                            try:
+                                if use_gleaning:
+                                    entity_dict, relationship_dict = asyncio.run(
+                                        extractor.extract_from_chunks_with_gleaning(
+                                            chunks_local,
+                                            max_gleanings=max_gleanings,
+                                            document_type=None
+                                        )
+                                    )
+                                else:
+                                    entity_dict, relationship_dict = asyncio.run(
+                                        extractor.extract_from_chunks(chunks_local)
+                                    )
                             except Exception as e:
                                 logger.error(
                                     f"Entity extractor failed in background for {doc_id_local}: {e}"
@@ -924,14 +1199,17 @@ class DocumentProcessor:
                                 pass
 
                     # Start thread and track it so the UI can detect background work
-                    t = threading.Thread(
-                        target=_background_entity_worker,
-                        args=(doc_id, chunks_for_extraction),
-                        daemon=True,
-                    )
-                    with self._bg_lock:
-                        self._bg_entity_threads.append(t)
-                    t.start()
+                    if SHUTTING_DOWN:
+                        logger.info("Skipping background entity extraction for %s: shutting down", doc_id)
+                    else:
+                        t = threading.Thread(
+                            target=_background_entity_worker,
+                            args=(doc_id, chunks_for_extraction),
+                            daemon=True,
+                        )
+                        with self._bg_lock:
+                            self._bg_entity_threads.append(t)
+                        t.start()
 
             # Create similarity relationships between chunks
             try:
@@ -974,6 +1252,20 @@ class DocumentProcessor:
             # add processing duration
             duration = time.time() - start_time
             result["duration_seconds"] = duration
+
+            # Invalidate response cache after successful processing to avoid stale answers
+            try:
+                cache = get_response_cache()
+                cache.clear()
+                try:
+                    from core.cache_metrics import cache_metrics
+
+                    cache_metrics.record_response_invalidation()
+                except Exception:
+                    pass
+                logger.info("Cleared response cache after processing document: %s", doc_id)
+            except Exception as e:
+                logger.warning("Failed to clear response cache after processing: %s", e)
 
             # Print to stdout for quick feedback
             print(

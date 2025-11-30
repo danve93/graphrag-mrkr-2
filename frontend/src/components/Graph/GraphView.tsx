@@ -34,10 +34,11 @@ const COMMUNITY_COLORS = [
 ]
 
 function getCommunityColor(communityId?: number | null) {
-  if (communityId === undefined || communityId === null) {
-    return '#9ca3af'
-  }
-  const idx = Math.abs(communityId) % COMMUNITY_COLORS.length
+  // Defensive: coerce to number and ensure finiteness. If invalid, return default grey.
+  if (communityId === undefined || communityId === null) return '#9ca3af'
+  const idNum = Number(communityId)
+  if (!Number.isFinite(idNum)) return '#9ca3af'
+  const idx = Math.abs(Math.trunc(idNum)) % COMMUNITY_COLORS.length
   return COMMUNITY_COLORS[idx]
 }
 
@@ -66,6 +67,7 @@ export default function GraphView() {
       const response = await api.getGraph({
         community_id: selectedCommunity !== 'all' ? Number(selectedCommunity) : undefined,
         node_type: selectedNodeType !== 'all' ? selectedNodeType : undefined,
+        limit: 100,
       })
       setGraphData({ nodes: response.nodes, edges: response.edges })
       setCommunities(response.communities)
@@ -132,6 +134,20 @@ export default function GraphView() {
     [graphData.edges, graphData.nodes]
   )
 
+  // Resolve CSS variable values to concrete color strings so downstream
+  // libraries (like polished) don't receive `var(--...)` tokens which they
+  // can't parse. We do this lazily in the browser environment.
+  const backgroundColorResolved = useMemo(() => {
+    if (typeof window === 'undefined') return '#ffffff'
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary')
+      if (!v) return '#ffffff'
+      return v.trim()
+    } catch (e) {
+      return '#ffffff'
+    }
+  }, [])
+
   const nodeLabel = useCallback((node: GraphNode) => {
     const docs = node.documents?.map((doc) => doc.document_name || doc.document_id).filter(Boolean) || []
     return `
@@ -159,15 +175,15 @@ export default function GraphView() {
   const hoveredPanel = useMemo(() => {
     if (hoverNode) {
       return (
-        <div className="rounded-lg border border-secondary-200 bg-white p-4 shadow-xl dark:border-secondary-700 dark:bg-secondary-800">
-          <div className="flex items-center gap-2 text-secondary-900 dark:text-secondary-50">
+        <div className="card" style={{ boxShadow: 'var(--shadow-xl)' }}>
+          <div className="flex items-center" style={{ gap: 'var(--space-2)', color: 'var(--text-primary)' }}>
             <div className="h-3 w-3 rounded-full" style={{ backgroundColor: getCommunityColor(hoverNode.community_id || undefined) }} />
             <div>
-              <p className="text-sm font-semibold">{hoverNode.label}</p>
-              <p className="text-xs text-secondary-500 dark:text-secondary-400">Type: {hoverNode.type || 'Unknown'}</p>
+              <p style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{hoverNode.label}</p>
+              <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Type: {hoverNode.type || 'Unknown'}</p>
             </div>
           </div>
-          <dl className="mt-3 space-y-2 text-xs text-secondary-700 dark:text-secondary-300">
+          <dl className="mt-3 space-y-2" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
             <div className="flex justify-between">
               <dt>Community</dt>
               <dd>{hoverNode.community_id ?? 'Unassigned'}</dd>
@@ -206,15 +222,15 @@ export default function GraphView() {
 
     if (hoverEdge) {
       return (
-        <div className="rounded-lg border border-secondary-200 bg-white p-4 shadow-xl dark:border-secondary-700 dark:bg-secondary-800">
-          <p className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">{hoverEdge.type || 'RELATED_TO'}</p>
-          <p className="text-xs text-secondary-600 dark:text-secondary-300">Weight: {hoverEdge.weight ?? 0.5}</p>
+        <div className="card" style={{ boxShadow: 'var(--shadow-xl)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{hoverEdge.type || 'RELATED_TO'}</p>
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Weight: {hoverEdge.weight ?? 0.5}</p>
           {hoverEdge.description && (
-            <p className="mt-2 text-xs text-secondary-700 dark:text-secondary-200">{hoverEdge.description}</p>
+            <p className="mt-2" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{hoverEdge.description}</p>
           )}
           {hoverEdge.text_units && hoverEdge.text_units.length > 0 && (
             <div className="mt-3">
-              <p className="text-xs font-semibold text-secondary-800 dark:text-secondary-200">Supporting TextUnits</p>
+              <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>Supporting TextUnits</p>
               <ul className="mt-1 space-y-1 text-xs">
                 {hoverEdge.text_units.slice(0, 6).map((unit) => (
                   <li key={`${unit.id}-${unit.document_id}`} className="flex items-center gap-2">
@@ -243,29 +259,30 @@ export default function GraphView() {
   }, [hoverEdge, hoverNode])
 
   return (
-    <div className="flex-1 h-full flex flex-col gap-6 p-6 bg-white dark:bg-secondary-900">
+    <div className="flex-1 h-full flex flex-col px-6 pb-6" style={{ gap: 'var(--space-6)', background: 'var(--bg-primary)' }}>
       {/* Header Section */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between" style={{ gap: 'var(--space-4)' }}>
         <div>
-          <h2 className="text-xl font-semibold text-secondary-900 dark:text-secondary-50">Graph Explorer</h2>
-          <p className="text-sm text-secondary-600 dark:text-secondary-400">
+          <h2 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 600, color: 'var(--text-primary)' }}>Graph Explorer</h2>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
             3D force layout with communities and provenance-rich tooltips.
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-lg bg-secondary-100 px-3 py-2 text-xs text-secondary-700 dark:bg-secondary-800 dark:text-secondary-300">
+        <div className="flex items-center" style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-tertiary)', padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           <InformationCircleIcon className="h-4 w-4" />
           <span>Hover nodes/edges for TextUnit and document provenance.</span>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 rounded-lg border border-secondary-200 bg-white p-4 shadow-sm dark:border-secondary-700 dark:bg-secondary-800">
-        <div className="flex min-w-[200px] flex-col gap-1">
-          <label className="text-xs font-semibold text-secondary-700 dark:text-secondary-300">Community</label>
+      <div className="flex flex-wrap card" style={{ gap: 'var(--space-3)' }}>
+        <div className="flex min-w-[200px] flex-col" style={{ gap: 'var(--space-1)' }}>
+          <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>Community</label>
           <select
             value={selectedCommunity}
             onChange={(event) => setSelectedCommunity(event.target.value)}
-            className="rounded border border-secondary-300 px-3 py-2 text-sm text-secondary-900 shadow-sm focus-primary dark:border-secondary-700 dark:bg-secondary-900 dark:text-secondary-100"
+            className="input-field"
+            style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-sm)' }}
           >
             <option value="all">All communities</option>
             {communities.map((community) => (
@@ -277,12 +294,13 @@ export default function GraphView() {
           </select>
         </div>
 
-        <div className="flex min-w-[200px] flex-col gap-1">
-          <label className="text-xs font-semibold text-secondary-700 dark:text-secondary-300">Node type</label>
+        <div className="flex min-w-[200px] flex-col" style={{ gap: 'var(--space-1)' }}>
+          <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>Node type</label>
           <select
             value={selectedNodeType}
             onChange={(event) => setSelectedNodeType(event.target.value)}
-            className="rounded border border-secondary-300 px-3 py-2 text-sm text-secondary-900 shadow-sm focus-primary dark:border-secondary-700 dark:bg-secondary-900 dark:text-secondary-100"
+            className="input-field"
+            style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-sm)' }}
           >
             <option value="all">All types</option>
             {nodeTypes.map((type) => (
@@ -293,13 +311,14 @@ export default function GraphView() {
           </select>
         </div>
 
-        <div className="ml-auto flex items-center gap-2 text-xs text-secondary-600 dark:text-secondary-300">
-          <span className="rounded bg-secondary-100 px-2 py-1 dark:bg-secondary-700">{graphData.nodes.length} nodes</span>
-          <span className="rounded bg-secondary-100 px-2 py-1 dark:bg-secondary-700">{graphData.edges.length} edges</span>
+        <div className="ml-auto flex items-center" style={{ gap: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+          <span style={{ borderRadius: 'var(--radius-sm)', background: 'var(--bg-tertiary)', padding: 'var(--space-1) var(--space-2)' }}>{graphData.nodes.length} nodes</span>
+          <span style={{ borderRadius: 'var(--radius-sm)', background: 'var(--bg-tertiary)', padding: 'var(--space-1) var(--space-2)' }}>{graphData.edges.length} edges</span>
           <button
             type="button"
             onClick={() => void fetchGraph()}
-            className="rounded px-3 py-2 text-xs font-semibold text-white shadow-sm transition button-primary"
+            className="button-primary"
+            style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-xs)' }}
           >
             Refresh
           </button>
@@ -309,8 +328,8 @@ export default function GraphView() {
       {/* Graph Visualization */}
       <div
         ref={containerRef}
-        className="flex-1 relative overflow-hidden rounded-xl border border-secondary-200 bg-secondary-900 shadow-inner dark:border-secondary-700"
-        style={{ maxWidth: '100%', boxSizing: 'border-box' }}
+        className="flex-1 relative overflow-hidden"
+        style={{ maxWidth: '100%', boxSizing: 'border-box', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', background: 'var(--bg-primary)', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)' }}
       >
         {isLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70 text-secondary-50">
@@ -335,7 +354,7 @@ export default function GraphView() {
           linkWidth={(link: any) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
           nodeLabel={(node: any) => nodeLabel(node as GraphNode)}
           linkLabel={(link: any) => linkLabel(link as GraphEdge)}
-          backgroundColor="#0b1120"
+          backgroundColor={backgroundColorResolved}
           onNodeHover={(node: any) => {
             setHoverNode((node as GraphNode) || null)
             setHoverEdge(null)
@@ -389,7 +408,7 @@ export default function GraphView() {
                   linkWidth={(link: any) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
                   nodeLabel={(node: any) => nodeLabel(node as GraphNode)}
                   linkLabel={(link: any) => linkLabel(link as GraphEdge)}
-                  backgroundColor="#0b1120"
+                  backgroundColor={backgroundColorResolved}
                 />
               </div>
             </div>

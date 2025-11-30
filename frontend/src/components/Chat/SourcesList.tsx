@@ -3,7 +3,6 @@
 import { useState, useMemo } from 'react'
 import { Source } from '@/types'
 import { ChevronDownIcon, ChevronUpIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
-import { motion, AnimatePresence } from 'framer-motion'
 import { useChatStore } from '@/store/chatStore'
 
 interface SourcesListProps {
@@ -93,19 +92,8 @@ export default function SourcesList({ sources }: SourcesListProps) {
         )}
       </button>
 
-      <AnimatePresence>
         {expanded && (
-          <motion.div
-            key="sources-expanded"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{
-              duration: 0.3,
-              ease: [0.4, 0, 0.2, 1],
-              opacity: { duration: 0.2 }
-            }}
-            className="space-y-2 overflow-hidden"
+          <div className="space-y-2"
           >
           {visibleDocs.map((doc, index) => (
             <div
@@ -125,7 +113,7 @@ export default function SourcesList({ sources }: SourcesListProps) {
                       </span>
                     </div>
                     {doc.avgSimilarity > 0 && (
-                      <span className="shrink-0 text-xs px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}>
+                      <span className="shrink-0 text-xs px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}>
                         {(doc.avgSimilarity * 100).toFixed(0)}% match
                       </span>
                     )}
@@ -148,19 +136,9 @@ export default function SourcesList({ sources }: SourcesListProps) {
                 </div>
               </div>
 
-              <AnimatePresence>
                 {selectedDoc === doc.documentId && (
-                  <motion.div
-                    key={`doc-${doc.documentId}`}
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{
-                      duration: 0.3,
-                      ease: [0.4, 0, 0.2, 1],
-                      opacity: { duration: 0.2 }
-                    }}
-                    className="mt-3 pt-3 border-t border-secondary-200 dark:border-secondary-700 space-y-2 overflow-hidden"
+                  <div
+                    className="mt-3 pt-3 border-t border-secondary-200 dark:border-secondary-700 space-y-2"
                   >
                   {doc.chunks.map((chunk, chunkIndex) => {
                     const similarity = chunk.similarity || chunk.relevance_score || 0
@@ -197,7 +175,7 @@ export default function SourcesList({ sources }: SourcesListProps) {
                           <div className="flex items-center space-x-2 flex-wrap">
                             {chunk.entity_name ? (
                               <span className="text-xs font-medium text-purple-700 dark:text-purple-300">
-                                🏷️ Entity: {chunk.entity_name}
+                                Entity: {chunk.entity_name}
                               </span>
                             ) : (
                               chunk.chunk_index !== undefined && (
@@ -237,9 +215,8 @@ export default function SourcesList({ sources }: SourcesListProps) {
                       </div>
                     )
                   })}
-                </motion.div>
+                </div>
               )}
-              </AnimatePresence>
             </div>
           ))}
 
@@ -247,14 +224,13 @@ export default function SourcesList({ sources }: SourcesListProps) {
             <button
               onClick={() => setExpanded(true)}
               className="text-sm"
-              style={{ color: 'var(--primary-500)' }}
+              style={{ color: 'var(--accent-primary)' }}
             >
               Show {groupedSources.length - 3} more documents
             </button>
           )}
-        </motion.div>
+        </div>
       )}
-      </AnimatePresence>
     </div>
   )
 }

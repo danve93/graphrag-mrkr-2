@@ -1,6 +1,65 @@
 {
   "parameters": [
     {
+      "key": "llm_model",
+      "label": "LLM Model",
+      "value": "gpt-4o-mini",
+      "options": [
+        "gpt-4o-mini",
+        "gpt-4o",
+        "gpt-4-turbo",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "select",
+      "category": "Model Selection",
+      "tooltip": "Select the language model used for generating responses. Changes apply immediately to new queries."
+    },
+    {
+      "key": "embedding_model",
+      "label": "Embedding Model",
+      "value": "text-embedding-ada-002",
+      "options": [
+        "text-embedding-ada-002",
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+        "nomic-embed-text"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "type": "select",
+      "category": "Model Selection",
+      "tooltip": "Select the embedding model used for query vectorization. Changing this may affect retrieval quality."
+    },
+    {
+      "key": "temperature",
+      "label": "Temperature",
+      "value": 0.6,
+      "options": null,
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.1,
+      "type": "slider",
+      "category": "Model Selection",
+      "tooltip": "Controls randomness in generation. Lower values make output more focused and deterministic, higher values more creative and diverse."
+    },
+    {
+      "key": "top_k",
+      "label": "Top K Results",
+      "value": 5,
+      "options": null,
+      "min": 1.0,
+      "max": 50.0,
+      "step": 1.0,
+      "type": "slider",
+      "category": "Retrieval Basics",
+      "tooltip": "Number of top chunks to retrieve from vector search before expansion and reranking. Higher values increase recall but also processing time."
+    },
+    {
       "key": "chunk_weight",
       "label": "Chunk Weight",
       "value": 0.6,
@@ -9,7 +68,7 @@
       "max": 1.0,
       "step": 0.1,
       "type": "slider",
-      "category": "Hybrid Retrieval Weights",
+      "category": "Retrieval Basics",
       "tooltip": "Weight for chunk-based results in hybrid retrieval. Higher values prioritize direct document matches over entity-filtered results."
     },
     {
@@ -21,8 +80,8 @@
       "max": 1.0,
       "step": 0.1,
       "type": "slider",
-      "category": "Hybrid Retrieval Weights",
-      "tooltip": "Weight for entity-filtered results. Higher values prioritize results that match extracted entities from your query."
+      "category": "Retrieval Basics",
+      "tooltip": "Weight for entity-filtered results in hybrid retrieval. Higher values prioritize results that match extracted entities from your query."
     },
     {
       "key": "path_weight",
@@ -33,8 +92,20 @@
       "max": 1.0,
       "step": 0.1,
       "type": "slider",
-      "category": "Hybrid Retrieval Weights",
+      "category": "Retrieval Basics",
       "tooltip": "Weight for path-based results in multi-hop reasoning. Higher values prioritize results found through entity relationship traversal."
+    },
+    {
+      "key": "min_retrieval_similarity",
+      "label": "Min Retrieval Similarity",
+      "value": 0.1,
+      "options": null,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01,
+      "type": "slider",
+      "category": "Retrieval Basics",
+      "tooltip": "Minimum similarity threshold for retrieved chunks to be considered relevant. Lower values increase recall but may reduce precision."
     },
     {
       "key": "max_hops",
@@ -73,18 +144,6 @@
       "tooltip": "Maximum depth for expanding the knowledge graph around retrieved chunks. 0 disables expansion, higher values find more related context."
     },
     {
-      "key": "top_k",
-      "label": "Top K Results",
-      "value": 5,
-      "options": null,
-      "min": 1.0,
-      "max": 50.0,
-      "step": 1.0,
-      "type": "slider",
-      "category": "Retriever Settings",
-      "tooltip": "Number of top chunks to return from the vector/entity retrieval step before any reranking or graph expansion. Larger values increase recall but also cost."
-    },
-    {
       "key": "max_expanded_chunks",
       "label": "Max Expanded Chunks",
       "value": 500,
@@ -93,8 +152,8 @@
       "max": 2000.0,
       "step": 50.0,
       "type": "slider",
-      "category": "Retriever Settings",
-      "tooltip": "Maximum number of chunks to keep after graph expansion. Limits memory and downstream LLM context size."
+      "category": "Graph Expansion",
+      "tooltip": "Maximum number of chunks to keep after graph expansion. Limits memory usage and downstream LLM context size."
     },
     {
       "key": "expansion_similarity_threshold",
@@ -105,48 +164,36 @@
       "max": 1.0,
       "step": 0.01,
       "type": "slider",
-      "category": "Retriever Settings",
-      "tooltip": "Minimum similarity required for chunks to be considered during graph expansion. Higher values produce tighter, more relevant expansions."
-    },
-    {
-      "key": "min_retrieval_similarity",
-      "label": "Min Retrieval Similarity",
-      "value": 0.1,
-      "options": null,
-      "min": 0.0,
-      "max": 1.0,
-      "step": 0.01,
-      "type": "slider",
-      "category": "Retriever Settings",
-      "tooltip": "Minimum similarity cutoff for retrieved chunks to be considered relevant. Lower values increase recall."
+      "category": "Graph Expansion",
+      "tooltip": "Minimum similarity required for chunks to be included during graph expansion. Higher values produce tighter, more relevant expansions."
     },
     {
       "key": "flashrank_enabled",
-      "label": "Enable FlashRank Reranker",
-      "value": false,
+      "label": "Enable Reranker",
+      "value": true,
       "options": null,
       "min": null,
       "max": null,
       "step": null,
       "type": "toggle",
-      "category": "Retriever Settings",
-      "tooltip": "Toggle to enable FlashRank post-retrieval reranking. Requires FlashRank to be installed on the server."
+      "category": "Reranking",
+      "tooltip": "Enable post-retrieval reranking using FlashRank. Improves result ordering but requires FlashRank to be installed."
     },
     {
       "key": "flashrank_blend_weight",
-      "label": "FlashRank Blend Weight",
+      "label": "Rerank Blend Weight",
       "value": 0,
       "options": null,
       "min": 0.0,
       "max": 1.0,
       "step": 0.05,
       "type": "slider",
-      "category": "Retriever Settings",
-      "tooltip": "Blend weight between the original hybrid score and the rerank score (0 = use rerank ordering)."
+      "category": "Reranking",
+      "tooltip": "Blend weight between the original hybrid score and the rerank score. 0 uses pure rerank ordering, 1 uses original ordering."
     },
     {
       "key": "flashrank_model_name",
-      "label": "FlashRank Model",
+      "label": "Reranker Model",
       "value": "ms-marco-TinyBERT-L-2-v2",
       "options": [
         "ms-marco-TinyBERT-L-2-v2",
@@ -158,8 +205,8 @@
       "max": null,
       "step": null,
       "type": "select",
-      "category": "Retriever Settings",
-      "tooltip": "Select which FlashRank model to use for reranking. The model must be available in the server cache or will be downloaded on first use."
+      "category": "Reranking",
+      "tooltip": "Select which FlashRank model to use for reranking. Different models offer tradeoffs between speed and accuracy."
     },
     {
       "key": "restrict_to_context",
@@ -172,39 +219,6 @@
       "type": "toggle",
       "category": "Context Filtering",
       "tooltip": "When enabled, limits retrieval to documents explicitly provided in the chat context. Disable to search across all ingested documents."
-    },
-    {
-      "key": "llm_model",
-      "label": "LLM Model",
-      "value": "gpt-4o-mini",
-      "options": [
-        "gpt-4o-mini",
-        "gpt-4o",
-        "gpt-4-turbo",
-        "custom"
-      ],
-      "min": null,
-      "max": null,
-      "step": null,
-      "type": "select",
-      "category": "Model Selection",
-      "tooltip": "Select the LLM model used for generation. Use 'custom' to enter a custom model name in the embedding model field."
-    },
-    {
-      "key": "embedding_model",
-      "label": "Embedding Model",
-      "value": "text-embedding-ada-002",
-      "options": [
-        "text-embedding-ada-002",
-        "text-embedding-3-large",
-        "nomic-embed-text"
-      ],
-      "min": null,
-      "max": null,
-      "step": null,
-      "type": "select",
-      "category": "Model Selection",
-      "tooltip": "Select the text embedding model used for query and chunk embeddings. Changing this affects retrieval quality and may require re-ingestion of documents."
     }
   ]
 }

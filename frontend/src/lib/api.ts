@@ -5,7 +5,7 @@ import type { GraphResponse } from '@/types/graph'
 // Use an empty default so client-side code issues relative requests
 // (e.g. `/api/...`) which are proxied by Next.js. If you need to override
 // (e.g. remote API), set `NEXT_PUBLIC_API_URL` at build/runtime.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 export const api = {
   // Chat endpoints
@@ -239,6 +239,96 @@ export const api = {
 
   async getDocument(documentId: string): Promise<DocumentDetails> {
     const response = await fetch(`${API_URL}/api/documents/${documentId}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // New: lightweight summary fetch
+  async getDocumentSummary(documentId: string): Promise<{
+    id: string
+    filename: string
+    original_filename?: string
+    mime_type?: string
+    size_bytes?: number
+    created_at?: number | string
+    link?: string
+    uploader?: string | null
+    stats: { chunks: number; entities: number; communities: number; similarities: number }
+  }> {
+    const response = await fetch(`${API_URL}/api/documents/${documentId}/summary`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // New: paginated entities
+  async getDocumentEntitiesPaginated(documentId: string, options?: {
+    communityId?: number
+    entityType?: string
+    limit?: number
+    offset?: number
+  }): Promise<{
+    document_id: string
+    total: number
+    limit: number
+    offset: number
+    has_more: boolean
+    entities: Array<{
+      type: string
+      text: string
+      community_id?: number | null
+      level?: number | null
+      count: number
+      positions: number[]
+    }>
+  }> {
+    const query = new URLSearchParams()
+    if (options?.communityId !== undefined) query.append('community_id', String(options.communityId))
+    if (options?.entityType) query.append('entity_type', options.entityType)
+    if (options?.limit) query.append('limit', String(options.limit))
+    if (options?.offset) query.append('offset', String(options.offset))
+    const qs = query.toString()
+    const response = await fetch(`${API_URL}/api/documents/${documentId}/entities${qs ? `?${qs}` : ''}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // New: paginated similarities
+  async getDocumentSimilaritiesPaginated(documentId: string, options?: {
+    limit?: number
+    offset?: number
+    minScore?: number
+    exactCount?: boolean
+  }): Promise<{
+    document_id: string
+    total: number
+    estimated: boolean
+    limit: number
+    offset: number
+    has_more: boolean
+    similarities: Array<{ chunk1_id: string; chunk2_id: string; score: number }>
+  }> {
+    const query = new URLSearchParams()
+    if (options?.limit) query.append('limit', String(options.limit))
+    if (options?.offset) query.append('offset', String(options.offset))
+    if (options?.minScore !== undefined) query.append('min_score', String(options.minScore))
+    if (options?.exactCount) query.append('exact_count', String(options.exactCount))
+    const qs = query.toString()
+    const response = await fetch(`${API_URL}/api/documents/${documentId}/similarities${qs ? `?${qs}` : ''}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // New: chunk details on-demand
+  async getChunkDetails(chunkId: string): Promise<{ id: string; content: string; index: number; offset: number; document_id: string; document_name?: string | null }> {
+    const response = await fetch(`${API_URL}/api/documents/chunks/${chunkId}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }

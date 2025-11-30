@@ -2,8 +2,8 @@
 
 This module normalizes loader outputs into Markdown content so downstream
 chunking, summarization, and tagging operate on a consistent representation.
-PDFs run through the Marker-style OCR pipeline to preserve layout before being
-converted to Markdown.
+PDFs can optionally be converted via Marker for higher fidelity. When disabled,
+the smart OCR + PDF text extraction path is used.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from ingestion.loaders.pdf_loader import PDFLoader
 from ingestion.loaders.pptx_loader import PPTXLoader
 from ingestion.loaders.text_loader import TextLoader
 from ingestion.loaders.xlsx_loader import XLSXLoader
+from config.settings import settings
+from vendor.marker_adapter import convert_pdf as marker_convert_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,34 @@ class DocumentConverter:
     def _wrap_markdown(self, header: str, body: str) -> str:
         return f"# {header}\n\n{body.strip()}" if body else header
 
+    def _convert_pdf_with_marker(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        """Convert PDF using Marker via adapter when available."""
+        # API key MUST come from environment variables only (MARKER_LLM_API_KEY or OPENAI_API_KEY)
+        # Never accept API keys from JSON config or user input
+        marker_api_key = settings.marker_llm_api_key or settings.openai_api_key
+        
+        marker_config: Dict[str, Any] = {
+            "output_format": settings.marker_output_format,
+            "use_llm": settings.marker_use_llm,
+            "paginate_output": settings.marker_paginate_output,
+            "force_ocr": settings.marker_force_ocr,
+            "strip_existing_ocr": settings.marker_strip_existing_ocr,
+            "pdftext_workers": settings.marker_pdftext_workers,
+            "llm_service": settings.marker_llm_service,
+            "llm_model": settings.marker_llm_model,
+            "llm_api_key": marker_api_key,
+        }
+        return marker_convert_pdf(file_path, marker_config)
+
     def _convert_pdf(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        # Prefer Marker path when enabled; fallback to smart OCR loader
+        if getattr(settings, "use_marker_for_pdf", False):
+            marker_result = self._convert_pdf_with_marker(file_path)
+            if marker_result:
+                return marker_result
+            else:
+                logger.info("Falling back to smart OCR PDF loader for %s", file_path)
+
         loader: PDFLoader = self.loaders[".pdf"]  # type: ignore[assignment]
         result = loader.load_with_metadata(file_path)
         if not result:
@@ -60,7 +89,7 @@ class DocumentConverter:
         content = result.get("content", "")
         ocr_metadata = result.get("metadata", {})
 
-        # Simulate Marker OCR-to-Markdown by preserving page structure with headings.
+        # Preserve page structure with headings to aid provenance
         pages = [page.strip() for page in content.split("--- Page") if page.strip()]
         markdown_pages = []
         for idx, page in enumerate(pages, start=1):
@@ -71,7 +100,7 @@ class DocumentConverter:
             "content": markdown,
             "metadata": {
                 **ocr_metadata,
-                "conversion_pipeline": "marker_ocr_markdown",
+                "conversion_pipeline": "smart_ocr_markdown",
             },
         }
 

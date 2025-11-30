@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import AsyncGenerator, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from api.models import ChatRequest, ChatResponse, FollowUpRequest, FollowUpResponse
@@ -265,6 +265,19 @@ async def _prepare_chat_context(
     effective_restrict_to_context = _prefer_request_or_cfg(
         "restrict_to_context", request.restrict_to_context, settings.default_context_restriction
     )
+    
+    # Prefer chat tuning config for temperature and model selections if not explicitly provided
+    effective_temperature = request.temperature
+    if effective_temperature == 0.7:  # default value from ChatRequest
+        effective_temperature = param_values.get("temperature", 0.7)
+    
+    effective_llm_model = request.llm_model
+    if not effective_llm_model or effective_llm_model == getattr(settings, 'openai_model', None):
+        effective_llm_model = param_values.get("llm_model", request.llm_model)
+    
+    effective_embedding_model = request.embedding_model
+    if not effective_embedding_model or effective_embedding_model == getattr(settings, 'embedding_model', None):
+        effective_embedding_model = param_values.get("embedding_model", request.embedding_model)
 
     # Apply other tuning that the retriever reads from `settings` directly
     # so that DocumentRetriever and expansion logic pick them up immediately.
@@ -291,7 +304,7 @@ async def _prepare_chat_context(
         user_query=request.message,
         retrieval_mode=request.retrieval_mode,
         top_k=effective_top_k,
-        temperature=request.temperature,
+        temperature=effective_temperature,
         use_multi_hop=request.use_multi_hop,
         chunk_weight=effective_chunk_weight,
         entity_weight=effective_entity_weight,
@@ -300,9 +313,10 @@ async def _prepare_chat_context(
         beam_size=effective_beam_size,
         restrict_to_context=effective_restrict_to_context,
         graph_expansion_depth=effective_graph_expansion_depth,
-        llm_model=request.llm_model,
-        embedding_model=request.embedding_model,
+        llm_model=effective_llm_model,
+        embedding_model=effective_embedding_model,
         chat_history=chat_history,
+        session_id=session_id,
         context_documents=context_documents,
     )
 
@@ -310,15 +324,16 @@ async def _prepare_chat_context(
     metadata["chat_history_turns"] = len(chat_history)
     metadata.setdefault("context_documents", context_documents)
     metadata["retrieval_tuning"] = {
-        "chunk_weight": request.chunk_weight,
-        "entity_weight": request.entity_weight,
-        "path_weight": request.path_weight,
-        "max_hops": request.max_hops,
-        "beam_size": request.beam_size,
-        "graph_expansion_depth": request.graph_expansion_depth,
-        "restrict_to_context": request.restrict_to_context,
-        "llm_model": request.llm_model,
-        "embedding_model": request.embedding_model,
+        "chunk_weight": effective_chunk_weight,
+        "entity_weight": effective_entity_weight,
+        "path_weight": effective_path_weight,
+        "max_hops": effective_max_hops,
+        "beam_size": effective_beam_size,
+        "graph_expansion_depth": effective_graph_expansion_depth,
+        "restrict_to_context": effective_restrict_to_context,
+        "temperature": effective_temperature,
+        "llm_model": effective_llm_model,
+        "embedding_model": effective_embedding_model,
     }
 
     quality_score = result.get("quality_score")
@@ -455,10 +470,105 @@ async def chat_query(request: ChatRequest):
 
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, http_request: Request):
     """Dedicated SSE endpoint that always streams responses."""
 
     try:
+        # Prepare session and chat history (but do NOT run full RAG.query here)
+        session_id = request.session_id or str(uuid.uuid4())
+
+        chat_history: List[dict] = []
+        if request.session_id:
+            try:
+                history = await chat_history_service.get_conversation(session_id)
+                chat_history = [{"role": msg.role, "content": msg.content} for msg in history.messages]
+            except Exception as exc:
+                logger.warning(f"Could not load chat history for streaming: {exc}")
+
+        # Load chat tuning config values (same approach as _prepare_chat_context)
+        try:
+            cfg = load_chat_tuning_config()
+            param_values = {p["key"]: p["value"] for p in cfg.get("parameters", [])}
+        except Exception:
+            param_values = {}
+
+        def _prefer_request_or_cfg(key: str, req_val, default_val):
+            if req_val is None or req_val == default_val:
+                return param_values.get(key, req_val)
+            return req_val
+
+        effective_top_k = _prefer_request_or_cfg("top_k", request.top_k, 5)
+        effective_chunk_weight = _prefer_request_or_cfg("chunk_weight", request.chunk_weight, settings.hybrid_chunk_weight)
+        effective_entity_weight = _prefer_request_or_cfg("entity_weight", request.entity_weight, settings.hybrid_entity_weight)
+        effective_path_weight = _prefer_request_or_cfg("path_weight", request.path_weight, settings.hybrid_path_weight)
+        effective_max_hops = _prefer_request_or_cfg("max_hops", request.max_hops, settings.multi_hop_max_hops)
+        effective_beam_size = _prefer_request_or_cfg("beam_size", request.beam_size, settings.multi_hop_beam_size)
+        effective_graph_expansion_depth = _prefer_request_or_cfg("graph_expansion_depth", request.graph_expansion_depth, settings.max_expansion_depth)
+        effective_restrict_to_context = _prefer_request_or_cfg("restrict_to_context", request.restrict_to_context, settings.default_context_restriction)
+
+        effective_temperature = request.temperature
+        if effective_temperature == 0.7:
+            effective_temperature = param_values.get("temperature", 0.7)
+
+        effective_llm_model = request.llm_model
+        if not effective_llm_model or effective_llm_model == getattr(settings, 'openai_model', None):
+            effective_llm_model = param_values.get("llm_model", request.llm_model)
+
+        effective_embedding_model = request.embedding_model
+        if not effective_embedding_model or effective_embedding_model == getattr(settings, 'embedding_model', None):
+            effective_embedding_model = param_values.get("embedding_model", request.embedding_model)
+
+        # If streaming at provider level is enabled, use GraphRAG.stream_query to stream tokens
+        if getattr(settings, "enable_llm_streaming", False):
+            # Monitor client disconnects and cancel the stream when detected
+            cancel_event = asyncio.Event()
+
+            async def _monitor_disconnect(req: Request, ev: asyncio.Event):
+                try:
+                    await req.is_disconnected()
+                    ev.set()
+                except Exception:
+                    ev.set()
+
+            # create monitor task using the explicit ASGI Request passed to this endpoint
+            try:
+                asyncio.create_task(_monitor_disconnect(http_request, cancel_event))
+            except Exception:
+                pass
+
+            gen = graph_rag.stream_query(
+                user_query=request.message,
+                session_id=session_id,
+                retrieval_mode=request.retrieval_mode,
+                top_k=effective_top_k,
+                temperature=effective_temperature,
+                chunk_weight=effective_chunk_weight,
+                entity_weight=effective_entity_weight,
+                path_weight=effective_path_weight,
+                graph_expansion=True,
+                use_multi_hop=request.use_multi_hop,
+                max_hops=effective_max_hops,
+                beam_size=effective_beam_size,
+                restrict_to_context=effective_restrict_to_context,
+                graph_expansion_depth=effective_graph_expansion_depth,
+                chat_history=chat_history,
+                context_documents=request.context_documents or [],
+                llm_model=effective_llm_model,
+                embedding_model=effective_embedding_model,
+                cancel_event=cancel_event,
+            )
+
+            return StreamingResponse(
+                gen,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        # Fallback: run full RAG query and stream the pre-generated response (existing behavior)
         (
             session_id,
             chat_history,

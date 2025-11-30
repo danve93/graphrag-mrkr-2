@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.settings import settings
 from core.llm import llm_manager
+from core.singletons import get_blocking_executor, SHUTTING_DOWN
+from core.entity_models import Entity, Relationship
+from core.tuple_parser import TupleParser, ParseResult
 
 logger = logging.getLogger(__name__)
 
@@ -104,41 +107,6 @@ def retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.
         return wrapper
 
     return decorator
-
-
-@dataclass
-class Entity:
-    """Represents an extracted entity."""
-
-    name: str
-    type: str
-    description: str
-    importance_score: float = 0.5
-    source_text_units: Optional[List[str]] = None
-    source_chunks: Optional[List[str]] = None
-
-    def __post_init__(self):
-        resolved_text_units = self.source_text_units or self.source_chunks or []
-        self.source_text_units = list(resolved_text_units)
-        self.source_chunks = list(self.source_chunks or self.source_text_units or [])
-
-
-@dataclass
-class Relationship:
-    """Represents a relationship between two entities."""
-
-    source_entity: str
-    target_entity: str
-    relationship_type: str
-    description: str
-    strength: float = 0.5
-    source_text_units: Optional[List[str]] = None
-    source_chunks: Optional[List[str]] = None
-
-    def __post_init__(self):
-        resolved_text_units = self.source_text_units or self.source_chunks or []
-        self.source_text_units = list(resolved_text_units)
-        self.source_chunks = list(self.source_chunks or self.source_text_units or [])
 
 
 class EntityExtractor:
@@ -390,7 +358,37 @@ class EntityExtractor:
             if "low_value_patterns" in config:
                 self.LOW_VALUE_PATTERNS = config["low_value_patterns"]
         
+        # Load LLM model override from RAG tuning config
+        self.llm_model = self._load_entity_extraction_model()
+        
         logger.debug(f"EntityExtractor initialized with {len(self.entity_types)} entity types")
+    
+    def _load_entity_extraction_model(self) -> Optional[str]:
+        """Load entity extraction LLM model from RAG tuning config."""
+        from config.settings import load_rag_tuning_config
+        
+        try:
+            rag_config = load_rag_tuning_config()
+            
+            # Check if entity extraction has a specific override
+            if rag_config.get("entity_extraction_llm_override_enabled"):
+                model = rag_config.get("entity_extraction_llm_override_value")
+                if model:
+                    logger.info(f"Using entity extraction LLM model override: {model}")
+                    return model
+            
+            # Fall back to default model from RAG config
+            default_model = rag_config.get("default_llm_model")
+            if default_model:
+                logger.info(f"Using default LLM model for entity extraction: {default_model}")
+                return default_model
+            
+            # No override specified, use system default
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to load RAG tuning config for entity extraction: {e}")
+            return None
 
     def _normalize_entity_name(self, name: str) -> str:
         """Normalize entity name to reduce duplicates."""
@@ -515,7 +513,14 @@ class EntityExtractor:
         return deduplicated
 
     def _get_extraction_prompt(self, text: str, text_unit_id: Optional[str]) -> str:
-        """Generate prompt for entity and relationship extraction."""
+        """Route to appropriate prompt based on format setting."""
+        if settings.entity_extraction_format == "tuple_v1":
+            return self._get_extraction_prompt_tuple(text, text_unit_id)
+        # Removed legacy pipe parser
+        return self._get_extraction_prompt_tuple(text, text_unit_id)
+
+    def _get_extraction_prompt_pipe(self, text: str, text_unit_id: Optional[str]) -> str:
+        """Generate prompt for pipe-separated format (original)."""
         entity_types_str = ", ".join(self.entity_types)
         relation_types_str = ", ".join(self.RELATION_TYPE_SUGGESTIONS)
         text_unit_label = text_unit_id or "UNKNOWN_TEXT_UNIT"
@@ -549,10 +554,76 @@ RELATIONSHIPS:
 
 **Output**:"""
 
+    def _get_extraction_prompt_tuple(self, text: str, text_unit_id: Optional[str]) -> str:
+        """Generate prompt for tuple-delimited format (Phase 3)."""
+        entity_types_str = ", ".join(self.entity_types)
+        relation_types_str = ", ".join(self.RELATION_TYPE_SUGGESTIONS)
+        text_unit_label = text_unit_id or "UNKNOWN_TEXT_UNIT"
+
+        return f"""FORMAT: TUPLE_V1
+
+You are an expert at extracting entities and relationships from text.
+
+You are processing TextUnit ID: {text_unit_label}. Always preserve this identifier for provenance.
+
+**Task**: Extract all relevant entities and relationships in tuple-delimited format.
+
+**Entity Types (ontology)**: Use only these canonical types: {entity_types_str}
+**Relationship Types**: Prefer these relationship patterns when applicable: {relation_types_str}
+
+**CRITICAL OUTPUT FORMAT RULES**:
+1. Use TUPLE-DELIMITED format with <|> as field separator
+2. Entity format: ("entity"<|>NAME<|>TYPE<|>DESCRIPTION<|>IMPORTANCE)
+3. Relationship format: ("relationship"<|>SOURCE<|>TARGET<|>TYPE<|>DESCRIPTION<|>STRENGTH)
+4. UPPERCASE all entity names and types
+5. NEVER use <|> inside descriptions (use | or - instead)
+6. One tuple per line
+7. Importance and Strength must be 0.0-1.0
+8. Empty descriptions allowed but name and type are REQUIRED
+
+**EXAMPLES**:
+("entity"<|>ADMIN PANEL<|>COMPONENT<|>Web-based administration interface<|>0.9)
+("entity"<|>USER DATABASE<|>SERVICE<|>Database storing user authentication data<|>0.8)
+("entity"<|>LOGIN SERVICE<|>SERVICE<|>Handles user authentication<|>0.85)
+("relationship"<|>ADMIN PANEL<|>USER DATABASE<|>DEPENDS_ON<|>Admin panel queries database for authentication<|>0.7)
+("relationship"<|>LOGIN SERVICE<|>USER DATABASE<|>QUERIES<|>Login service reads user credentials from database<|>0.8)
+
+**Instructions**:
+1. Extract ALL relevant entities from the text
+2. Use exact entity names from the text (converted to UPPERCASE)
+3. Choose types from the canonical list above
+4. Provide concise, factual descriptions grounded in the text
+5. Rate importance (entities) and strength (relationships) based on context
+6. AVOID using <|> delimiter in descriptions
+
+**Text to analyze**:
+{text}
+
+**Output (tuple format only)**:"""
+
     def _parse_extraction_response(
         self, response: str, chunk_id: str
     ) -> Tuple[List[Entity], List[Relationship]]:
-        """Parse LLM response to extract entities and relationships."""
+        """Route to appropriate parser based on format setting."""
+        # Primary parser selection based on configuration
+        if settings.entity_extraction_format == "tuple_v1":
+            entities, relationships = self._parse_tuple_response(response, chunk_id)
+            # Fallback: if tuple parser found nothing but response looks like the
+            # alternative (ENTITIES: / - Name:) format, try pipe-style parser.
+            if not entities and not relationships and response and ("ENTITIES:" in response or "- Name:" in response):
+                return self._parse_pipe_response(response, chunk_id)
+            return entities, relationships
+
+        # Removed legacy pipe parser - still support fallback when tuple parsing fails
+        entities, relationships = self._parse_tuple_response(response, chunk_id)
+        if not entities and not relationships and response and ("ENTITIES:" in response or "- Name:" in response):
+            return self._parse_pipe_response(response, chunk_id)
+        return entities, relationships
+
+    def _parse_pipe_response(
+        self, response: str, chunk_id: str
+    ) -> Tuple[List[Entity], List[Relationship]]:
+        """Parse pipe-separated LLM response (original format)."""
         entities = []
         relationships = []
 
@@ -653,6 +724,55 @@ RELATIONSHIPS:
         )
         return entities, relationships
 
+    def _parse_tuple_response(
+        self, response: str, chunk_id: str
+    ) -> Tuple[List[Entity], List[Relationship]]:
+        """Parse tuple-delimited LLM response (Phase 3 format)."""
+        try:
+            # Use TupleParser to parse the response
+            parser = TupleParser(chunk_id=chunk_id)
+            result = parser.parse(response)
+
+            # Log parse errors if any
+            if result.parse_errors:
+                logger.warning(
+                    f"Chunk {chunk_id}: {len(result.parse_errors)} parse errors in tuple format"
+                )
+                for error in result.parse_errors[:5]:  # Log first 5 errors
+                    logger.debug(f"  {error}")
+
+            # Convert Entity/Relationship objects to lists
+            entities = result.entities
+            relationships = result.relationships
+
+            # Filter low-value entities (same as pipe parser)
+            filtered_entities = []
+            for entity in entities:
+                if not self._is_low_value_entity(
+                    entity.name, entity.type, entity.importance_score
+                ):
+                    filtered_entities.append(entity)
+                else:
+                    logger.debug(
+                        f"Filtered low-value entity: {entity.name} ({entity.type})"
+                    )
+
+            # Apply deduplication
+            filtered_entities = self._deduplicate_entities(filtered_entities)
+
+            logger.info(
+                f"Tuple parsing: {len(filtered_entities)} entities and {len(relationships)} relationships from chunk {chunk_id}"
+            )
+
+            return filtered_entities, relationships
+
+        except Exception as e:
+            logger.error(
+                f"Error in tuple parser for chunk {chunk_id}: {e}", exc_info=True
+            )
+            # Return empty results on parsing error
+            return [], []
+
     async def extract_from_chunk(
         self, text: str, chunk_id: str
     ) -> Tuple[List[Entity], List[Relationship]]:
@@ -661,7 +781,7 @@ RELATIONSHIPS:
         @retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0)
         def _generate_response_with_retry(prompt):
             return llm_manager.generate_response(
-                prompt=prompt, max_tokens=4000, temperature=0.1
+                prompt=prompt, max_tokens=4000, temperature=1.0, model_override=self.llm_model
             )
 
         try:
@@ -669,15 +789,340 @@ RELATIONSHIPS:
 
             # Offload synchronous/blocking LLM call to a thread executor with retry
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, lambda: _generate_response_with_retry(prompt)
-            )
+            try:
+                executor = get_blocking_executor()
+                response = await loop.run_in_executor(
+                    executor, lambda: _generate_response_with_retry(prompt)
+                )
+            except RuntimeError as e:
+                # Happens if executor is shutdown concurrently or loop closing
+                logger.debug(
+                    f"Blocking executor unavailable while extracting chunk {chunk_id}: {e}."
+                )
+                # If we're shutting down, return empty immediately to avoid scheduling new work
+                if SHUTTING_DOWN:
+                    logger.info("Process shutting down; aborting extraction for %s", chunk_id)
+                    return [], []
+                # Try to recreate/get executor and retry once
+                try:
+                    executor = get_blocking_executor()
+                    response = await loop.run_in_executor(
+                        executor, lambda: _generate_response_with_retry(prompt)
+                    )
+                except Exception as e2:
+                    logger.warning(
+                        f"Blocking executor retry failed for chunk {chunk_id}: {e2}. Returning empty result."
+                    )
+                    return [], []
 
             return self._parse_extraction_response(response, chunk_id)
 
         except Exception as e:
             logger.error(f"Entity extraction failed for chunk {chunk_id}: {e}")
             return [], []
+
+    def _get_continue_prompt(self, chunk_id: str, existing_entities: List[Entity]) -> str:
+        """Generate continuation prompt for gleaning pass."""
+        # Show sample of already-extracted entities
+        entity_sample = [e.name for e in existing_entities[:10]]
+        summary = ", ".join(entity_sample)
+        if len(existing_entities) > 10:
+            summary += f" (and {len(existing_entities) - 10} more)"
+        
+        entity_types_str = ", ".join(self.entity_types)
+        
+        return f"""You are continuing extraction for TextUnit ID: {chunk_id}.
+
+**Already extracted entities:** {summary}
+
+IMPORTANT: MANY additional entities and relationships were MISSED in the previous extraction pass.
+
+**Your task:**
+- Identify ADDITIONAL entities and relationships you overlooked
+- Use ONLY the canonical entity types: {entity_types_str}
+- Use the SAME output format as before
+- Extract ONLY NEW entities (do NOT repeat entities already extracted)
+- Be thorough and careful
+
+**Additional entities and relationships:**"""
+
+    def _get_loop_check_prompt(self) -> str:
+        """Generate loop check prompt (asks LLM if more entities exist)."""
+        return """Are there STILL more entities or relationships that could be extracted from the original text?
+
+Think carefully. Answer with ONE letter:
+- Y if you believe there are still missed entities
+- N if extraction is complete and thorough
+
+Your answer (Y or N):"""
+
+    async def extract_from_chunk_with_gleaning(
+        self,
+        text: str,
+        chunk_id: str,
+        max_gleanings: Optional[int] = None
+    ) -> Tuple[List[Entity], List[Relationship]]:
+        """
+        Extract entities with iterative gleaning (Microsoft GraphRAG approach).
+        
+        Process:
+        1. Pass 1: Initial extraction
+        2. For each gleaning iteration:
+           - Show LLM its previous extraction
+           - Ask "What did you miss?"
+           - Parse additional entities
+           - Check if more entities exist
+           - Stop early if LLM says "complete"
+        3. Deduplicate all entities across passes
+        
+        Args:
+            text: Chunk text to extract from
+            chunk_id: Unique chunk identifier
+            max_gleanings: Override default gleaning count
+        
+        Returns:
+            (deduplicated_entities, all_relationships)
+        """
+        # Use settings default if not specified
+        gleanings = max_gleanings if max_gleanings is not None else settings.max_gleanings
+        
+        all_entities: List[Entity] = []
+        all_relationships: List[Relationship] = []
+        conversation_history: List[Dict[str, str]] = []
+        
+        try:
+            # === PASS 1: Initial Extraction ===
+            logger.debug(f"[{chunk_id}] Starting initial extraction pass")
+            
+            initial_prompt = self._get_extraction_prompt(text, chunk_id)
+            
+            @retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0)
+            def _generate_initial():
+                return llm_manager.generate_response(
+                    prompt=initial_prompt,
+                    max_tokens=4000,
+                    temperature=0.1,
+                    model_override=self.llm_model
+                )
+            
+            loop = asyncio.get_running_loop()
+            try:
+                executor = get_blocking_executor()
+                initial_response = await loop.run_in_executor(executor, _generate_initial)
+            except RuntimeError as e:
+                logger.debug(
+                    f"Blocking executor unavailable during initial gleaning for {chunk_id}: {e}."
+                )
+                if SHUTTING_DOWN:
+                    logger.info("Process shutting down; aborting initial gleaning for %s", chunk_id)
+                    return [], []
+                try:
+                    executor = get_blocking_executor()
+                    initial_response = await loop.run_in_executor(executor, _generate_initial)
+                except Exception as e2:
+                    logger.warning(
+                        f"Blocking executor retry failed during initial gleaning for {chunk_id}: {e2}. Returning empty results."
+                    )
+                    return [], []
+            
+            # Store in conversation history
+            conversation_history.append({"role": "user", "content": initial_prompt})
+            conversation_history.append({"role": "assistant", "content": initial_response})
+            
+            entities_pass1, relationships_pass1 = self._parse_extraction_response(
+                initial_response, chunk_id
+            )
+            
+            all_entities.extend(entities_pass1)
+            all_relationships.extend(relationships_pass1)
+            
+            logger.info(
+                f"[{chunk_id}] Pass 1: {len(entities_pass1)} entities, "
+                f"{len(relationships_pass1)} relationships"
+            )
+            
+            # If no gleaning requested, return now
+            if gleanings == 0:
+                deduplicated = self._deduplicate_entities(all_entities)
+                logger.info(f"[{chunk_id}] Gleaning disabled, returning {len(deduplicated)} entities")
+                return deduplicated, all_relationships
+            
+            # === GLEANING LOOP: Passes 2 through (1 + gleanings) ===
+            for gleaning_iteration in range(gleanings):
+                pass_number = gleaning_iteration + 2
+                
+                logger.debug(f"[{chunk_id}] Starting gleaning pass {pass_number}/{1 + gleanings}")
+                
+                # Generate continuation prompt
+                continue_prompt = self._get_continue_prompt(chunk_id, all_entities)
+                
+                @retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0)
+                def _generate_continuation():
+                    return llm_manager.generate_response_with_history(
+                        prompt=continue_prompt,
+                        history=conversation_history,
+                        max_tokens=4000,
+                        temperature=0.1,
+                        model_override=self.llm_model
+                    )
+                
+                try:
+                    executor = get_blocking_executor()
+                    continue_response = await loop.run_in_executor(executor, _generate_continuation)
+                except RuntimeError as e:
+                    logger.debug(
+                        f"Blocking executor unavailable during gleaning continuation for {chunk_id}: {e}."
+                    )
+                    if SHUTTING_DOWN:
+                        logger.info("Process shutting down; stopping gleaning for %s", chunk_id)
+                        break
+                    try:
+                        executor = get_blocking_executor()
+                        continue_response = await loop.run_in_executor(executor, _generate_continuation)
+                    except Exception as e2:
+                        logger.warning(
+                            f"Blocking executor retry failed during gleaning continuation for {chunk_id}: {e2}. Stopping gleaning."
+                        )
+                        break
+                
+                # Update conversation history
+                conversation_history.append({"role": "user", "content": continue_prompt})
+                conversation_history.append({"role": "assistant", "content": continue_response})
+                
+                # Parse gleaned entities
+                gleaned_entities, gleaned_relationships = self._parse_extraction_response(
+                    continue_response, chunk_id
+                )
+                
+                # Early exit: if no new content found, stop
+                if not gleaned_entities and not gleaned_relationships:
+                    logger.info(
+                        f"[{chunk_id}] Pass {pass_number}: No new entities found, stopping early"
+                    )
+                    break
+                
+                all_entities.extend(gleaned_entities)
+                all_relationships.extend(gleaned_relationships)
+                
+                logger.info(
+                    f"[{chunk_id}] Pass {pass_number}: +{len(gleaned_entities)} entities, "
+                    f"+{len(gleaned_relationships)} relationships"
+                )
+            
+            # === FINAL DEDUPLICATION ===
+            deduplicated_entities = self._deduplicate_entities(all_entities)
+            
+            logger.info(
+                f"[{chunk_id}] Extraction complete: {len(deduplicated_entities)} unique entities "
+                f"from {len(all_entities)} raw extractions across {pass_number} passes"
+            )
+            
+            return deduplicated_entities, all_relationships
+            
+        except Exception as e:
+            logger.error(f"[{chunk_id}] Gleaning extraction failed: {e}", exc_info=True)
+            return [], []
+
+    async def extract_from_chunks_with_gleaning(
+        self,
+        chunks: List[Dict[str, Any]],
+        max_gleanings: int,
+        document_type: Optional[str] = None
+    ) -> Tuple[Dict[str, Entity], Dict[str, List[Relationship]]]:
+        """
+        Extract from multiple chunks with gleaning (batch processing).
+        
+        Args:
+            chunks: List of chunk dicts with 'chunk_id' and 'content'
+            max_gleanings: Gleaning passes per chunk
+            document_type: Document type for logging
+        
+        Returns:
+            (all_entities_dict, relationships_by_pair)
+        """
+        logger.info(
+            f"Starting gleaning extraction from {len(chunks)} chunks "
+            f"(max_gleanings={max_gleanings}, doc_type={document_type})"
+        )
+        
+        # Concurrency control (same as baseline)
+        concurrency = getattr(settings, "llm_concurrency")
+        sem = asyncio.Semaphore(concurrency)
+        request_tracker = {"last_time": 0.0}
+        
+        async def _sem_extract(chunk):
+            async with sem:
+                try:
+                    # Rate limiting
+                    current_time = time.time()
+                    time_since_last = current_time - request_tracker["last_time"]
+                    min_delay = random.uniform(settings.llm_delay_min, settings.llm_delay_max)
+                    
+                    if time_since_last < min_delay:
+                        sleep_time = min_delay - time_since_last
+                        logger.debug(f"Rate limiting LLM: sleeping {sleep_time:.2f}s")
+                        await asyncio.sleep(sleep_time)
+                    
+                    request_tracker["last_time"] = time.time()
+                    
+                    # Call gleaning extraction for this chunk
+                    return await self.extract_from_chunk_with_gleaning(
+                        chunk["content"],
+                        chunk["chunk_id"],
+                        max_gleanings=max_gleanings
+                    )
+                except Exception as e:
+                    logger.error(f"Gleaning extraction failed for chunk {chunk.get('chunk_id')}: {e}")
+                    return [], []
+        
+        # Schedule tasks
+        extraction_tasks = [asyncio.create_task(_sem_extract(chunk)) for chunk in chunks]
+        
+        results = []
+        for coro in asyncio.as_completed(extraction_tasks):
+            try:
+                res = await coro
+                results.append(res)
+            except Exception as e:
+                logger.error(f"Error in gleaning extraction task: {e}")
+        
+        # Consolidate results (same logic as baseline)
+        all_entities_list = []
+        all_relationships = []
+        
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            if isinstance(result, tuple) and len(result) == 2:
+                entities, relationships = result
+            else:
+                continue
+            
+            all_entities_list.extend(entities)
+            all_relationships.extend(relationships)
+        
+        # Global deduplication
+        deduplicated_entities = self._deduplicate_entities(all_entities_list)
+        all_entities = {entity.name.upper().strip(): entity for entity in deduplicated_entities}
+        
+        # Group relationships by pair
+        relationships_by_pair = {}
+        for rel in all_relationships:
+            source_key = rel.source_entity.upper().strip()
+            target_key = rel.target_entity.upper().strip()
+            
+            if source_key in all_entities and target_key in all_entities:
+                pair_key = tuple(sorted([source_key, target_key]))
+                if pair_key not in relationships_by_pair:
+                    relationships_by_pair[pair_key] = []
+                relationships_by_pair[pair_key].append(rel)
+        
+        logger.info(
+            f"Gleaning extraction complete: {len(all_entities)} entities, "
+            f"{len(relationships_by_pair)} relationship pairs"
+        )
+        
+        return all_entities, relationships_by_pair
 
     async def extract_from_chunks(
         self, chunks: List[Dict[str, Any]]

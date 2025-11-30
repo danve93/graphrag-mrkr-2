@@ -11,11 +11,18 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from neo4j import Driver, GraphDatabase
-from neo4j.exceptions import ServiceUnavailable
+from neo4j.exceptions import ServiceUnavailable, DriverError
 from contextlib import contextmanager
+import threading
 
 from config.settings import settings
 from core.embeddings import embedding_manager
+from core.singletons import (
+    get_graph_db_driver,
+    get_entity_label_cache,
+    get_blocking_executor,
+    SHUTTING_DOWN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,27 +66,34 @@ class GraphDB:
     """Neo4j database manager for document storage and retrieval."""
 
     def __init__(self):
-        """Initialize Neo4j connection."""
-        # Allow creating the GraphDB instance without immediately connecting.
-        # Tests and some runtime paths prefer to create the object and mock
-        # methods before a real Neo4j connection is required.
+        """Initialize GraphDB with singleton driver and caching."""
+        # Initialize caching infrastructure
+        self._entity_label_cache = get_entity_label_cache()
+        self._entity_label_lock = threading.Lock()
+        
+        # Use singleton driver for connection pooling
         self.driver: Optional[Driver] = None
-        # By default we will attempt to connect, but callers can pass
-        # `connect_on_init=False` when constructing the object if they
-        # want to defer connecting (see global `graph_db` below).
         try:
-            connect_on_init = True
-        except Exception:
-            connect_on_init = True
-        if connect_on_init:
+            # Prefer the singleton driver (may perform connectivity verification)
+            self.driver = get_graph_db_driver()
+        except Exception as e:
+            logger.warning(f"get_graph_db_driver failed: {e}. Attempting direct connect with retries.")
+            # Try a direct connect with the GraphDB.connect retry logic
             try:
                 self.connect()
-            except Exception:
-                # If we fail to connect during import (e.g., in test
-                # environments where Neo4j isn't available), log and
-                # continue without raising so test suites can monkeypatch
-                # methods on the `graph_db` instance.
-                logger.debug("Deferred Neo4j connection; will connect on demand.")
+            except Exception as e2:
+                logger.warning(f"Direct connect attempt failed: {e2}. Creating lazy driver instance without immediate verify.")
+                # As a final fallback, create a driver object without forcing verify_connectivity
+                try:
+                    self.driver = GraphDatabase.driver(
+                        settings.neo4j_uri,
+                        auth=(settings.neo4j_username, settings.neo4j_password),
+                        max_connection_pool_size=settings.neo4j_max_connection_pool_size,
+                    )
+                    logger.info("Created lazy Neo4j driver instance (connectivity not yet verified).")
+                except Exception as e3:
+                    logger.warning(f"Failed to create lazy Neo4j driver: {e3}")
+                    self.driver = None
 
     def connect(self) -> None:
         """Establish connection to Neo4j database."""
@@ -126,11 +140,89 @@ class GraphDB:
         caller can handle it and return a proper HTTP error rather than
         allowing an implicit fallback to another host.
         """
+        # If we don't have a driver at all, attempt to create/connect one.
         if self.driver is None:
             try:
+                # Try getting the process-wide singleton driver first (may verify connectivity).
+                from core.singletons import get_graph_db_driver
+
+                try:
+                    self.driver = get_graph_db_driver()
+                    return
+                except Exception:
+                    # Fall back to direct connect if singleton helper fails
+                    pass
+
                 self.connect()
             except Exception as e:
                 logger.error("ensure_connected: unable to establish Neo4j connection: %s", e)
+                raise
+
+        # If we have a driver object but it might have been closed externally
+        # (for example, cleanup_singletons() closed the process-global driver),
+        # verify connectivity and recreate the driver when necessary.
+        else:
+            try:
+                # Some test helpers and mocks provide a driver-like object that
+                # implements `session()` but may not implement
+                # `verify_connectivity()`. In that case, attempt a lightweight
+                # validation by opening a session (and closing it) rather than
+                # forcing a full connectivity check which would attempt a real
+                # network call.
+                if hasattr(self.driver, "verify_connectivity") and callable(
+                    getattr(self.driver, "verify_connectivity")
+                ):
+                    # verify_connectivity will raise if the driver is closed or unreachable
+                    try:
+                        self.driver.verify_connectivity()
+                        return
+                    except Exception:
+                        # Attempt to re-acquire a healthy singleton driver
+                        from core.singletons import get_graph_db_driver
+
+                        try:
+                            self.driver = get_graph_db_driver()
+                            return
+                        except Exception:
+                            # As a last resort, clear driver and attempt direct connect
+                            try:
+                                if self.driver:
+                                    try:
+                                        self.driver.close()
+                                    except Exception:
+                                        pass
+                            finally:
+                                self.driver = None
+                            self.connect()
+                else:
+                    # No verify_connectivity method available; try opening a session
+                    # to validate that the driver-like object is usable (works for
+                    # test fakes that implement `session()`).
+                    try:
+                        sess = self.driver.session()
+                        try:
+                            # If session is a context manager, close via .close();
+                            # some fakes return simple objects so be defensive.
+                            try:
+                                sess.close()
+                            except Exception:
+                                pass
+                        finally:
+                            pass
+                        return
+                    except Exception:
+                        # Fall through to attempt to reconnect using real driver
+                        try:
+                            if self.driver:
+                                try:
+                                    self.driver.close()
+                                except Exception:
+                                    pass
+                        finally:
+                            self.driver = None
+                        self.connect()
+            except Exception as e:
+                logger.error("ensure_connected: driver appears unusable and reconnect failed: %s", e)
                 raise
 
     @contextmanager
@@ -163,7 +255,7 @@ class GraphDB:
                     except Exception:
                         pass
 
-            except ServiceUnavailable as e:
+            except (ServiceUnavailable, DriverError) as e:
                 logger.warning(
                     "session_scope: ServiceUnavailable on attempt %s/%s: %s",
                     attempts,
@@ -200,9 +292,54 @@ class GraphDB:
             self.driver.close()
             logger.info("Neo4j connection closed")
 
+    def get_entity_label_cached(self, entity_id: str) -> str:
+        """
+        Get entity label with TTL caching.
+        
+        Args:
+            entity_id: Entity ID to look up
+        
+        Returns:
+            str: Entity name/label
+        
+        Cache Strategy:
+            - Hit: Return cached value (5-minute freshness)
+            - Miss: Query Neo4j, cache result, return
+        """
+        # Check if caching is enabled
+        if not settings.enable_caching:
+            return self._get_entity_label_direct(entity_id)
+        
+        # Check cache (thread-safe read)
+        with self._entity_label_lock:
+            if entity_id in self._entity_label_cache:
+                logger.debug(f"Entity label cache HIT: {entity_id}")
+                return self._entity_label_cache[entity_id]
+        
+        # Cache miss - query database
+        logger.debug(f"Entity label cache MISS: {entity_id}")
+        label = self._get_entity_label_direct(entity_id)
+        
+        # Store in cache (thread-safe write)
+        with self._entity_label_lock:
+            self._entity_label_cache[entity_id] = label
+        
+        return label
+
+    def _get_entity_label_direct(self, entity_id: str) -> str:
+        """Direct database query for entity label (no caching)."""
+        # Use session_scope which will ensure connectivity and retry as needed.
+        with self.session_scope() as session:
+            result = session.run(
+                "MATCH (e:Entity {id: $entity_id}) RETURN e.name as label",
+                entity_id=entity_id,
+            )
+            record = result.single()
+            return record["label"] if record else entity_id
+
     def create_document_node(self, doc_id: str, metadata: Dict[str, Any]) -> None:
         """Create a document node in the graph."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MERGE (d:Document {id: $doc_id})
@@ -220,7 +357,7 @@ class GraphDB:
         hashtags: List[str]
     ) -> None:
         """Update a document node with summary, document type, and hashtags."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MATCH (d:Document {id: $doc_id})
@@ -240,7 +377,7 @@ class GraphDB:
         hashtags: List[str]
     ) -> None:
         """Update only the hashtags for a document."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MATCH (d:Document {id: $doc_id})
@@ -252,7 +389,7 @@ class GraphDB:
 
     def get_documents_with_summaries(self) -> List[Dict[str, Any]]:
         """Get all documents that have summaries."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document)
@@ -268,7 +405,7 @@ class GraphDB:
 
     def get_all_hashtags(self) -> List[str]:
         """Get all unique hashtags from all documents."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document)
@@ -298,7 +435,7 @@ class GraphDB:
         )
 
         try:
-            with self.driver.session() as session:  # type: ignore
+            with self.session_scope() as session:
                 session.run(
                     """
                     MERGE (c:Chunk {id: $chunk_id})
@@ -330,21 +467,25 @@ class GraphDB:
             raise
 
     def create_similarity_relationship(
-        self, chunk_id1: str, chunk_id2: str, similarity_score: float
+        self, chunk_id1: str, chunk_id2: str, similarity_score: float, rank: int = None
     ) -> None:
         """Create similarity relationship between chunks."""
-        with self.driver.session() as session:  # type: ignore
-            session.run(
-                """
+        with self.session_scope() as session:
+            cypher = """
                 MATCH (c1:Chunk {id: $chunk_id1})
                 MATCH (c2:Chunk {id: $chunk_id2})
                 MERGE (c1)-[r:SIMILAR_TO]-(c2)
                 SET r.score = $similarity_score
-                """,
-                chunk_id1=chunk_id1,
-                chunk_id2=chunk_id2,
-                similarity_score=similarity_score,
-            )
+                """
+            params = {
+                "chunk_id1": chunk_id1,
+                "chunk_id2": chunk_id2,
+                "similarity_score": similarity_score,
+            }
+            if rank is not None:
+                cypher += "\nSET r.rank = $rank"
+                params["rank"] = rank
+            session.run(cypher, **params)
 
     @staticmethod
     def _calculate_cosine_similarity(
@@ -368,7 +509,7 @@ class GraphDB:
         if threshold is None:
             threshold = settings.similarity_threshold
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Get all chunks for the document with their embeddings
             result = session.run(
                 """
@@ -411,10 +552,10 @@ class GraphDB:
                 similarities.sort(key=lambda x: x[1], reverse=True)
                 top_similarities = similarities[:max_connections]
 
-                # Create relationships
-                for chunk_id2, similarity in top_similarities:
+                # Create relationships with rank
+                for rank, (chunk_id2, similarity) in enumerate(top_similarities):
                     self.create_similarity_relationship(
-                        chunk_id1, chunk_id2, similarity
+                        chunk_id1, chunk_id2, similarity, rank
                     )
                     relationships_created += 1
 
@@ -428,7 +569,7 @@ class GraphDB:
         if threshold is None:
             threshold = settings.similarity_threshold
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Get all document IDs
             result = session.run("MATCH (d:Document) RETURN d.id as doc_id")
             doc_ids = [record["doc_id"] for record in result]
@@ -472,7 +613,7 @@ class GraphDB:
         if threshold is None:
             threshold = settings.similarity_threshold
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Build query based on whether we're processing specific doc or all entities
             if doc_id:
                 # Get entities for specific document
@@ -556,7 +697,7 @@ class GraphDB:
         if threshold is None:
             threshold = settings.similarity_threshold
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Get all document IDs that have entities
             result = session.run(
                 """
@@ -608,7 +749,7 @@ class GraphDB:
         self, entity_id1: str, entity_id2: str, similarity: float
     ) -> None:
         """Create a similarity relationship between two entities."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MATCH (e1:Entity {id: $entity_id1})
@@ -625,20 +766,78 @@ class GraphDB:
         self, query_embedding: List[float], top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search using cosine similarity."""
-        with self.driver.session() as session:  # type: ignore
-            result = session.run(
-                """
-                MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
-                WITH c, d, gds.similarity.cosine(c.embedding, $query_embedding) AS similarity
-                RETURN c.id as chunk_id, c.content as content, similarity,
-                       coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
-                ORDER BY similarity DESC
-                LIMIT $top_k
-                """,
-                query_embedding=query_embedding,
-                top_k=top_k,
-            )
-            return [record.data() for record in result]
+        try:
+            with self.session_scope() as session:
+                result = session.run(
+                    """
+                    MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+                    WITH c, d, gds.similarity.cosine(c.embedding, $query_embedding) AS similarity
+                    RETURN c.id as chunk_id, c.content as content, similarity,
+                           coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                    ORDER BY similarity DESC
+                    LIMIT $top_k
+                    """,
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            # If the GDS cosine function isn't available in the running Neo4j instance
+            # fall back to a Python-side cosine calculation using stored embeddings.
+            msg = str(e).lower()
+            if "unknown function 'gds.similarity.cosine'" in msg or 'gds.similarity.cosine' in msg:
+                logger.warning("GDS cosine function unavailable; falling back to Python cosine computation: %s", e)
+
+                # Query candidate chunks that have embeddings and compute cosine locally
+                with self.session_scope() as session:
+                    result = session.run(
+                        """
+                        MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+                        WHERE c.embedding IS NOT NULL
+                        RETURN c.id as chunk_id, c.content as content, c.embedding as embedding,
+                               coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                        """
+                    )
+                    candidates = [record.data() for record in result]
+
+                # Compute cosine similarity in Python (fallback, pure-Python implementation)
+                def _cosine(a: List[float], b: List[float]) -> float:
+                    try:
+                        # simple dot / (||a|| * ||b||)
+                        dot = 0.0
+                        na = 0.0
+                        nb = 0.0
+                        for x, y in zip(a, b):
+                            dot += x * y
+                            na += x * x
+                            nb += y * y
+                        if na == 0.0 or nb == 0.0:
+                            return 0.0
+                        return dot / ((na ** 0.5) * (nb ** 0.5))
+                    except Exception:
+                        return 0.0
+
+                scored = []
+                for row in candidates:
+                    emb = row.get("embedding")
+                    if not emb:
+                        continue
+                    try:
+                        sim = _cosine(query_embedding, emb)
+                    except Exception:
+                        sim = 0.0
+                    scored.append({
+                        "chunk_id": row.get("chunk_id"),
+                        "content": row.get("content"),
+                        "similarity": sim,
+                        "document_name": row.get("document_name"),
+                        "document_id": row.get("document_id"),
+                    })
+
+                scored.sort(key=lambda r: r.get("similarity", 0.0), reverse=True)
+                return scored[:top_k]
+            # Re-raise for other exceptions
+            raise
 
     def get_related_chunks(
         self,
@@ -650,7 +849,7 @@ class GraphDB:
         if relationship_types is None:
             relationship_types = ["SIMILAR_TO", "HAS_CHUNK"]
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Build the query dynamically since Neo4j doesn't allow parameters in pattern ranges
             query = f"""
                 MATCH (start:Chunk {{id: $chunk_id}})
@@ -685,7 +884,7 @@ class GraphDB:
 
     def get_document_chunks(self, doc_id: str) -> List[Dict[str, Any]]:
         """Get all chunks for a specific document."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
@@ -698,7 +897,7 @@ class GraphDB:
 
     def delete_document(self, doc_id: str) -> None:
         """Delete a document and all its chunks."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # 1. Collect chunk ids for the document
             result = session.run(
                 """
@@ -764,7 +963,7 @@ class GraphDB:
     def reset_document_entities(self, doc_id: str) -> Dict[str, int]:
         """Remove existing entity links for a document so extraction can be rerun cleanly."""
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             record = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
@@ -850,7 +1049,7 @@ class GraphDB:
 
     def get_all_documents(self) -> List[Dict[str, Any]]:
         """Get all documents with their metadata, chunk counts, and OCR information."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document)
@@ -882,7 +1081,7 @@ class GraphDB:
     def get_community_levels(self) -> List[int]:
         """Return sorted community levels that have assignments."""
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (e:Entity)
@@ -1028,7 +1227,7 @@ class GraphDB:
         if not entity_ids:
             return []
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
@@ -1036,9 +1235,9 @@ class GraphDB:
                 WITH DISTINCT c, d
                 RETURN c.id AS id,
                        coalesce(c.content, "") AS content,
-                       coalesce(c.metadata, {}) AS metadata,
-                       d.id AS document_id
-                ORDER BY coalesce(c.metadata.quality_score, 1.0) DESC,
+                       d.id AS document_id,
+                       coalesce(c.quality_score, 1.0) AS quality_score
+                ORDER BY coalesce(c.quality_score, 1.0) DESC,
                          size(c.content) DESC
                 LIMIT $limit
                 """,
@@ -1057,26 +1256,31 @@ class GraphDB:
         exemplar_text_units: List[Dict[str, Any]],
     ) -> None:
         """Persist or update a community summary node."""
+        import json
+        
+        # Convert complex objects to JSON strings for Neo4j compatibility
+        member_entities_json = json.dumps(member_entities)
+        exemplar_text_units_json = json.dumps(exemplar_text_units)
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MERGE (s:CommunitySummary {community_id: $community_id, level: $level})
                 SET s.summary = $summary,
-                    s.member_entities = $member_entities,
-                    s.exemplar_text_units = $exemplar_text_units,
+                    s.member_entities_json = $member_entities_json,
+                    s.exemplar_text_units_json = $exemplar_text_units_json,
                     s.generated_at = datetime()
                 """,
                 community_id=community_id,
                 level=level,
                 summary=summary,
-                member_entities=member_entities,
-                exemplar_text_units=exemplar_text_units,
+                member_entities_json=member_entities_json,
+                exemplar_text_units_json=exemplar_text_units_json,
             )
 
     def get_graph_stats(self) -> Dict[str, int]:
         """Get basic statistics about the graph database."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 OPTIONAL MATCH (d:Document)
@@ -1236,9 +1440,32 @@ class GraphDB:
             "node_types": node_types,
         }
 
+    def count_document_entities(self, document_id: str, community_id: Optional[int] = None) -> int:
+        """Count total number of unique entities for a document, optionally filtered by community."""
+        with self.session_scope() as session:
+            if community_id is not None:
+                result = session.run(
+                    """
+                    MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
+                    WHERE e.community_id = $community_id
+                    RETURN count(DISTINCT e) as entity_count
+                    """,
+                    document_id=document_id,
+                    community_id=community_id
+                ).single()
+            else:
+                result = session.run(
+                    """
+                    MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
+                    RETURN count(DISTINCT e) as entity_count
+                    """,
+                    document_id=document_id
+                ).single()
+            return result["entity_count"] if result else 0
+
     def get_entity_extraction_status(self) -> Dict[str, Any]:
         """Get entity extraction status for all documents."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document)
@@ -1277,7 +1504,7 @@ class GraphDB:
 
     def get_document_entities(self, doc_id: str) -> List[Dict[str, Any]]:
         """Get all entities extracted from a specific document."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
@@ -1292,7 +1519,7 @@ class GraphDB:
 
     def setup_indexes(self) -> None:
         """Create necessary indexes for performance."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Create indexes for faster lookups
             session.run("CREATE INDEX IF NOT EXISTS FOR (d:Document) ON (d.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Chunk) ON (c.id)")
@@ -1326,18 +1553,48 @@ class GraphDB:
             embedding = await embedding_manager.aget_embedding(entity_text)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            self._create_entity_node_sync,
-            entity_id,
-            name,
-            entity_type,
-            description,
-            importance_score,
-            source_chunks,
-            source_text_units,
-            embedding,
-        )
+        try:
+            executor = get_blocking_executor()
+            await loop.run_in_executor(
+                executor,
+                self._create_entity_node_sync,
+                entity_id,
+                name,
+                entity_type,
+                description,
+                importance_score,
+                source_chunks,
+                source_text_units,
+                embedding,
+            )
+        except RuntimeError as e:
+            logger.debug(
+                f"Blocking executor unavailable while creating entity {entity_id}: {e}."
+            )
+            if SHUTTING_DOWN:
+                logger.info(
+                    "Process shutting down; aborting create_entity_node for %s",
+                    entity_id,
+                )
+                return
+            try:
+                executor = get_blocking_executor()
+                await loop.run_in_executor(
+                    executor,
+                    self._create_entity_node_sync,
+                    entity_id,
+                    name,
+                    entity_type,
+                    description,
+                    importance_score,
+                    source_chunks,
+                    source_text_units,
+                    embedding,
+                )
+            except Exception as e2:
+                logger.error(
+                    f"Failed to schedule create_entity_node for {entity_id}: {e2}"
+                )
 
     def _create_entity_node_sync(
         self,
@@ -1351,7 +1608,7 @@ class GraphDB:
         embedding: List[float],
     ) -> None:
         """Synchronous helper for creating entity node in database."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MERGE (e:Entity {id: $entity_id})
@@ -1410,7 +1667,7 @@ class GraphDB:
 
     async def aupdate_entities_with_embeddings(self) -> int:
         """Update existing entities that don't have embeddings (async version)."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Get entities without embeddings
             result = session.run(
                 """
@@ -1454,8 +1711,9 @@ class GraphDB:
                 # Persist to DB in a thread to avoid blocking the event loop
                 loop = asyncio.get_running_loop()
                 try:
+                    executor = get_blocking_executor()
                     await loop.run_in_executor(
-                        None,
+                        executor,
                         self._update_entity_embedding_sync,
                         entity_id,
                         embedding,
@@ -1467,11 +1725,31 @@ class GraphDB:
                             f"Updated {updated_count}/{len(entities_to_update)} entities with embeddings"
                         )
                     return entity_id
-                except Exception as e:
-                    logger.error(
-                        f"Failed to update entity {entity_id} with embedding: {e}"
+                except RuntimeError as e:
+                    logger.debug(
+                        f"Blocking executor unavailable while updating entity {entity_id}: {e}."
                     )
-                    return None
+                    if SHUTTING_DOWN:
+                        logger.info(
+                            "Process shutting down; aborting update for %s",
+                            entity_id,
+                        )
+                        return None
+                    try:
+                        executor = get_blocking_executor()
+                        await loop.run_in_executor(
+                            executor,
+                            self._update_entity_embedding_sync,
+                            entity_id,
+                            embedding,
+                        )
+                        updated_count += 1
+                        return entity_id
+                    except Exception as e2:
+                        logger.error(
+                            f"Failed to update entity {entity_id} with embedding: {e2}"
+                        )
+                        return None
 
             tasks = [
                 asyncio.create_task(_embed_and_update_entity(entity))
@@ -1493,7 +1771,7 @@ class GraphDB:
         self, entity_id: str, embedding: List[float]
     ) -> None:
         """Synchronous helper for updating entity embedding in database."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MATCH (e:Entity {id: $entity_id})
@@ -1507,7 +1785,7 @@ class GraphDB:
         """Update existing entities that don't have embeddings (sync version kept for compatibility)."""
         updated_count = 0
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Get entities without embeddings
             result = session.run(
                 """
@@ -1571,7 +1849,7 @@ class GraphDB:
         if source_text_units is None:
             source_text_units = list(source_chunks)
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MATCH (e1:Entity {id: $entity_id1})
@@ -1595,7 +1873,7 @@ class GraphDB:
 
     def create_chunk_entity_relationship(self, chunk_id: str, entity_id: str) -> None:
         """Create a relationship between a chunk and an entity it contains."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 """
                 MATCH (c:Chunk {id: $chunk_id})
@@ -1606,11 +1884,156 @@ class GraphDB:
                 entity_id=entity_id,
             )
 
+    def execute_batch_unwind(
+        self,
+        entity_query: str,
+        entity_params: Dict[str, Any],
+        rel_query: str,
+        rel_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Execute batch UNWIND queries for entities and relationships (Phase 2).
+        
+        This method supports Phase 2 NetworkX implementation by executing
+        batch INSERT operations using Neo4j's UNWIND clause.
+        
+        Args:
+            entity_query: UNWIND query for entities
+            entity_params: Parameters with $entities array
+            rel_query: UNWIND query for relationships
+            rel_params: Parameters with $relationships array
+        
+        Returns:
+            Dict with execution metrics (entities_created, relationships_created, batches)
+        
+        Raises:
+            Exception: On query execution failure
+        """
+        try:
+            entity_count = len(entity_params.get("entities", []))
+            rel_count = len(rel_params.get("relationships", []))
+            
+            logger.info(f"Executing batch UNWIND: {entity_count} entities, {rel_count} relationships")
+            
+            # Check if we need to split batches
+            if entity_count > settings.neo4j_unwind_batch_size or rel_count > settings.neo4j_unwind_batch_size:
+                logger.warning(
+                    f"Batch size exceeds limit ({settings.neo4j_unwind_batch_size}), "
+                    f"splitting into smaller batches..."
+                )
+                return self._execute_batch_split(
+                    entity_query, entity_params, rel_query, rel_params
+                )
+            
+            # Execute in single transaction using the resilient session_scope
+            try:
+                with self.session_scope() as session:
+                    # Insert entities
+                    entity_result = session.run(entity_query, entity_params)
+                    entity_summary = entity_result.consume()
+                    entities_created = entity_summary.counters.nodes_created
+
+                    # Insert relationships
+                    rel_result = session.run(rel_query, rel_params)
+                    rel_summary = rel_result.consume()
+                    relationships_created = rel_summary.counters.relationships_created
+            except Exception as e:
+                # As a last-resort, attempt to re-establish connectivity and retry once
+                logger.warning("Batch UNWIND initial attempt failed, retrying after ensure_connected(): %s", e)
+                try:
+                    self.ensure_connected()
+                    with self.session_scope() as session:
+                        entity_result = session.run(entity_query, entity_params)
+                        entity_summary = entity_result.consume()
+                        entities_created = entity_summary.counters.nodes_created
+
+                        rel_result = session.run(rel_query, rel_params)
+                        rel_summary = rel_result.consume()
+                        relationships_created = rel_summary.counters.relationships_created
+                except Exception:
+                    logger.error("Batch UNWIND retry failed: %s", e)
+                    raise
+            
+            logger.info(
+                f"Batch UNWIND complete: {entities_created} entities, "
+                f"{relationships_created} relationships created"
+            )
+            
+            return {
+                "entities_created": entities_created,
+                "relationships_created": relationships_created,
+                "batches": 1,
+                "status": "success"
+            }
+        
+        except Exception as e:
+            logger.error(f"Batch UNWIND failed: {e}")
+            raise
+    
+    def _execute_batch_split(
+        self,
+        entity_query: str,
+        entity_params: Dict[str, Any],
+        rel_query: str,
+        rel_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Split large batches into chunks for Neo4j parameter size limits.
+        
+        Args:
+            entity_query: UNWIND query for entities
+            entity_params: Parameters with $entities array
+            rel_query: UNWIND query for relationships
+            rel_params: Parameters with $relationships array
+        
+        Returns:
+            Dict with execution metrics
+        """
+        batch_size = settings.neo4j_unwind_batch_size
+        entities = entity_params.get("entities", [])
+        relationships = rel_params.get("relationships", [])
+        
+        total_entities_created = 0
+        total_relationships_created = 0
+        batch_count = 0
+        
+        # Split entities into batches
+        for i in range(0, len(entities), batch_size):
+            batch = entities[i:i + batch_size]
+            with self.session_scope() as session:
+                result = session.run(entity_query, {"entities": batch})
+                summary = result.consume()
+                total_entities_created += summary.counters.nodes_created
+                batch_count += 1
+            logger.debug(f"Entity batch {batch_count}: {len(batch)} entities")
+        
+        # Split relationships into batches
+        for i in range(0, len(relationships), batch_size):
+            batch = relationships[i:i + batch_size]
+            with self.session_scope() as session:
+                result = session.run(rel_query, {"relationships": batch})
+                summary = result.consume()
+                total_relationships_created += summary.counters.relationships_created
+                batch_count += 1
+            logger.debug(f"Relationship batch {batch_count}: {len(batch)} relationships")
+        
+        logger.info(
+            f"Batch UNWIND (split) complete: {total_entities_created} entities, "
+            f"{total_relationships_created} relationships in {batch_count} batches"
+        )
+        
+        return {
+            "entities_created": total_entities_created,
+            "relationships_created": total_relationships_created,
+            "batches": batch_count,
+            "status": "success"
+        }
+
     def get_entities_by_type(
         self, entity_type: str, limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Get entities of a specific type."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (e:Entity {type: $entity_type})
@@ -1626,24 +2049,32 @@ class GraphDB:
 
     def get_entity_relationships(self, entity_id: str) -> List[Dict[str, Any]]:
         """Get all relationships for a specific entity."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (e1:Entity {id: $entity_id})-[r:RELATED_TO]-(e2:Entity)
-                RETURN e2.id as related_entity_id, e2.name as related_entity_name,
+                RETURN e2.id as related_entity_id,
                        e2.type as related_entity_type, r.type as relationship_type,
                        r.description as relationship_description, r.strength as strength
                 ORDER BY r.strength DESC
                 """,
                 entity_id=entity_id,
             )
-            return [record.data() for record in result]
+            relationships = []
+            for record in result:
+                rel_data = dict(record)
+                # Use cached label lookup instead of query result
+                rel_data["related_entity_name"] = self.get_entity_label_cached(
+                    record["related_entity_id"]
+                )
+                relationships.append(rel_data)
+            return relationships
 
     def entity_similarity_search(
         self, query_text: str, top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """Search entities by text similarity using full-text search."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Create full-text index if it doesn't exist
             try:
                 session.run(
@@ -1669,7 +2100,7 @@ class GraphDB:
 
     def get_entities_for_chunks(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
         """Get all entities contained in the specified chunks."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
@@ -1684,7 +2115,7 @@ class GraphDB:
 
     def get_chunks_for_entities(self, entity_ids: List[str]) -> List[Dict[str, Any]]:
         """Get all chunks that contain the specified entities."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
@@ -1702,7 +2133,7 @@ class GraphDB:
         self, entity_id: str, max_depth: int = 2, max_entities: int = 50
     ) -> Dict[str, Any]:
         """Get a subgraph around a specific entity."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             if max_depth == 1:
                 query = """
                     MATCH (start:Entity {id: $entity_id})-[r:RELATED_TO]-(related:Entity)
@@ -1735,16 +2166,16 @@ class GraphDB:
             result = session.run(query, entity_id=entity_id)
             record = result.single()
             if record:
-                entities = [
-                    {
+                entities = []
+                for node in record["entities"]:
+                    entity_data = {
                         "id": node["id"],
-                        "name": node["name"],
+                        "name": self.get_entity_label_cached(node["id"]),  # Use cached lookup
                         "type": node["type"],
                         "description": node["description"],
                         "importance_score": node["importance_score"],
                     }
-                    for node in record["entities"]
-                ]
+                    entities.append(entity_data)
                 return {"entities": entities, "relationships": record["relationships"]}
             return {"entities": [], "relationships": []}
 
@@ -1758,7 +2189,7 @@ class GraphDB:
         Returns:
             Dictionary with validation results
         """
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             if doc_id:
                 query = """
                     MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
@@ -1852,7 +2283,7 @@ class GraphDB:
         Returns:
             Dictionary with validation results
         """
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             if doc_id:
                 query = """
                     MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
@@ -1970,11 +2401,35 @@ class GraphDB:
                     try:
                         # Get chunk content in executor to avoid blocking
                         loop = asyncio.get_running_loop()
-                        content = await loop.run_in_executor(
-                            None,
-                            self._get_chunk_content_sync,
-                            chunk_id,
-                        )
+                        try:
+                            executor = get_blocking_executor()
+                            content = await loop.run_in_executor(
+                                executor,
+                                self._get_chunk_content_sync,
+                                chunk_id,
+                            )
+                        except RuntimeError as e:
+                            logger.debug(
+                                f"Blocking executor unavailable while fetching chunk content {chunk_id}: {e}."
+                            )
+                            if SHUTTING_DOWN:
+                                logger.info(
+                                    "Process shutting down; aborting fix for chunk %s",
+                                    chunk_id,
+                                )
+                                return False
+                            try:
+                                executor = get_blocking_executor()
+                                content = await loop.run_in_executor(
+                                    executor,
+                                    self._get_chunk_content_sync,
+                                    chunk_id,
+                                )
+                            except Exception as e2:
+                                logger.error(
+                                    f"Failed to fetch chunk content {chunk_id}: {e2}"
+                                )
+                                return False
 
                         if content:
                             # Add small delay to prevent API flooding
@@ -1983,12 +2438,37 @@ class GraphDB:
                             embedding = await embedding_manager.aget_embedding(content)
 
                             # Update chunk with new embedding in executor
-                            await loop.run_in_executor(
-                                None,
-                                self._update_chunk_embedding_sync,
-                                chunk_id,
-                                embedding,
-                            )
+                            try:
+                                executor = get_blocking_executor()
+                                await loop.run_in_executor(
+                                    executor,
+                                    self._update_chunk_embedding_sync,
+                                    chunk_id,
+                                    embedding,
+                                )
+                            except RuntimeError as e:
+                                logger.debug(
+                                    f"Blocking executor unavailable while updating chunk {chunk_id}: {e}."
+                                )
+                                if SHUTTING_DOWN:
+                                    logger.info(
+                                        "Process shutting down; aborting update for chunk %s",
+                                        chunk_id,
+                                    )
+                                    return False
+                                try:
+                                    executor = get_blocking_executor()
+                                    await loop.run_in_executor(
+                                        executor,
+                                        self._update_chunk_embedding_sync,
+                                        chunk_id,
+                                        embedding,
+                                    )
+                                except Exception as e2:
+                                    logger.error(
+                                        f"Failed to update chunk {chunk_id} embedding: {e2}"
+                                    )
+                                    return False
                             results["chunks_fixed"] += 1
                             logger.info(f"Fixed embedding for chunk {chunk_id}")
                             return True
@@ -2021,11 +2501,35 @@ class GraphDB:
                     try:
                         # Get entity data in executor to avoid blocking
                         loop = asyncio.get_running_loop()
-                        entity_data = await loop.run_in_executor(
-                            None,
-                            self._get_entity_data_sync,
-                            entity_id,
-                        )
+                        try:
+                            executor = get_blocking_executor()
+                            entity_data = await loop.run_in_executor(
+                                executor,
+                                self._get_entity_data_sync,
+                                entity_id,
+                            )
+                        except RuntimeError as e:
+                            logger.debug(
+                                f"Blocking executor unavailable while fetching entity data {entity_id}: {e}."
+                            )
+                            if SHUTTING_DOWN:
+                                logger.info(
+                                    "Process shutting down; aborting entity fix for %s",
+                                    entity_id,
+                                )
+                                return False
+                            try:
+                                executor = get_blocking_executor()
+                                entity_data = await loop.run_in_executor(
+                                    executor,
+                                    self._get_entity_data_sync,
+                                    entity_id,
+                                )
+                            except Exception as e2:
+                                logger.error(
+                                    f"Failed to fetch entity data {entity_id}: {e2}"
+                                )
+                                return False
 
                         if entity_data:
                             # Add small delay to prevent API flooding
@@ -2038,12 +2542,37 @@ class GraphDB:
                             embedding = await embedding_manager.aget_embedding(text)
 
                             # Update entity with new embedding in executor
-                            await loop.run_in_executor(
-                                None,
-                                self._update_entity_embedding_sync,
-                                entity_id,
-                                embedding,
-                            )
+                            try:
+                                executor = get_blocking_executor()
+                                await loop.run_in_executor(
+                                    executor,
+                                    self._update_entity_embedding_sync,
+                                    entity_id,
+                                    embedding,
+                                )
+                            except RuntimeError as e:
+                                logger.debug(
+                                    f"Blocking executor unavailable while updating entity {entity_id}: {e}."
+                                )
+                                if SHUTTING_DOWN:
+                                    logger.info(
+                                        "Process shutting down; aborting update for entity %s",
+                                        entity_id,
+                                    )
+                                    return False
+                                try:
+                                    executor = get_blocking_executor()
+                                    await loop.run_in_executor(
+                                        executor,
+                                        self._update_entity_embedding_sync,
+                                        entity_id,
+                                        embedding,
+                                    )
+                                except Exception as e2:
+                                    logger.error(
+                                        f"Failed to update entity {entity_id} embedding: {e2}"
+                                    )
+                                    return False
                             results["entities_fixed"] += 1
                             logger.info(f"Fixed embedding for entity {entity_id}")
                             return True
@@ -2072,7 +2601,7 @@ class GraphDB:
 
     def _get_chunk_content_sync(self, chunk_id: str) -> Optional[str]:
         """Synchronous helper for getting chunk content."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 "MATCH (c:Chunk {id: $chunk_id}) RETURN c.content as content",
                 chunk_id=chunk_id,
@@ -2084,7 +2613,7 @@ class GraphDB:
         self, chunk_id: str, embedding: List[float]
     ) -> None:
         """Synchronous helper for updating chunk embedding."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             session.run(
                 "MATCH (c:Chunk {id: $chunk_id}) SET c.embedding = $embedding",
                 chunk_id=chunk_id,
@@ -2093,7 +2622,7 @@ class GraphDB:
 
     def _get_entity_data_sync(self, entity_id: str) -> Optional[Dict[str, str]]:
         """Synchronous helper for getting entity data."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 "MATCH (e:Entity {id: $entity_id}) RETURN e.name as name, e.description as description",
                 entity_id=entity_id,
@@ -2124,7 +2653,7 @@ class GraphDB:
 
         # Fix chunk embeddings
         if chunk_ids is not None:
-            with self.driver.session() as session:  # type: ignore
+            with self.session_scope() as session:
                 for chunk_id in chunk_ids:
                     try:
                         # Get chunk content
@@ -2152,7 +2681,7 @@ class GraphDB:
 
         # Fix entity embeddings (if they're supposed to have embeddings)
         if entity_ids is not None:
-            with self.driver.session() as session:  # type: ignore
+            with self.session_scope() as session:
                 for entity_id in entity_ids:
                     try:
                         # Get entity name/description for embedding
@@ -2209,7 +2738,7 @@ class GraphDB:
             return []
 
         try:
-            with self.driver.session() as session:  # type: ignore
+            with self.session_scope() as session:
                 # Get seed entities with their data
                 seed_entities_data = session.run(
                     """
@@ -2272,7 +2801,7 @@ class GraphDB:
                             MATCH (e1:Entity {id: $entity_id})-[r:RELATED_TO]-(e2:Entity)
                             WHERE r.strength >= $min_strength
                             AND NOT e2.id IN $visited_ids
-                            RETURN e2.id as target_id, e2.name as target_name,
+                            RETURN e2.id as target_id,
                                    e2.type as target_type, e2.description as target_description,
                                    e2.importance_score as target_importance,
                                    e2.embedding as target_embedding,
@@ -2293,7 +2822,7 @@ class GraphDB:
                         for rel_data in relationships_data:
                             target_entity = Entity(
                                 id=rel_data["target_id"],
-                                name=rel_data["target_name"],
+                                name=self.get_entity_label_cached(rel_data["target_id"]),  # Use cached lookup
                                 type=rel_data["target_type"],
                                 description=rel_data.get("target_description", ""),
                                 importance_score=rel_data.get("target_importance", 0.5),
@@ -2365,7 +2894,7 @@ class GraphDB:
 
     def get_database_stats(self) -> Dict[str, Any]:
         """Get comprehensive database statistics for the API."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Get basic stats
             result = session.run(
                 """
@@ -2412,7 +2941,7 @@ class GraphDB:
 
     def list_documents(self) -> List[Dict[str, Any]]:
         """List all documents in the database."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document)
@@ -2445,7 +2974,7 @@ class GraphDB:
                     return value
             return str(value)
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             doc_record = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})
@@ -2488,6 +3017,8 @@ class GraphDB:
                 MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
                 RETURN e.type as type,
                        e.name as text,
+                       e.community_id as community_id,
+                       e.level as level,
                        count(*) as count,
                        collect(DISTINCT c.chunk_index) as positions
                 ORDER BY type ASC, text ASC
@@ -2498,6 +3029,8 @@ class GraphDB:
                 {
                     "type": record["type"],
                     "text": record["text"],
+                    "community_id": record["community_id"],
+                    "level": record.get("level"),
                     "count": record["count"],
                     "positions": [pos for pos in (record["positions"] or []) if pos is not None],
                 }
@@ -2588,7 +3121,7 @@ class GraphDB:
     def get_document_file_info(self, doc_id: str) -> Dict[str, Any]:
         """Return file metadata for previewing a document."""
 
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             record = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})
@@ -2615,7 +3148,7 @@ class GraphDB:
 
     def clear_database(self) -> None:
         """Clear all data from the database."""
-        with self.driver.session() as session:  # type: ignore
+        with self.session_scope() as session:
             # Delete all nodes and relationships
             session.run("MATCH (n) DETACH DELETE n")
             logger.info("Database cleared")

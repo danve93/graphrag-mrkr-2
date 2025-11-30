@@ -361,7 +361,7 @@ Answer with JSON format:
         result = llm_manager.generate_response(
             prompt=detection_prompt,
             system_message=system_message,
-            temperature=0.1,
+            temperature=1.0,
             max_tokens=150,
         )
 
@@ -438,7 +438,7 @@ Rewritten question:"""
         contextualized = llm_manager.generate_response(
             prompt=contextualization_prompt,
             system_message=system_message,
-            temperature=0.1,
+            temperature=1.0,
             max_tokens=200,
         )
 

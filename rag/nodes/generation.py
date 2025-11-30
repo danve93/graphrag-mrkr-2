@@ -220,3 +220,74 @@ def generate_response(
             },
             "quality_score": None,
         }
+
+
+def stream_generate_response(
+    query: str,
+    context_chunks: List[Dict[str, Any]],
+    query_analysis: Dict[str, Any],
+    temperature: float = 0.7,
+    chat_history: List[Dict[str, str]] = None,
+    llm_model: str | None = None,
+):
+    """
+    Stream generation tokens for a RAG response. This is a synchronous
+    generator that yields token fragments (strings) as produced by the LLM.
+    After the stream completes, callers can reconstruct the full response
+    from the concatenated tokens.
+    """
+    try:
+        if not context_chunks:
+            # Immediately yield a short message and return
+            yield "I couldn't find any relevant information to answer your question."
+            return
+
+        # Deduplicate and filter chunks same as non-streaming path
+        deduped_chunks = {}
+        for chunk in context_chunks:
+            chunk_id = chunk.get("chunk_id") or chunk.get("id")
+            score = chunk.get("similarity", chunk.get("hybrid_score", 0.0))
+            if not chunk_id:
+                chunk_id = f"anon_{hash(chunk.get('content', ''))}"
+            current = deduped_chunks.get(chunk_id)
+            if not current or score > current.get("similarity", current.get("hybrid_score", 0.0)):
+                deduped_chunks[chunk_id] = chunk
+
+        relevant_chunks = [
+            chunk
+            for chunk in deduped_chunks.values()
+            if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
+        ]
+
+        # Use LLM manager streaming interface
+        from core.llm import llm_manager
+
+        system_message = "You are a helpful assistant that answers questions based on the provided context."
+
+        # Stream tokens from provider
+        buffer = []
+        try:
+            for token in llm_manager.stream_generate_rag_response(
+                query=query,
+                context_chunks=relevant_chunks,
+                system_message=system_message,
+                include_sources=True,
+                temperature=temperature,
+                chat_history=chat_history if query_analysis.get("is_follow_up") else None,
+                model_override=llm_model,
+            ):
+                # Yield each token fragment as-is
+                buffer.append(token)
+                yield token
+        except Exception as e:
+            logger.error(f"Streaming generation failed: {e}")
+            # On error, yield an error message
+            yield f"\n\n[Error streaming response: {e}]"
+            return
+
+        # Finalize: after stream ends we could compute sources/metadata/quality externally
+        return
+    except Exception as e:
+        logger.error(f"Streamed response generator failed: {e}")
+        yield f"I apologize, but I encountered an error generating the streamed response: {e}"
+        return

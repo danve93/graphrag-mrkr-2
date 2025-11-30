@@ -55,6 +55,12 @@ export default function DocumentView() {
   const selectDocument = useChatStore((state) => state.selectDocument)
 
   const [documentData, setDocumentData] = useState<DocumentDetails | null>(null)
+  // Summary-first loading: lightweight stats before full details
+  const [summaryData, setSummaryData] = useState<null | {
+    id: string
+    filename: string
+    stats: { chunks: number; entities: number; communities: number; similarities: number }
+  }>(null)
   const [hasPreview, setHasPreview] = useState<boolean | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -126,39 +132,44 @@ export default function DocumentView() {
     }
   }, [selectDocument, selectedDocumentId])
 
+  // Summary-first loading effect
   useEffect(() => {
     let isSubscribed = true
 
-    const fetchDocument = async (documentId: string) => {
+    const fetchSummary = async (documentId: string) => {
       setIsLoading(true)
       setError(null)
+      setSummaryData(null)
       setDocumentData(null)
       setPreviewState(initialPreviewState)
       setShowAllChunks(false)
       setShowAllEntities({})
-
       try {
-        const data = await api.getDocument(documentId)
+        performance.mark('document-summary-fetch-start')
+        const summary = await api.getDocumentSummary(documentId)
+        performance.mark('document-summary-fetch-end')
+        performance.measure('document-summary-fetch', 'document-summary-fetch-start', 'document-summary-fetch-end')
+        const measure = performance.getEntriesByName('document-summary-fetch')[0]
+        if (measure) {
+          console.log(`[Performance] Document summary loaded in ${measure.duration.toFixed(2)}ms`)
+        }
         if (isSubscribed) {
-          setDocumentData(data)
+          setSummaryData({ id: summary.id, filename: summary.filename, stats: summary.stats })
           setHasPreview(null)
         }
-      } catch (fetchError) {
-        if (isSubscribed) {
-          setError(fetchError instanceof Error ? fetchError.message : 'Failed to load document')
-        }
+      } catch (e) {
+        if (isSubscribed) setError(e instanceof Error ? e.message : 'Failed to load summary')
       } finally {
-        if (isSubscribed) {
-          setIsLoading(false)
-        }
+        if (isSubscribed) setIsLoading(false)
       }
     }
 
     if (selectedDocumentId) {
-      void fetchDocument(selectedDocumentId)
+      void fetchSummary(selectedDocumentId)
       void refreshProcessingState()
       void refreshSettings()
     } else {
+      setSummaryData(null)
       setDocumentData(null)
       setPreviewState(initialPreviewState)
       setShowAllChunks(false)
@@ -168,30 +179,28 @@ export default function DocumentView() {
       setSettings(null)
     }
 
-    const handleProcessed = () => {
-      if (selectedDocumentId) {
-        void fetchDocument(selectedDocumentId)
-        void refreshProcessingState()
-      }
-    }
-
-    const handleProcessingUpdated = () => {
-      void refreshProcessingState()
-    }
-
-    if (typeof window !== 'undefined') {
-      window.addEventListener('documents:processed', handleProcessed)
-      window.addEventListener('documents:processing-updated', handleProcessingUpdated)
-    }
-
     return () => {
       isSubscribed = false
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('documents:processed', handleProcessed)
-        window.removeEventListener('documents:processing-updated', handleProcessingUpdated)
-      }
     }
   }, [refreshProcessingState, refreshSettings, selectedDocumentId])
+
+  // Lazy full-document load when user expands sections
+  useEffect(() => {
+    const needFull = selectedDocumentId && !documentData && (isChunksExpanded || isEntitiesExpanded || isMetadataExpanded)
+    if (needFull && selectedDocumentId) {
+      ;(async () => {
+        try {
+          setIsLoading(true)
+          const full = await api.getDocument(selectedDocumentId)
+          setDocumentData(full)
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Failed to load document')
+        } finally {
+          setIsLoading(false)
+        }
+      })()
+    }
+  }, [isChunksExpanded, isEntitiesExpanded, isMetadataExpanded, documentData, selectedDocumentId])
 
   useEffect(() => {
     let isSubscribed = true
@@ -585,6 +594,37 @@ export default function DocumentView() {
     )
   }
 
+  // Early summary panel before full document loads
+  if (summaryData && !documentData) {
+    return (
+      <div className="flex flex-col h-full overflow-hidden p-6">
+        <div className="border border-secondary-200 dark:border-secondary-700 rounded bg-white dark:bg-secondary-800 p-4 mb-4">
+          <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 mb-1">{summaryData.filename}</h2>
+          <p className="text-xs text-secondary-500 dark:text-secondary-400 mb-4">ID: {summaryData.id}</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+              <p className="font-semibold">Chunks</p>
+              <p>{summaryData.stats.chunks}</p>
+            </div>
+            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+              <p className="font-semibold">Entities</p>
+              <p>{summaryData.stats.entities}</p>
+            </div>
+            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+              <p className="font-semibold">Communities</p>
+              <p>{summaryData.stats.communities}</p>
+            </div>
+            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+              <p className="font-semibold">Similarities</p>
+              <p>{summaryData.stats.similarities}</p>
+            </div>
+          </div>
+          <p className="mt-4 text-xs text-secondary-500 dark:text-secondary-400">Expand a section (Chunks, Entities, Metadata) to load full details.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="border-b border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4 flex items-center gap-4">
@@ -630,7 +670,7 @@ export default function DocumentView() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 bg-secondary-50 dark:bg-secondary-900">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6 bg-secondary-50 dark:bg-secondary-900">
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 text-secondary-500 dark:text-secondary-400">
             <Loader size={40} label="Loading document metadata…" />

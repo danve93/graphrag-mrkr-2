@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from config.settings import settings
 from rag.retriever import DocumentRetriever, RetrievalMode
+from core.singletons import get_blocking_executor, SHUTTING_DOWN
 
 logger = logging.getLogger(__name__)
 
@@ -200,55 +201,44 @@ def retrieve_documents(
     try:
         allowed_docs = context_documents or []
 
-        # Check if we're already in an event loop (e.g., running inside FastAPI)
+        # Build the coroutine to run when needed
+        coro = retrieve_documents_async(
+            query=query,
+            query_analysis=query_analysis,
+            retrieval_mode=retrieval_mode,
+            top_k=top_k,
+            chunk_weight=chunk_weight,
+            entity_weight=entity_weight,
+            path_weight=path_weight,
+            graph_expansion=graph_expansion,
+            use_multi_hop=use_multi_hop,
+            max_hops=max_hops,
+            beam_size=beam_size,
+            restrict_to_context=restrict_to_context,
+            expansion_depth=expansion_depth,
+            context_documents=allowed_docs,
+            embedding_model=embedding_model,
+        )
+
+        # If we're running inside an event loop (e.g., FastAPI), submit the
+        # coroutine to the shared blocking executor to avoid creating a short
+        # lived ThreadPoolExecutor each call.
         try:
             asyncio.get_running_loop()
-            # We're in an async context - need to run in thread pool
-            import concurrent.futures
+            executor = get_blocking_executor()
+            try:
+                fut = executor.submit(asyncio.run, coro)
+            except RuntimeError:
+                if SHUTTING_DOWN:
+                    return []
+                executor = get_blocking_executor()
+                fut = executor.submit(asyncio.run, coro)
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Build the coroutine with explicit keyword args to avoid positional/keyword conflicts
-                coro = retrieve_documents_async(
-                    query=query,
-                    query_analysis=query_analysis,
-                    retrieval_mode=retrieval_mode,
-                    top_k=top_k,
-                    chunk_weight=chunk_weight,
-                    entity_weight=entity_weight,
-                    path_weight=path_weight,
-                    graph_expansion=graph_expansion,
-                    use_multi_hop=use_multi_hop,
-                    max_hops=max_hops,
-                    beam_size=beam_size,
-                    restrict_to_context=restrict_to_context,
-                    expansion_depth=expansion_depth,
-                    context_documents=allowed_docs,
-                    embedding_model=embedding_model,
-                )
-
-                future = executor.submit(asyncio.run, coro)
-                return future.result()
+            return fut.result()
         except RuntimeError:
-            # No event loop running - safe to use asyncio.run()
-            return asyncio.run(
-                retrieve_documents_async(
-                    query=query,
-                    query_analysis=query_analysis,
-                    retrieval_mode=retrieval_mode,
-                    top_k=top_k,
-                    chunk_weight=chunk_weight,
-                    entity_weight=entity_weight,
-                    path_weight=path_weight,
-                    graph_expansion=graph_expansion,
-                    use_multi_hop=use_multi_hop,
-                    max_hops=max_hops,
-                    beam_size=beam_size,
-                    restrict_to_context=restrict_to_context,
-                    expansion_depth=expansion_depth,
-                    context_documents=allowed_docs,
-                    embedding_model=embedding_model,
-                )
-            )
+            # No running loop — safe to run directly
+            return asyncio.run(coro)
+
     except Exception as e:
         logger.error(f"Error in synchronous retrieval wrapper: {e}")
         return []

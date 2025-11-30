@@ -2,10 +2,15 @@
 Configuration management for the GraphRAG pipeline.
 """
 
-from typing import List, Optional
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -18,7 +23,7 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
     openai_base_url: Optional[str] = Field(default=None, description="OpenAI base URL")
     openai_model: Optional[str] = Field(
-        default="gpt-3.5-turbo", description="OpenAI model name"
+        default="gpt-4o-mini", description="OpenAI model name"
     )
     openai_proxy: Optional[str] = Field(default=None, description="OpenAI proxy URL")
 
@@ -66,8 +71,8 @@ class Settings(BaseSettings):
     )
 
     # Document Processing Configuration
-    chunk_size: int = Field(default=1000, description="Document chunk size")
-    chunk_overlap: int = Field(default=200, description="Document chunk overlap")
+    chunk_size: int = Field(default=1200, description="Document chunk size")
+    chunk_overlap: int = Field(default=150, description="Document chunk overlap")
 
     # Similarity Configuration
     similarity_threshold: float = Field(default=0.7, description="Similarity threshold")
@@ -80,12 +85,32 @@ class Settings(BaseSettings):
         default=True, description="Enable entity extraction"
     )
 
+    # Gleaning Configuration (Phase 1: Multi-pass Entity Extraction)
+    enable_gleaning: bool = Field(
+        default=True,
+        description="Enable multi-pass entity extraction with gleaning (enabled for quality)"
+    )
+    max_gleanings: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Number of additional extraction passes after initial pass (1=2 total passes for optimal quality)"
+    )
+    gleaning_by_doc_type: dict = Field(
+        default={
+            "admin": 2,
+            "user": 1,
+            "support": 0,
+        },
+        description="Document-type-specific gleaning configuration (overrides max_gleanings)"
+    )
+
     # OCR Configuration
     enable_ocr: bool = Field(
         default=True, description="Enable OCR processing for scanned documents"
     )
     enable_quality_filtering: bool = Field(
-        default=True, description="Enable chunk quality filtering"
+        default=True, description="Enable chunk quality filtering (always on for production)"
     )
     ocr_quality_threshold: float = Field(
         default=0.6, description="Quality threshold for OCR processing"
@@ -172,8 +197,16 @@ class Settings(BaseSettings):
 
     # FlashRank reranker configuration (optional)
     flashrank_enabled: bool = Field(
-        default=False,
-        description="Enable FlashRank reranker for post-retrieval re-ranking (disabled by default)",
+        default=True,
+        description="Enable FlashRank reranker for post-retrieval re-ranking (enabled for quality)",
+    )
+    # Control whether the FlashRank prewarm runs inside the web process.
+    # In production it's preferable to run prewarm in a separate worker to avoid
+    # impacting web request latency. Set `FLASHRANK_PREWARM_IN_PROCESS=0` to
+    # run the prewarm externally via the provided worker script.
+    flashrank_prewarm_in_process: bool = Field(
+        default=True,
+        description="Run FlashRank prewarm inside the web process (True) or in an external worker (False)",
     )
     flashrank_model_name: str = Field(
         default="ms-marco-TinyBERT-L-2-v2",
@@ -200,6 +233,50 @@ class Settings(BaseSettings):
         description="Batch size for reranker calls (where applicable)",
     )
 
+    # Caching Configuration
+    entity_label_cache_size: int = Field(
+        default=5000,
+        description="Maximum entries in entity label cache"
+    )
+    entity_label_cache_ttl: int = Field(
+        default=300,
+        description="TTL for entity label cache (seconds)"
+    )
+    embedding_cache_size: int = Field(
+        default=10000,
+        description="Maximum entries in embedding cache"
+    )
+    retrieval_cache_size: int = Field(
+        default=1000,
+        description="Maximum entries in retrieval cache"
+    )
+    retrieval_cache_ttl: int = Field(
+        default=60,
+        description="TTL for retrieval cache (seconds)"
+    )
+    # Response-level caching (semantic response cache)
+    response_cache_size: int = Field(
+        default=2000,
+        description="Maximum entries in response cache"
+    )
+    response_cache_ttl: int = Field(
+        default=300,
+        description="TTL for response cache (seconds)"
+    )
+    # Provider-level LLM streaming (experimental)
+    enable_llm_streaming: bool = Field(
+        default=False,
+        description="Enable provider-level LLM streaming (use with care)"
+    )
+    neo4j_max_connection_pool_size: int = Field(
+        default=50,
+        description="Maximum connections in Neo4j pool"
+    )
+    enable_caching: bool = Field(
+        default=True,
+        description="Enable caching system (set to false for rollback)"
+    )
+
     # Application Configuration
     log_level: str = Field(default="INFO", description="Logging level")
     max_upload_size: int = Field(
@@ -208,7 +285,7 @@ class Settings(BaseSettings):
 
     # Quality Scoring Configuration
     enable_quality_scoring: bool = Field(
-        default=True, description="Enable quality scoring for LLM answers"
+        default=True, description="Enable quality scoring for LLM answers (always on for production)"
     )
     quality_score_weights: dict = Field(
         default={
@@ -226,14 +303,248 @@ class Settings(BaseSettings):
         default=True, description="Enable ability to delete documents and clear database"
     )
 
+    # Phase 2: NetworkX Intermediate Layer Configuration
+    enable_phase2_networkx: bool = Field(
+        default=True,
+        description="Enable NetworkX intermediate graph layer for batch persistence (Phase 2) - reduces duplicates by 22%"
+    )
+    neo4j_unwind_batch_size: int = Field(
+        default=500,
+        description="Maximum entities per UNWIND batch query"
+    )
+    max_nodes_per_doc: int = Field(
+        default=2000,
+        description="Maximum entity nodes per document (memory limit)"
+    )
+    max_edges_per_doc: int = Field(
+        default=5000,
+        description="Maximum relationship edges per document (memory limit)"
+    )
+    importance_score_threshold: float = Field(
+        default=0.3,
+        description="Minimum importance score to include entity (early filtering)"
+    )
+    strength_threshold: float = Field(
+        default=0.4,
+        description="Minimum relationship strength to persist"
+    )
+    phase_version: str = Field(
+        default="phase2_v1",
+        description="Phase version tag for node metadata"
+    )
+
+    # Phase 3: Tuple-Delimited Output Format Configuration
+    entity_extraction_format: str = Field(
+        default="tuple_v1",
+        description="Entity extraction output format (tuple_v1=tuple-delimited)"
+    )
+    tuple_format_validation: bool = Field(
+        default=True,
+        description="Enable strict validation of tuple format output"
+    )
+    # Removed legacy fallback to pipe parser
+    tuple_delimiter: str = Field(
+        default="<|>",
+        description="Delimiter used in tuple format (default: <|>)"
+    )
+    tuple_max_description_length: int = Field(
+        default=500,
+        description="Maximum description length in tuple format (truncate longer descriptions)"
+    )
+
+    # Phase 4: Description Summarization Configuration
+    enable_description_summarization: bool = Field(
+        default=True,
+        description="Enable LLM-based description summarization (reduces verbosity by 50-70% per Microsoft GraphRAG)"
+    )
+    summarization_min_mentions: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Minimum entity/relationship mentions to trigger summarization (default: 3)"
+    )
+    summarization_min_length: int = Field(
+        default=200,
+        ge=50,
+        le=1000,
+        description="Minimum description length (characters) to trigger summarization (default: 200)"
+    )
+    summarization_batch_size: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of entities/relationships to summarize per LLM call (default: 5, balance efficiency vs token limits)"
+    )
+    summarization_cache_enabled: bool = Field(
+        default=True,
+        description="Enable summarization caching to avoid re-summarizing identical descriptions (default: True)"
+    )
+
+    # Marker Conversion (PDF/Image) Configuration
+    use_marker_for_pdf: bool = Field(
+        default=True,
+        description="Use Marker for PDF conversion to Markdown/JSON (enabled for quality)"
+    )
+    marker_output_format: str = Field(
+        default="markdown",
+        description="Marker output format: markdown|json|html|chunks"
+    )
+    marker_use_llm: bool = Field(
+        default=True,
+        description="Enable Marker LLM hybrid processors (tables/complex regions) - highest accuracy"
+    )
+    marker_paginate_output: bool = Field(
+        default=True,
+        description="Include pagination markers for provenance in Marker output"
+    )
+    marker_force_ocr: bool = Field(
+        default=True,
+        description="Force OCR on all PDF pages in Marker for inline math and highest quality"
+    )
+    marker_strip_existing_ocr: bool = Field(
+        default=False,
+        description="Strip embedded OCR text and re-OCR in Marker"
+    )
+    marker_pdftext_workers: int = Field(
+        default=4,
+        description="Number of pdftext workers used by Marker PdfProvider"
+    )
+    marker_llm_service: Optional[str] = Field(
+        default=None,
+        description="Optional Marker LLM service class path (e.g., marker.services.openai.OpenAIService)"
+    )
+    marker_llm_model: Optional[str] = Field(
+        default="gpt-4o-mini",
+        description="LLM model to use for Marker's LLM-enhanced processing (table extraction, complex layouts)"
+    )
+    marker_llm_api_key: Optional[str] = Field(
+        default=None,
+        description="API key for Marker LLM service from environment (MARKER_LLM_API_KEY or OPENAI_API_KEY). Never store in config files."
+    )
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
+        "extra": "ignore",
     }
+
+
+def load_rag_tuning_config() -> Dict[str, Any]:
+    """
+    Load RAG tuning configuration from JSON file.
+    
+    Returns a flat dictionary of all parameter values including section overrides.
+    Falls back to empty dict if file doesn't exist or has errors.
+    """
+    config_path = Path(__file__).parent / "rag_tuning_config.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        values = {"default_llm_model": config.get("default_llm_model")}
+        
+        for section in config.get("sections", []):
+            # Add section-level LLM overrides
+            if section.get("llm_override_enabled") and section.get("llm_override_value"):
+                values[f"{section['key']}_llm_model"] = section["llm_override_value"]
+            
+            # Add all parameters
+            for param in section.get("parameters", []):
+                values[param["key"]] = param["value"]
+        
+        return values
+    except FileNotFoundError:
+        logger.warning(f"RAG tuning config not found at {config_path}, using defaults")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in RAG tuning config: {e}, using defaults")
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to load RAG tuning config: {e}, using defaults")
+        return {}
+
+
+def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
+    """
+    Apply RAG tuning configuration overrides to settings instance.
+    
+    This allows runtime configuration of ingestion parameters without
+    restarting the server or changing environment variables.
+    """
+    rag_config = load_rag_tuning_config()
+    if not rag_config:
+        return
+    
+    # Apply direct parameter mappings
+    param_mappings = {
+        "enable_entity_extraction": "enable_entity_extraction",
+        "enable_gleaning": "enable_gleaning",
+        "max_gleanings": "max_gleanings",
+        "entity_extraction_format": "entity_extraction_format",
+        "tuple_format_validation": "tuple_format_validation",
+        # Removed legacy tuple_fallback_to_pipe
+        "tuple_max_description_length": "tuple_max_description_length",
+        "enable_description_summarization": "enable_description_summarization",
+        "summarization_min_mentions": "summarization_min_mentions",
+        "summarization_min_length": "summarization_min_length",
+        "summarization_batch_size": "summarization_batch_size",
+        "summarization_cache_enabled": "summarization_cache_enabled",
+        "enable_phase2_networkx": "enable_phase2_networkx",
+        "neo4j_unwind_batch_size": "neo4j_unwind_batch_size",
+        "max_nodes_per_doc": "max_nodes_per_doc",
+        "max_edges_per_doc": "max_edges_per_doc",
+        "importance_score_threshold": "importance_score_threshold",
+        "strength_threshold": "strength_threshold",
+        "enable_ocr": "enable_ocr",
+        "ocr_quality_threshold": "ocr_quality_threshold",
+        "llm_concurrency": "llm_concurrency",
+        "embedding_concurrency": "embedding_concurrency",
+        "llm_delay_min": "llm_delay_min",
+        "llm_delay_max": "llm_delay_max",
+        "embedding_delay_min": "embedding_delay_min",
+        "embedding_delay_max": "embedding_delay_max",
+        "use_marker_for_pdf": "use_marker_for_pdf",
+        "marker_output_format": "marker_output_format",
+        "marker_use_llm": "marker_use_llm",
+        "marker_paginate_output": "marker_paginate_output",
+        "marker_force_ocr": "marker_force_ocr",
+        "marker_strip_existing_ocr": "marker_strip_existing_ocr",
+        "marker_pdftext_workers": "marker_pdftext_workers",
+    }
+    
+    for config_key, settings_attr in param_mappings.items():
+        if config_key in rag_config:
+            try:
+                setattr(settings_instance, settings_attr, rag_config[config_key])
+            except Exception as e:
+                logger.warning(f"Failed to apply RAG config override for {settings_attr}: {e}")
+    
+    logger.info("Applied RAG tuning configuration overrides")
 
 
 # Global settings instance - will read from environment or use defaults
 settings = Settings()
+
+# If Docker Compose provided NEO4J_AUTH (format: user/password), prefer it
+# when explicit NEO4J_USERNAME/NEO4J_PASSWORD were not set in the environment.
+try:
+    import os
+
+    if os.environ.get("NEO4J_AUTH"):
+        # Only override when explicit username/password env vars are not provided
+        if (not os.environ.get("NEO4J_USERNAME")) and (not os.environ.get("NEO4J_PASSWORD")):
+            auth = os.environ.get("NEO4J_AUTH", "")
+            if "/" in auth:
+                u, p = auth.split("/", 1)
+                # Apply to settings instance so downstream modules pick them up
+                try:
+                    settings.neo4j_username = u
+                    settings.neo4j_password = p
+                    logger.info("Applied NEO4J_AUTH to settings (username from NEO4J_AUTH)")
+                except Exception:
+                    pass
+except Exception:
+    pass
 
 # Normalize and validate LLM provider selection to avoid unexpected defaults.
 # Priority: explicit `LLM_PROVIDER` env -> use if valid; otherwise prefer OpenAI when an API key is present.
@@ -252,17 +563,32 @@ if _prov not in ("openai", "ollama"):
 else:
     settings.llm_provider = _prov
 
+# Apply RAG tuning configuration overrides (must be after settings initialization)
+apply_rag_tuning_overrides(settings)
+
 # Emit a debug-friendly representation for other modules
 try:
-    # Avoid importing logging configuration too early in some environments
-    import logging
-
-    logger = logging.getLogger(__name__)
     logger.info(f"Resolved LLM provider: {settings.llm_provider}")
     if getattr(settings, "sync_entity_embeddings", False):
         logger.info("SYNC_ENTITY_EMBEDDINGS enabled: using synchronous entity persistence path")
     if getattr(settings, "skip_entity_embeddings", False):
         logger.info("SKIP_ENTITY_EMBEDDINGS enabled: entity embeddings will be omitted")
+    
+    # Phase 3: Validate and log entity extraction format
+    format_type = getattr(settings, "entity_extraction_format", "tuple_v1")
+    if format_type != "tuple_v1":
+        logger.warning(f"Invalid entity_extraction_format '{format_type}', using 'tuple_v1'")
+        settings.entity_extraction_format = "tuple_v1"
+    else:
+        logger.info(f"Entity extraction format: {settings.entity_extraction_format}")
+
+    # Validate Marker output format
+    marker_fmt = getattr(settings, "marker_output_format", "markdown")
+    if marker_fmt not in ["markdown", "json", "html", "chunks"]:
+        logger.warning(f"Invalid marker_output_format '{marker_fmt}', defaulting to 'markdown'")
+        settings.marker_output_format = "markdown"
+    if getattr(settings, "use_marker_for_pdf", False):
+        logger.info("Marker PDF conversion enabled")
 except Exception:
     pass
 

@@ -126,7 +126,7 @@ async def trigger_reindex(confirmation: Dict[str, bool], background_tasks: Backg
 
             # Step 1: Get all document IDs
             try:
-                with graph_db.driver.session() as session:  # type: ignore
+                with graph_db.session_scope() as session:
                     result = session.run("MATCH (d:Document) RETURN d.id as doc_id, d.filename as filename")
                     documents = [{"doc_id": record["doc_id"], "filename": record["filename"]} for record in result]
             except Exception as exc:

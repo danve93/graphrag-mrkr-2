@@ -41,6 +41,25 @@ class LLMManager:
             self.model = getattr(settings, "ollama_model")
             self.ollama_base_url = getattr(settings, "ollama_base_url")
 
+    @staticmethod
+    def _normalize_temperature(model_name: str, temperature: float) -> float:
+        """Clamp temperature for models that only support the default value.
+        Some models (e.g., reasoning families and certain 4o variants) reject non-default temps.
+        - If temperature <= 0.0, use 1.0
+        - If model_name startswith ('gpt-4o', 'o', 'gpt-5'), force 1.0
+        """
+        try:
+            mn = (model_name or "").lower()
+            if temperature is None:
+                return 1.0
+            if temperature <= 0.0:
+                return 1.0
+            if mn.startswith("gpt-4o") or mn.startswith("o") or mn.startswith("gpt-5"):
+                return 1.0
+            return float(temperature)
+        except Exception:
+            return 1.0
+
     def generate_response(
         self,
         prompt: str,
@@ -75,6 +94,143 @@ class LLMManager:
             logger.error(f"Failed to generate LLM response: {e}")
             raise
 
+    def generate_response_with_history(
+        self,
+        prompt: str,
+        history: list,
+        system_message: Optional[str] = None,
+        temperature: float = 0.1,
+        max_tokens: int = 1000,
+        model_override: Optional[str] = None,
+    ) -> str:
+        """
+        Generate response with conversation history for multi-pass extraction.
+
+        Args:
+            prompt: Current user prompt
+            history: Conversation history as list of {"role": str, "content": str} dicts
+            system_message: Optional system message
+            temperature: Sampling temperature
+            max_tokens: Maximum response tokens
+            model_override: Optional model override
+
+        Returns:
+            Generated response text
+
+        Raises:
+            ValueError: If history format is invalid
+        """
+        try:
+            # Validate history format
+            if not isinstance(history, list):
+                raise ValueError(f"History must be a list, got {type(history)}")
+            
+            for i, msg in enumerate(history):
+                if not isinstance(msg, dict):
+                    raise ValueError(f"History message {i} must be dict, got {type(msg)}")
+                if "role" not in msg or "content" not in msg:
+                    raise ValueError(f"History message {i} missing 'role' or 'content'")
+                if msg["role"] not in ("user", "assistant", "system"):
+                    raise ValueError(f"Invalid role in history message {i}: {msg['role']}")
+
+            if self.provider == "ollama":
+                return self._generate_ollama_response_with_history(
+                    prompt, history, system_message, temperature, max_tokens, model_override
+                )
+            else:
+                return self._generate_openai_response_with_history(
+                    prompt, history, system_message, temperature, max_tokens, model_override
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to generate LLM response with history: {e}")
+            raise
+
+    def _generate_openai_response_with_history(
+        self,
+        prompt: str,
+        history: list,
+        system_message: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        model_override: Optional[str] = None,
+    ) -> str:
+        """Generate response using OpenAI with conversation history."""
+        messages = []
+        
+        # Add system message if provided
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        
+        # Add history messages
+        for msg in history:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        
+        # Add current prompt
+        messages.append({"role": "user", "content": prompt})
+
+        max_retries = 5
+        base_delay = 1.0
+
+        for attempt in range(max_retries):
+            try:
+                model_name = str(model_override or self.model)
+                use_old_param = (
+                    model_name.startswith("gpt-3.5") or 
+                    (model_name.startswith("gpt-4") and "turbo" not in model_name and "gpt-4o" not in model_name)
+                )
+                
+                temp = self._normalize_temperature(model_name, temperature)
+                if use_old_param:
+                    response = openai.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temp,
+                        max_tokens=max_tokens,
+                    )
+                else:
+                    response = openai.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temp,
+                        max_completion_tokens=max_tokens,
+                    )
+                return response.choices[0].message.content or ""
+            except openai.RateLimitError:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        f"LLM rate limited (history call), retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"LLM rate limit exceeded after {max_retries} attempts (history call)")
+                    raise
+            except (openai.APIError, openai.InternalServerError) as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        f"LLM API error (history call), retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries}): {e}"
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"LLM API error after {max_retries} attempts (history call): {e}")
+                    raise
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        f"LLM call failed (history call), retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries}): {e}"
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"LLM call failed after {max_retries} attempts (history call): {e}")
+                    raise
+        return ""
+
     def _generate_openai_response(
         self,
         prompt: str,
@@ -103,11 +259,12 @@ class LLMManager:
                     (model_name.startswith("gpt-4") and "turbo" not in model_name and "gpt-4o" not in model_name)
                 )
                 
+                temp = self._normalize_temperature(model_name, temperature)
                 if use_old_param:
                     response = openai.chat.completions.create(
                         model=model_name,
                         messages=messages,
-                        temperature=temperature,
+                        temperature=temp,
                         max_tokens=max_tokens,
                     )
                 else:
@@ -115,7 +272,7 @@ class LLMManager:
                     response = openai.chat.completions.create(
                         model=model_name,
                         messages=messages,
-                        temperature=temperature,
+                        temperature=temp,
                         max_completion_tokens=max_tokens,
                     )
                 return response.choices[0].message.content or ""
@@ -156,6 +313,51 @@ class LLMManager:
                     raise
         # Should not reach here, but return empty string as a safe fallback
         return ""
+
+    def _generate_ollama_response_with_history(
+        self,
+        prompt: str,
+        history: list,
+        system_message: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        model_override: Optional[str] = None,
+    ) -> str:
+        """Generate response using Ollama with conversation history (concatenated format)."""
+        full_prompt_parts = []
+        
+        if system_message:
+            full_prompt_parts.append(f"System: {system_message}\n")
+        
+        # Add history in Human/Assistant format
+        for msg in history:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                full_prompt_parts.append(f"System: {content}\n")
+            elif role == "user":
+                full_prompt_parts.append(f"Human: {content}\n")
+            elif role == "assistant":
+                full_prompt_parts.append(f"Assistant: {content}\n")
+        
+        # Add current prompt
+        full_prompt_parts.append(f"Human: {prompt}\n")
+        full_prompt_parts.append("Assistant:")
+        
+        full_prompt = "\n".join(full_prompt_parts)
+
+        response = requests.post(
+            f"{self.ollama_base_url}/api/generate",
+            json={
+                "model": model_override or self.model,
+                "prompt": full_prompt,
+                "options": {"temperature": temperature, "num_predict": max_tokens},
+                "stream": False,
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        return response.json().get("response", "")
 
     def _generate_ollama_response(
         self,
@@ -541,7 +743,7 @@ Please provide a comprehensive answer based on the context provided above."""
             continuation = self.generate_response(
                 prompt=cont_prompt,
                 system_message=system_message,
-                temperature=0.1,
+                temperature=1.0,
                 max_tokens=cont_max,
             )
 
@@ -591,7 +793,7 @@ Return your analysis in a structured format."""
             analysis = self.generate_response(
                 prompt=prompt,
                 system_message=system_message,
-                temperature=0.1,  # Very low temperature for consistent analysis
+                temperature=1.0,  # Default temperature for gpt-4o-mini compatibility
             )
 
             return {
@@ -599,6 +801,134 @@ Return your analysis in a structured format."""
                 "analysis": analysis,
                 "timestamp": "2024-01-01",  # You might want to add actual timestamp
             }
+
+        except Exception as e:
+            logger.error(f"Failed to analyze query: {e}")
+            return {
+                "query": query,
+                "analysis": "",
+                "timestamp": "",
+                "error": str(e),
+            }
+    def stream_generate_openai(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        temperature: float = 0.1,
+        max_tokens: int = 1000,
+        model_override: Optional[str] = None,
+    ):
+        """
+        Synchronous generator that streams tokens from OpenAI streaming endpoint.
+
+        Yields partial strings (deltas) as they arrive from the provider.
+        """
+        model_name = str(model_override or self.model)
+        temp = self._normalize_temperature(model_name, temperature)
+
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            # Use streaming chat completions
+            stream_resp = openai.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=temp,
+                max_completion_tokens=max_tokens,
+                stream=True,
+            )
+
+            for chunk in stream_resp:
+                try:
+                    # Delta may be at chunk.choices[0].delta
+                    choice = getattr(chunk, "choices", None) or chunk.get("choices")
+                    if not choice:
+                        continue
+                    delta = choice[0].get("delta") if isinstance(choice, list) else None
+                    if not delta:
+                        # Some SDKs expose as .delta
+                        delta = getattr(choice[0], "delta", None)
+                    if not delta:
+                        continue
+                    content = None
+                    if isinstance(delta, dict):
+                        content = delta.get("content")
+                    else:
+                        content = getattr(delta, "content", None)
+
+                    if content:
+                        yield content
+                except Exception:
+                    # Ignore malformed chunks
+                    continue
+        except Exception as e:
+            logger.warning(f"OpenAI streaming failed: {e}")
+            return
+
+    def stream_generate_rag_response(
+        self,
+        query: str,
+        context_chunks: list,
+        system_message: str,
+        include_sources: bool = True,
+        temperature: float = 0.3,
+        chat_history: list = None,
+        model_override: Optional[str] = None,
+    ):
+        """
+        Stream a RAG response by building the same prompt used in
+        `_generate_rag_response_single` and delegating to a streaming
+        provider method. This returns a synchronous generator of token deltas.
+        """
+        # Build context from chunks (same as non-streaming path)
+        try:
+            context = "\n\n".join(
+                [f"[Chunk {i + 1}]: {chunk.get('content', '')}" for i, chunk in enumerate(context_chunks)]
+            )
+
+            history_context = ""
+            if chat_history and len(chat_history) > 0:
+                recent_history = chat_history[-4:] if len(chat_history) > 4 else chat_history
+                history_entries = []
+                for msg in recent_history:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if len(content) > 500:
+                        content = content[:500] + "..."
+                    history_entries.append(f"{role.title()}: {content}")
+
+                if history_entries:
+                    history_context = f"\nPrevious conversation:\n{chr(10).join(history_entries)}\n\n"
+
+            prompt = f"{history_context}Context:\n{context}\n\nQuestion: {query}\n\nPlease provide a comprehensive answer based on the context provided above."
+
+            # Compute token budget similar to non-streaming method
+            from core.token_manager import token_manager as tm
+
+            available = tm.available_output_tokens_for_prompt(prompt, system_message)
+            cap = getattr(settings, "max_response_tokens", 2000)
+            max_out = min(available, cap)
+
+            # Delegate to OpenAI streaming for now
+            if self.provider == "openai":
+                for token in self.stream_generate_openai(
+                    prompt=prompt,
+                    system_message=system_message,
+                    temperature=temperature,
+                    max_tokens=max_out,
+                    model_override=model_override,
+                ):
+                    yield token
+            else:
+                # Ollama streaming not implemented — yield nothing
+                logger.warning("Streaming not implemented for provider: %s", self.provider)
+                return
+        except Exception as e:
+            logger.error(f"Failed to start RAG streaming response: {e}")
+            return
 
         except Exception as e:
             logger.error(f"Failed to analyze query: {e}")

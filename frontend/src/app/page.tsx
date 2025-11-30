@@ -3,11 +3,9 @@
 import ChatInterface from '@/components/Chat/ChatInterface'
 import DocumentView from '@/components/Document/DocumentView'
 import GraphView from '@/components/Graph/GraphView'
-import ComblocksPanel from '@/components/Comblocks/ComblocksPanel'
 import ChatTuningPanel from '@/components/ChatTuning/ChatTuningPanel'
-import ClassificationPanel from '@/components/Classification/ClassificationPanel'
+import RAGTuningPanel from '@/components/RAGTuning/RAGTuningPanel'
 import Sidebar from '@/components/Sidebar/Sidebar'
-import { ThemeToggle } from '@/components/Theme/ThemeToggle'
 import { useEffect, useState } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { api } from '@/lib/api'
@@ -85,19 +83,15 @@ export default function Home() {
       />
       {/* Main Content (offset by sidebar) */}
       <main
-        className="h-full overflow-hidden transition-all duration-300 bg-secondary-50 dark:bg-secondary-900"
+        className="h-screen overflow-hidden transition-all duration-300 bg-secondary-50 dark:bg-secondary-900"
         style={{ marginLeft: `${mainMarginLeft}px` }}
       >
         {activeView === 'graph' && <GraphView />}
         {activeView === 'chatTuning' && <ChatTuningPanel />}
-        {activeView === 'classification' && <ClassificationPanel />}
-        {activeView === 'comblocks' && <ComblocksPanel />}
+        {activeView === 'ragTuning' && <RAGTuningPanel />}
         {activeView === 'chat' && <ChatInterface />}
         {activeView === 'document' && <DocumentView />}
       </main>
-
-      {/* Theme Toggle */}
-      <ThemeToggle />
     </div>
   )
 }

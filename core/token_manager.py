@@ -84,7 +84,7 @@ class TokenManager:
     def _get_model_name(self) -> str:
         """Get the current model name."""
         if self.provider == "openai":
-            return getattr(settings, "openai_model", "gpt-3.5-turbo")
+            return getattr(settings, "openai_model", "gpt-4o-mini")
         else:  # ollama
             return getattr(settings, "ollama_model", "llama2")
 

@@ -1,0 +1,435 @@
+{
+  "default_llm_model": "gpt-4o-mini",
+  "sections": [
+    {
+      "key": "pdf_processing",
+      "label": "PDF Processing",
+      "description": "Controls how PDF documents are converted to text",
+      "llm_override_enabled": true,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "use_marker_for_pdf",
+          "label": "Use Marker for PDF",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable Marker for advanced PDF conversion to Markdown. Provides superior quality for complex PDFs with tables, equations, and multi-column layouts. Processing takes 2-5x longer than standard extraction."
+        },
+        {
+          "key": "marker_output_format",
+          "label": "Marker Output Format",
+          "value": "markdown",
+          "options": [
+            "markdown",
+            "json",
+            "html",
+            "chunks"
+          ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "Controls Marker's output format. Markdown is recommended for RAG ingestion as it preserves structure for chunking."
+        },
+        {
+          "key": "marker_use_llm",
+          "label": "Marker Use LLM Processors",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable LLM-powered hybrid processors for complex regions like tables, equations, and diagrams. Significantly improves extraction quality but increases processing time."
+        },
+        {
+          "key": "marker_paginate_output",
+          "label": "Marker Paginate Output",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Include page number markers in Marker output for document provenance tracking. Enables citations back to original page numbers."
+        },
+        {
+          "key": "marker_force_ocr",
+          "label": "Marker Force OCR",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Force OCR processing on all PDF pages. Use for PDFs with garbled or problematic embedded text. Processing is 10-20x slower than standard extraction."
+        },
+        {
+          "key": "marker_strip_existing_ocr",
+          "label": "Marker Strip Existing OCR",
+          "value": false,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Strip embedded OCR text and re-OCR with Marker. Use when existing OCR quality is poor, common in low-quality scans."
+        },
+        {
+          "key": "marker_pdftext_workers",
+          "label": "Marker PDF Text Workers",
+          "value": 4,
+          "options": null,
+          "min": 1.0,
+          "max": 16.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Number of parallel workers for PDF text extraction. More workers increase processing speed but use more CPU and memory."
+        },
+        {
+          "key": "marker_llm_model",
+          "label": "Marker LLM Model",
+          "value": "gpt-4o-mini",
+          "options": [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-4-turbo",
+            "claude-3-5-sonnet-20241022"
+          ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "LLM model used by Marker for table extraction and complex layout analysis when 'Marker Use LLM' is enabled. API key must be configured in OPENAI_API_KEY or MARKER_LLM_API_KEY environment variable."
+        }
+      ]
+    },
+    {
+      "key": "entity_extraction",
+      "label": "Entity Extraction",
+      "description": "Controls how entities and relationships are extracted from text",
+      "llm_override_enabled": true,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_entity_extraction",
+          "label": "Enable Entity Extraction",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Master toggle to enable entity and relationship extraction from documents. Creates entity nodes in the knowledge graph and enables entity-aware retrieval."
+        },
+        {
+          "key": "enable_gleaning",
+          "label": "Enable Gleaning",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable multi-pass entity extraction with conversation history. Improves entity quality by allowing the LLM to refine extractions across multiple passes."
+        },
+        {
+          "key": "max_gleanings",
+          "label": "Max Gleaning Passes",
+          "value": 1,
+          "options": null,
+          "min": 0.0,
+          "max": 5.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Number of additional gleaning passes after initial extraction. 0 disables gleaning, 1 is recommended for most documents, 2 for high-value technical content."
+        },
+        {
+          "key": "entity_extraction_format",
+          "label": "Entity Extraction Format",
+          "value": "tuple_v1",
+            "options": [
+              "tuple_v1"
+            ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "Entity extraction output format. Tuple format provides robust extraction and token efficiency."
+        },
+        {
+          "key": "tuple_format_validation",
+          "label": "Tuple Format Validation",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable strict validation of tuple format output structure and field requirements. Recommended for production to ensure data quality."
+        },
+        
+        {
+          "key": "tuple_max_description_length",
+          "label": "Tuple Max Description Length",
+          "value": 500,
+          "options": null,
+          "min": 100.0,
+          "max": 2000.0,
+          "step": 50.0,
+          "type": "slider",
+          "tooltip": "Maximum character length for entity and relationship descriptions. Prevents token bloat while maintaining sufficient context."
+        }
+      ]
+    },
+    {
+      "key": "description_enhancement",
+      "label": "Description Enhancement",
+      "description": "LLM-powered summarization of entity descriptions",
+      "llm_override_enabled": true,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_description_summarization",
+          "label": "Enable Description Summarization",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable LLM-based summarization of accumulated entity and relationship descriptions. Provides 50-70% compression and deduplicates repetitive information."
+        },
+        {
+          "key": "summarization_min_mentions",
+          "label": "Summarization Min Mentions",
+          "value": 3,
+          "options": null,
+          "min": 1.0,
+          "max": 10.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Minimum mention count required to trigger summarization. Only descriptions mentioned N or more times are summarized, filtering low-value content."
+        },
+        {
+          "key": "summarization_min_length",
+          "label": "Summarization Min Length",
+          "value": 200,
+          "options": null,
+          "min": 50.0,
+          "max": 1000.0,
+          "step": 50.0,
+          "type": "slider",
+          "tooltip": "Minimum character length to trigger summarization. Avoids summarizing already-concise text, saving processing time."
+        },
+        {
+          "key": "summarization_batch_size",
+          "label": "Summarization Batch Size",
+          "value": 5,
+          "options": null,
+          "min": 1.0,
+          "max": 20.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Number of entities or relationships to summarize per LLM call. Larger batches reduce API calls but use more tokens per request."
+        },
+        {
+          "key": "summarization_cache_enabled",
+          "label": "Summarization Cache Enabled",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable SHA256-based caching to avoid re-summarizing identical descriptions. Reduces redundant LLM calls and processing time."
+        }
+      ]
+    },
+    {
+      "key": "graph_persistence",
+      "label": "Graph Persistence",
+      "description": "Controls how entities are persisted to Neo4j",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_phase2_networkx",
+          "label": "Enable Phase 2 NetworkX",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable NetworkX intermediate graph layer for batch persistence. Provides 5-10x faster ingestion through batch processing. Experimental feature."
+        },
+        {
+          "key": "neo4j_unwind_batch_size",
+          "label": "Neo4j UNWIND Batch Size",
+          "value": 500,
+          "options": null,
+          "min": 100.0,
+          "max": 1000.0,
+          "step": 50.0,
+          "type": "slider",
+          "tooltip": "Maximum number of entities to persist per Neo4j UNWIND batch transaction. Larger batches reduce transaction overhead but use more memory."
+        },
+        {
+          "key": "max_nodes_per_doc",
+          "label": "Max Nodes Per Document",
+          "value": 2000,
+          "options": null,
+          "min": 500.0,
+          "max": 10000.0,
+          "step": 100.0,
+          "type": "number",
+          "tooltip": "Maximum entity nodes allowed per document. Safety limit to prevent memory issues with very large documents."
+        },
+        {
+          "key": "max_edges_per_doc",
+          "label": "Max Edges Per Document",
+          "value": 5000,
+          "options": null,
+          "min": 1000.0,
+          "max": 20000.0,
+          "step": 100.0,
+          "type": "number",
+          "tooltip": "Maximum relationship edges allowed per document. Safety limit for relationship count to prevent memory exhaustion."
+        },
+        {
+          "key": "importance_score_threshold",
+          "label": "Importance Score Threshold",
+          "value": 0.3,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum importance score to include entity in graph. Acts as quality filter, with lower values including more entities but potentially reducing quality."
+        },
+        {
+          "key": "strength_threshold",
+          "label": "Strength Threshold",
+          "value": 0.4,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum relationship strength to persist. Filters weak relationships, with lower values creating more connections but potentially adding noise."
+        }
+      ]
+    },
+    {
+      "key": "ocr_processing",
+      "label": "OCR & Image Processing",
+      "description": "Extract text from images and scanned documents",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_ocr",
+          "label": "Enable OCR",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable OCR processing to extract text from embedded images in documents. Increases processing time by approximately 20-30% per document."
+        },
+        {
+          "key": "ocr_quality_threshold",
+          "label": "OCR Quality Threshold",
+          "value": 0.6,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum confidence score to accept OCR results. Higher values ensure better quality but may skip low-confidence text."
+        }
+      ]
+    },
+    {
+      "key": "performance",
+      "label": "Performance & Limits",
+      "description": "Control API usage, concurrency, and resource limits",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "llm_concurrency",
+          "label": "LLM Concurrency",
+          "value": 2,
+          "options": null,
+          "min": 1.0,
+          "max": 20.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Maximum number of concurrent LLM API requests during ingestion. Higher values speed up processing but may hit rate limits."
+        },
+        {
+          "key": "embedding_concurrency",
+          "label": "Embedding Concurrency",
+          "value": 3,
+          "options": null,
+          "min": 1.0,
+          "max": 50.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Maximum number of concurrent embedding API requests during ingestion. Higher values speed up processing but may hit rate limits."
+        },
+        {
+          "key": "llm_delay_min",
+          "label": "LLM Delay Min (seconds)",
+          "value": 0.5,
+          "options": null,
+          "min": 0.0,
+          "max": 5.0,
+          "step": 0.1,
+          "type": "slider",
+          "tooltip": "Minimum delay in seconds between LLM API requests. Helps avoid rate limiting with exponential backoff."
+        },
+        {
+          "key": "llm_delay_max",
+          "label": "LLM Delay Max (seconds)",
+          "value": 1,
+          "options": null,
+          "min": 0.0,
+          "max": 10.0,
+          "step": 0.5,
+          "type": "slider",
+          "tooltip": "Maximum delay in seconds between LLM API requests during exponential backoff. Caps retry delays."
+        },
+        {
+          "key": "embedding_delay_min",
+          "label": "Embedding Delay Min (seconds)",
+          "value": 0.5,
+          "options": null,
+          "min": 0.0,
+          "max": 5.0,
+          "step": 0.1,
+          "type": "slider",
+          "tooltip": "Minimum delay in seconds between embedding API requests. Helps avoid rate limiting with exponential backoff."
+        },
+        {
+          "key": "embedding_delay_max",
+          "label": "Embedding Delay Max (seconds)",
+          "value": 1,
+          "options": null,
+          "min": 0.0,
+          "max": 10.0,
+          "step": 0.5,
+          "type": "slider",
+          "tooltip": "Maximum delay in seconds between embedding API requests during exponential backoff. Caps retry delays."
+        }
+      ]
+    }
+  ]
+}

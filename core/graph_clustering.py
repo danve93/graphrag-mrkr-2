@@ -38,18 +38,18 @@ def fetch_entity_projection(
 
     node_query = """
     MATCH (e:Entity)
-    RETURN id(e) AS internal_id, e.id AS entity_id, coalesce(e.name, "") AS name
+    RETURN elementId(e) AS internal_id, e.id AS entity_id, coalesce(e.name, "") AS name
     """
 
     edge_query = f"""
     MATCH (e1:Entity)-[r:{label_union}]-(e2:Entity)
-    WITH e1, e2, r, id(e1) AS source_internal, id(e2) AS target_internal
+    WITH e1, e2, r, elementId(e1) AS source_internal, elementId(e2) AS target_internal
     WITH CASE WHEN source_internal < target_internal THEN e1 ELSE e2 END AS source_node,
          CASE WHEN source_internal < target_internal THEN e2 ELSE e1 END AS target_node,
          type(r) AS relationship_type, properties(r) AS properties
     RETURN DISTINCT
-        id(source_node) AS source_internal,
-        id(target_node) AS target_internal,
+        elementId(source_node) AS source_internal,
+        elementId(target_node) AS target_internal,
         source_node.id AS source_id,
         target_node.id AS target_id,
         relationship_type,

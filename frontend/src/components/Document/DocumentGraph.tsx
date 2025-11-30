@@ -37,11 +37,17 @@ export default function DocumentGraph({
       try {
         setLoading(true)
         setError(null)
-        const data = await api.getGraph({ document_id: documentId })
+        const data = await api.getGraph({ document_id: documentId, limit: 50 })
         setGraphData(data)
       } catch (err) {
         console.error('Failed to load document graph:', err)
-        setError('Failed to load graph data')
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load graph data'
+        // Check if it's the "too many entities" error
+        if (errorMessage.includes('entities') || errorMessage.includes('community_id')) {
+          setError('This document has too many entities for graph visualization. Please use the Communities tab to explore specific communities.')
+        } else {
+          setError(errorMessage)
+        }
       } finally {
         setLoading(false)
       }

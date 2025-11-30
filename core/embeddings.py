@@ -14,6 +14,8 @@ import openai
 import requests
 
 from config.settings import settings
+from core.singletons import get_embedding_cache, hash_text
+from core.singletons import get_blocking_executor, SHUTTING_DOWN
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,10 @@ class EmbeddingManager:
         self.provider = getattr(settings, "llm_provider").lower()
         self._last_request_time = 0
         self._request_lock = threading.Lock()
+        
+        # Initialize embedding cache
+        self._cache = get_embedding_cache()
+        self._cache_lock = threading.Lock()
 
         if self.provider == "openai":
             self.model = settings.embedding_model
@@ -173,9 +179,40 @@ class EmbeddingManager:
             
             self._last_request_time = time.time()
 
-    @retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0)
     def get_embedding(self, text: str) -> List[float]:
-        """Generate embedding for a single text with retry logic."""
+        """
+        Generate embedding for text with caching.
+        
+        Cache Strategy:
+            - Hit: Return cached embedding (no expiration)
+            - Miss: Generate embedding, cache, return
+        """
+        # Check if caching is enabled
+        if not settings.enable_caching:
+            return self._generate_embedding_direct(text)
+        
+        # Generate cache key (hash of text + model)
+        cache_key = hash_text(text, self.model)
+        
+        # Check cache (thread-safe read)
+        with self._cache_lock:
+            if cache_key in self._cache:
+                logger.debug(f"Embedding cache HIT for {cache_key[:8]}...")
+                return self._cache[cache_key]
+        
+        # Cache miss - generate embedding
+        logger.debug(f"Embedding cache MISS for {cache_key[:8]}...")
+        embedding = self._generate_embedding_direct(text)
+        
+        # Store in cache (thread-safe write)
+        with self._cache_lock:
+            self._cache[cache_key] = embedding
+        
+        return embedding
+
+    @retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0)
+    def _generate_embedding_direct(self, text: str) -> List[float]:
+        """Generate embedding without caching (with retry logic)."""
         # Enforce rate limiting before making request
         self._wait_for_rate_limit()
         
@@ -209,12 +246,21 @@ class EmbeddingManager:
 
     async def aget_embedding(self, text: str) -> List[float]:
         """Asynchronously generate embedding for a single text using httpx.AsyncClient with retry logic."""
-        # Reuse the synchronous get_embedding (which already has retry logic)
-        # by running it in a thread so callers can `await` it without performing
-        # manual HTTP calls here. This keeps all OpenAI interactions using the
-        # `openai` client and preserves existing retry behavior.
+        # Run the synchronous `get_embedding` in the shared blocking executor
+        # so we track futures and avoid using the default `asyncio` threadpool
+        # which can cause interpreter-shutdown races.
+        loop = asyncio.get_running_loop()
         try:
-            return await asyncio.to_thread(self.get_embedding, text)
+            executor = get_blocking_executor()
+            try:
+                return await loop.run_in_executor(executor, self.get_embedding, text)
+            except RuntimeError as e:
+                logger.debug(f"Blocking executor unavailable for embedding: {e}")
+                if SHUTTING_DOWN:
+                    raise
+                # Retry once with a fresh executor
+                executor = get_blocking_executor()
+                return await loop.run_in_executor(executor, self.get_embedding, text)
         except Exception as e:
             logger.error(f"Failed to generate async embedding: {e}")
             raise

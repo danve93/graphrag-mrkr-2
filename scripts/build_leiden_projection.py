@@ -91,7 +91,7 @@ def load_entity_nodes() -> list[Mapping[str, object]]:
     MATCH (e:Entity)
     RETURN id(e) AS internal_id, e.id AS entity_id, e.name AS name, labels(e) AS labels
     """
-    with graph_db.driver.session() as session:  # type: ignore
+    with graph_db.session_scope() as session:
         result = session.run(query)
         nodes = [record.data() for record in result]
 
@@ -114,7 +114,7 @@ def load_entity_edges(
         relationship_labels=relationship_labels,
         directional_labels=directional_labels,
     )
-    with graph_db.driver.session() as session:  # type: ignore
+    with graph_db.session_scope() as session:
         result = session.run(cypher)
         edges = [record.data() for record in result]
 

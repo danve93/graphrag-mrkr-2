@@ -31,10 +31,12 @@ class CommunitySummarizer:
         for level in sorted(levels_to_process):
             try:
                 # Prefer aggregated community+relationship data to reduce DB round-trips
-                communities = graph_db.get_communities_aggregates_for_level(level)
-                if not communities:
-                    # Fallback to the per-community entity list if aggregates are not available
-                    communities = graph_db.get_communities_for_level(level)
+                aggregates = graph_db.get_communities_aggregates_for_level(level)
+                # Prefer aggregates only when they are an actual non-empty list; otherwise fall back
+                if isinstance(aggregates, list) and len(aggregates) > 0:
+                    communities = aggregates
+                else:
+                    communities = graph_db.get_communities_for_level(level) or []
 
                 logger.info("Summarizing %s communities at level %s", len(communities), level)
 

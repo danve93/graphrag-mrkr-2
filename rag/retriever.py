@@ -4,12 +4,14 @@ Enhanced retrieval logic with support for chunk-based, entity-based, hybrid mode
 
 import hashlib
 import logging
+import threading
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from config.settings import settings
 from core.embeddings import embedding_manager
 from core.graph_db import graph_db
+from core.singletons import get_retrieval_cache, hash_retrieval_params
 from rag.nodes.query_analysis import analyze_query
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,9 @@ class DocumentRetriever:
 
     def __init__(self):
         """Initialize the enhanced document retriever."""
-        pass
+        # Initialize retrieval cache for hybrid_retrieval results
+        self._cache = get_retrieval_cache()
+        self._cache_lock = threading.Lock()
 
     @staticmethod
     def _extract_hashtags_from_query(query: str) -> List[str]:
@@ -65,7 +69,7 @@ class DocumentRetriever:
         if not entity_names:
             return []
 
-        with graph_db.driver.session() as session:  # type: ignore
+        with graph_db.session_scope() as session:
             result = session.run(
                 """
                 MATCH (e:Entity)
@@ -203,7 +207,7 @@ class DocumentRetriever:
                     chunk_id = chunk.get("chunk_id")
                     if chunk_id:
                         # Get embedding from database
-                        with graph_db.driver.session() as session:  # type: ignore
+                        with graph_db.session_scope() as session:
                             result = session.run(
                                 "MATCH (c:Chunk {id: $chunk_id}) RETURN c.embedding as embedding",
                                 chunk_id=chunk_id,
@@ -496,7 +500,7 @@ class DocumentRetriever:
                     continue
 
                 # Get chunk data
-                with graph_db.driver.session() as session:  # type: ignore
+                with graph_db.session_scope() as session:
                     chunks_data = session.run(
                         """
                         MATCH (c:Chunk)
@@ -609,7 +613,75 @@ class DocumentRetriever:
         allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Hybrid retrieval combining chunk-based, entity-based, and optionally multi-hop approaches.
+        Hybrid retrieval with result caching.
+        
+        Cache Strategy:
+            - Hit: Return cached results (TTL: 60s)
+            - Miss: Perform retrieval, cache, return
+        """
+        # Check if caching is enabled
+        if not settings.enable_caching:
+            return await self._hybrid_retrieval_direct(
+                query, top_k, chunk_weight, entity_weight, path_weight,
+                use_multi_hop, max_hops, beam_size, restrict_to_context,
+                allowed_document_ids
+            )
+        
+        # Normalize parameters for cache key
+        normalized_entity_weight = (
+            settings.hybrid_entity_weight if entity_weight is None else entity_weight
+        )
+        normalized_path_weight = (
+            settings.hybrid_path_weight if path_weight is None else path_weight
+        )
+        
+        # Generate cache key
+        cache_key = hash_retrieval_params(
+            query=query,
+            mode="hybrid",
+            top_k=top_k,
+            chunk_weight=chunk_weight,
+            entity_weight=normalized_entity_weight,
+            path_weight=normalized_path_weight,
+        )
+        
+        # Check cache (thread-safe read)
+        with self._cache_lock:
+            if cache_key in self._cache:
+                logger.info(f"Retrieval cache HIT for query: {query[:50]}...")
+                return self._cache[cache_key]
+        
+        # Cache miss - perform retrieval
+        logger.info(f"Retrieval cache MISS for query: {query[:50]}...")
+        results = await self._hybrid_retrieval_direct(
+            query, top_k, chunk_weight, entity_weight, path_weight,
+            use_multi_hop, max_hops, beam_size, restrict_to_context,
+            allowed_document_ids
+        )
+        
+        # Store in cache (thread-safe write)
+        with self._cache_lock:
+            self._cache[cache_key] = results
+        
+        return results
+
+    async def _hybrid_retrieval_direct(
+        self,
+        query: str,
+        top_k: int = 5,
+        chunk_weight: float = 0.5,
+        entity_weight: Optional[float] = None,
+        path_weight: Optional[float] = None,
+        use_multi_hop: bool = False,
+        max_hops: Optional[int] = None,
+        beam_size: Optional[int] = None,
+        restrict_to_context: bool = True,
+        allowed_document_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Direct hybrid retrieval without caching.
+        
+        Combines chunk-based, entity-based, and optionally multi-hop approaches.
 
         Args:
             query: User query
@@ -847,11 +919,23 @@ class DocumentRetriever:
                     import asyncio
 
                     from rag.rerankers.flashrank_reranker import rerank_with_flashrank
+                    from core.singletons import get_blocking_executor, SHUTTING_DOWN
 
                     cap = min(len(final_results), getattr(settings, "flashrank_max_candidates", 100))
                     loop = asyncio.get_running_loop()
                     # execute the synchronous reranker in a thread to avoid blocking
-                    reranked = await loop.run_in_executor(None, rerank_with_flashrank, query, final_results, cap)
+                    try:
+                        executor = get_blocking_executor()
+                        reranked = await loop.run_in_executor(executor, rerank_with_flashrank, query, final_results, cap)
+                    except RuntimeError as e:
+                        logger.debug(f"Blocking executor unavailable for FlashRank rerank: {e}.")
+                        if SHUTTING_DOWN:
+                            logger.info("Process shutting down; skipping FlashRank rerank")
+                            reranked = []
+                        else:
+                            executor = get_blocking_executor()
+                            reranked = await loop.run_in_executor(executor, rerank_with_flashrank, query, final_results, cap)
+
                     if isinstance(reranked, list) and reranked:
                         final_results = reranked
                         logger.info("Applied FlashRank reranker to top %d candidates", cap)

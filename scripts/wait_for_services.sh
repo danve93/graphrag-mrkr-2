@@ -9,7 +9,7 @@ NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
 echo "Detected NEO4J_URI=$NEO4J_URI"
 
 # Extract host and port using Python (robust parsing)
-NEO4J_HOST_PORT=$(python - <<'PY'
+NEO4J_HOST_PORT=$(python3 - <<'PY'
 import os, urllib.parse
 uri = os.environ.get('NEO4J_URI', 'bolt://neo4j:7687')
 u = urllib.parse.urlparse(uri)
@@ -29,6 +29,16 @@ WAITED=0
 SLEEP=2
 
 while true; do
+  # Quick auth-sanity check: if NEO4J_AUTH is provided and password length < 8, fail fast
+  if [ -n "${NEO4J_AUTH:-}" ]; then
+    # parse user/password
+    pw="${NEO4J_AUTH#*/}"
+    if [ ${#pw} -lt 8 ]; then
+      echo "Detected NEO4J_AUTH with short password (${#pw} chars). Neo4j requires passwords >= 8 characters." >&2
+      echo "Please set a stronger password in NEO4J_AUTH (format user/password) or export NEO4J_USERNAME/NEO4J_PASSWORD for the backend." >&2
+      exit 2
+    fi
+  fi
   if bash -c "</dev/tcp/${HOST}/${PORT}" >/dev/null 2>&1; then
     echo "Service ${HOST}:${PORT} is reachable"
     break
@@ -38,7 +48,13 @@ while true; do
   WAITED=$((WAITED + SLEEP))
   if [ ${WAITED} -ge ${MAX_WAIT} ]; then
     echo "Timeout waiting for ${HOST}:${PORT} after ${MAX_WAIT}s"
-    break
+    echo "Giving up — dependency not reachable. Exiting with error."
+    # Print some diagnostics to help debugging
+    if command -v nc >/dev/null 2>&1; then
+      echo "nc scan:"
+      nc -vz ${HOST} ${PORT} || true
+    fi
+    exit 1
   fi
 done
 

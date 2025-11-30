@@ -1,11 +1,8 @@
-.env.docker
 .env
-.env.example
 .env.docker
 /data
 /api/routers/__pycache__
 /frontend/node_modules
-/api/tests/__pycache__
 /api/__pycache__
 /config/__pycache__
 /core/__pycache__
@@ -15,12 +12,14 @@
 /scripts/__pycache__
 /frontend/.next/cache
 /rag/__pycache__
- /frontend/.next/cache
 
 # Common caches, build artifacts, and OS/generated binary files
 __pycache__/
 *.pyc
 *.pyo
+*.pid
+.dev_pids
+.dev_backend_pid
 .pytest_cache/
 .mypy_cache/
 node_modules/
@@ -37,6 +36,13 @@ neo4j/
 venv/
 env/
 .env
+.env.local
+*.env.local
 
 /frontend/.next
-/docs/msoft_iteration
+
+# Ignore detailed docs subfolders (generated or large docs)
+docs/UI/
+docs/cache_system/
+docs/marker/
+docs/msoft_iteration/

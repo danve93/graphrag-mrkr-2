@@ -135,10 +135,14 @@ export default function Sidebar({
 
       {/* Sidebar (fixed to left edge and separate from content grid) */}
       <aside
-        className={`fixed left-0 top-0 z-40 h-screen bg-white dark:bg-secondary-800 border-r border-secondary-200 dark:border-secondary-700 ${
+        className={`fixed left-0 top-0 z-40 h-screen border-r ${
           isResizing ? 'no-transition' : ''
         } overflow-hidden`}
-        style={{ width: open ? `${collapsed ? 72 : width}px` : '0px' }}
+        style={{ 
+          width: open ? `${collapsed ? 72 : width}px` : '0px',
+          background: 'var(--bg-secondary)',
+          borderColor: 'var(--border)'
+        }}
       >
         <div className="flex flex-col h-full min-h-0">
           {/* Collapse button (desktop) */}
@@ -146,7 +150,8 @@ export default function Sidebar({
             <button
               onClick={() => onCollapseToggle()}
               aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="hidden lg:flex absolute top-4 right-4 z-50 items-center justify-center p-2 rounded bg-white dark:bg-secondary-700 border border-secondary-200 dark:border-secondary-600 hover:bg-secondary-50 dark:hover:bg-secondary-600"
+              className="hidden lg:flex absolute top-4 right-4 z-50 items-center justify-center p-2 rounded border"
+              style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)' }}
             >
               {collapsed ? (
                 <ChevronRightIcon className="w-5 h-5" />
@@ -183,7 +188,7 @@ export default function Sidebar({
                     }`}
                     style={
                       activeTab === tab.id
-                        ? { color: 'var(--primary-accent)', borderBottom: '2px solid var(--primary-500)' }
+                        ? { color: 'var(--accent-primary)', borderBottom: '2px solid var(--accent-primary)' }
                         : undefined
                     }
                   >
@@ -228,27 +233,24 @@ export default function Sidebar({
                 <div className="space-y-1">
                   <button
                     onClick={() => setActiveView('graph')}
-                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                    className="w-full text-left px-3 py-2 text-sm rounded"
+                    style={{ color: 'var(--text-primary)' }}
                   >
                     Graph Explorer
                   </button>
                   <button
                     onClick={() => setActiveView('chatTuning')}
-                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                    className="w-full text-left px-3 py-2 text-sm rounded"
+                    style={{ color: 'var(--text-primary)' }}
                   >
                     Chat Tuning
                   </button>
                   <button
-                    onClick={() => setActiveView('classification')}
-                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
+                    onClick={() => setActiveView('ragTuning')}
+                    className="w-full text-left px-3 py-2 text-sm rounded"
+                    style={{ color: 'var(--text-primary)' }}
                   >
-                    Classification
-                  </button>
-                  <button
-                    onClick={() => setActiveView('comblocks')}
-                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-secondary-100 dark:hover:bg-secondary-700 text-secondary-700 dark:text-secondary-300"
-                  >
-                    Comblocks
+                    RAG Tuning
                   </button>
                 </div>
               </div>
@@ -259,12 +261,12 @@ export default function Sidebar({
         {/* Resize handle (hidden when collapsed or when sidebar closed) */}
         {open && !collapsed && (
           <div
-                className={`hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize`}
-                style={{ zIndex: 60, backgroundColor: isResizing ? 'var(--neon-glow)' : 'transparent' }}
+                className="hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize"
+                style={{ zIndex: 60, backgroundColor: isResizing ? 'var(--accent-subtle)' : 'transparent' }}
               onMouseDown={onMouseDown}
               onTouchStart={onTouchStart}
             >
-            <div className="h-16 w-1 rounded bg-secondary-300 dark:bg-secondary-600" />
+            <div style={{ height: '64px', width: '4px', borderRadius: 'var(--radius-full)', background: 'var(--gray-400)' }} />
           </div>
         )}
       </aside>

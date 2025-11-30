@@ -148,6 +148,82 @@ class StageDocumentResponse(BaseModel):
     filename: str
     document_id: Optional[str] = None
     status: str
+
+
+class ChunkSimilarity(BaseModel):
+    """Model for a chunk similarity relationship."""
+
+    chunk1_id: str
+    chunk2_id: str
+    score: float
+
+
+class PaginatedSimilaritiesResponse(BaseModel):
+    """Response model for paginated chunk similarities."""
+
+    document_id: str
+    total: int
+    estimated: bool = Field(default=False, description="Whether total count is estimated (fast) or exact (slow)")
+    limit: int
+    offset: int
+    has_more: bool
+    similarities: List[ChunkSimilarity]
+
+
+class ChunkDetails(BaseModel):
+    """Model for detailed chunk information."""
+
+    id: str
+    content: str
+    index: int
+    offset: int
+    document_id: str
+    document_name: Optional[str] = None
+
+
+class DocumentStats(BaseModel):
+    """Model for document statistics."""
+
+    chunks: int
+    entities: int
+    communities: int
+    similarities: int
+
+
+class DocumentSummary(BaseModel):
+    """Model for lightweight document summary."""
+
+    id: str
+    filename: str
+    original_filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    created_at: Optional[str] = None
+    link: Optional[str] = None
+    uploader: Optional[str] = None
+    stats: DocumentStats
+
+
+class DocumentEntity(BaseModel):
+    """Model for a document entity."""
+
+    type: str
+    text: str
+    community_id: Optional[int] = None
+    level: Optional[int] = None
+    count: int
+    positions: List[int]
+
+
+class PaginatedEntitiesResponse(BaseModel):
+    """Response model for paginated entities."""
+
+    document_id: str
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+    entities: List[DocumentEntity]
     processing_status: Optional[str] = None
     processing_stage: Optional[str] = None
     error: Optional[str] = None
@@ -218,6 +294,8 @@ class DocumentEntity(BaseModel):
 
     type: str
     text: str
+    community_id: int | None = None
+    level: int | None = None
     count: int | None = None
     positions: List[int] | None = None
 

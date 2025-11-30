@@ -13,8 +13,7 @@ interface ChatParameter {
   min?: number
   max?: number
   step?: number
-  type: 'slider' | 'toggle'
-  | 'select'
+  type: 'slider' | 'toggle' | 'select'
   category: string
   tooltip: string
 }
@@ -22,6 +21,15 @@ interface ChatParameter {
 interface ChatTuningConfig {
   parameters: ChatParameter[]
 }
+
+const CATEGORY_ORDER = [
+  'Model Selection',
+  'Retrieval Basics',
+  'Multi-Hop Reasoning',
+  'Graph Expansion',
+  'Reranking',
+  'Context Filtering'
+]
 
 export default function ChatTuningPanel() {
   const [config, setConfig] = useState<ChatTuningConfig | null>(null)
@@ -69,8 +77,8 @@ export default function ChatTuningPanel() {
         throw new Error(`Failed to save config: ${response.statusText}`)
       }
 
-      setSuccessMessage('Configuration saved successfully!')
-      setTimeout(() => setSuccessMessage(null), 3000)
+      const { showToast } = require('@/components/Toast/ToastContainer')
+      showToast('success', 'Configuration saved successfully', undefined, 3000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save configuration')
     } finally {
@@ -109,11 +117,10 @@ export default function ChatTuningPanel() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center max-w-md">
-          <div className="text-red-500 mb-4">⚠️</div>
-          <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
+          <p style={{ fontSize: 'var(--text-base)', color: '#dc2626', marginBottom: 'var(--space-4)' }}>{error}</p>
           <button
             onClick={loadConfig}
-            className="small-button small-button-primary"
+            className="button-primary"
           >
             Retry
           </button>
@@ -124,7 +131,7 @@ export default function ChatTuningPanel() {
 
   if (!config) return null
 
-  // Group parameters by category
+  // Group parameters by category and sort by predefined order
   const groupedParams = config.parameters.reduce((acc, param) => {
     if (!acc[param.category]) {
       acc[param.category] = []
@@ -133,112 +140,132 @@ export default function ChatTuningPanel() {
     return acc
   }, {} as Record<string, ChatParameter[]>)
 
+  // Sort categories according to CATEGORY_ORDER
+  const sortedCategories = CATEGORY_ORDER.filter(cat => groupedParams[cat])
+
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-secondary-900">
-      {/* Header */}
-      <div className="border-b border-secondary-200 dark:border-secondary-700 p-6">
-        <h1 className="text-2xl font-bold text-secondary-900 dark:text-secondary-50 mb-2">
+    <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+        {/* Header */}
+          <div style={{ borderBottom: '1px solid var(--border)', padding: '0 var(--space-6) var(--space-6)' }}>
+        <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
           Chat Tuning
         </h1>
-        <p className="text-sm text-secondary-600 dark:text-secondary-400">
-          Adjust retrieval and reasoning parameters for chat responses
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          Adjust retrieval and generation parameters for chat responses. Changes apply instantly to new queries.
         </p>
       </div>
 
       {/* Messages */}
       {(error || successMessage) && (
-        <div className="px-6 pt-4">
+        <div style={{ padding: 'var(--space-4) var(--space-6) 0' }}>
           {error && (
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
-              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
+              <p style={{ fontSize: 'var(--text-sm)', color: '#dc2626' }}>{error}</p>
             </div>
           )}
           {successMessage && (
-            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 mb-4">
-              <p className="text-sm text-green-600 dark:text-green-400">{successMessage}</p>
+            <div style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
+              <p style={{ fontSize: 'var(--text-sm)', color: '#16a34a' }}>{successMessage}</p>
             </div>
           )}
         </div>
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-8">
-        {Object.entries(groupedParams).map(([category, params]) => (
-          <div key={category} className="space-y-4">
-            <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 border-b border-secondary-200 dark:border-secondary-700 pb-2">
-              {category}
-            </h2>
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: '0 var(--space-6) var(--space-6)' }}>
+        {sortedCategories.map((category, idx) => {
+          const params = groupedParams[category]
+          return (
+            <div key={category} style={{ marginBottom: 'var(--space-12)', paddingBottom: idx < sortedCategories.length - 1 ? 'var(--space-8)' : 0, borderBottom: idx < sortedCategories.length - 1 ? '1px solid var(--border)' : 'none' }}>
+              <h2 className="font-display" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 'var(--space-6)' }}>
+                {category}
+              </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {params.map((param) => (
-                <div key={param.key} className="space-y-2 p-3 rounded-lg bg-white dark:bg-secondary-900 border border-secondary-100 dark:border-secondary-800">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+                {params.map((param) => (
+                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                    <div className="flex items-center" style={{ gap: 'var(--space-2)' }}>
+                      <label style={{ fontSize: 'var(--text-base)', fontWeight: 500, color: 'var(--text-primary)' }}>
                         {param.label}
                       </label>
                       <Tooltip content={param.tooltip}>
-                        <button className="text-secondary-400 hover:text-secondary-600 dark:hover:text-secondary-300" type="button">
-                          <InformationCircleIcon className="w-4 h-4" />
+                        <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
+                          <InformationCircleIcon style={{ width: '18px', height: '18px' }} />
                         </button>
                       </Tooltip>
                     </div>
+
                     {param.type === 'slider' && (
-                      <span className="text-sm font-mono text-secondary-600 dark:text-secondary-400">
-                        {param.value}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: 'var(--text-sm)', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
+                          {param.value}
+                        </span>
+                        <input
+                          type="range"
+                          min={param.min}
+                          max={param.max}
+                          step={param.step}
+                          value={param.value as number}
+                          onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
+                          className="slider"
+                          style={{ flex: 1, maxWidth: '500px' }}
+                          title={String(param.value)}
+                        />
+                      </div>
+                    )}
+
+                    {param.type === 'select' && param.options && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                        <select
+                          value={String(param.value)}
+                          onChange={(e) => handleValueChange(param.key, e.target.value)}
+                          className="input-field"
+                          style={{ maxWidth: '400px' }}
+                        >
+                          {param.options.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {param.type === 'toggle' && (
+                      <div>
+                        <button
+                          onClick={() => handleValueChange(param.key, !param.value)}
+                          className={`relative inline-flex h-6 w-11 items-center transition-colors ${
+                            param.value ? 'toggle-on' : 'toggle-off'
+                          }`}
+                          style={{ borderRadius: 'var(--radius-full)' }}
+                          aria-label={`Toggle ${param.label}`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform transition-transform ${
+                              param.value ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                            style={{ 
+                              borderRadius: 'var(--radius-full)', 
+                              background: 'var(--bg-primary)' 
+                            }}
+                          />
+                        </button>
+                        <span style={{ marginLeft: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                          {param.value ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </div>
                     )}
                   </div>
-
-                  {param.type === 'slider' && (
-                    <input
-                      type="range"
-                      min={param.min}
-                      max={param.max}
-                      step={param.step}
-                      value={param.value as number}
-                      onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
-                      className="w-full h-2 bg-secondary-200 dark:bg-secondary-700 rounded-lg appearance-none cursor-pointer slider"
-                    />
-                  )}
-
-                  {param.type === 'select' && param.options && (
-                    <select
-                      value={String(param.value)}
-                      onChange={(e) => handleValueChange(param.key, e.target.value)}
-                      className="w-full p-2 bg-white dark:bg-secondary-800 border border-secondary-200 dark:border-secondary-700 rounded"
-                    >
-                      {param.options.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-
-                  {param.type === 'toggle' && (
-                    <button
-                      onClick={() => handleValueChange(param.key, !param.value)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        param.value ? 'toggle-on' : 'toggle-off'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          param.value ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                  )}
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* Footer Actions */}
-      <div className="border-t border-secondary-200 dark:border-secondary-700 p-6 flex gap-4">
+      <div className="flex" style={{ borderTop: '1px solid var(--border)', padding: 'var(--space-6)', gap: 'var(--space-4)' }}>
         <button
           onClick={handleSave}
           disabled={isSaving}
@@ -249,7 +276,7 @@ export default function ChatTuningPanel() {
         <button
           onClick={handleReset}
           disabled={isSaving}
-          className="small-button small-button-secondary"
+          className="button-secondary"
         >
           Reset
         </button>

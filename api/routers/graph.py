@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from neo4j.exceptions import ServiceUnavailable
+from neo4j.exceptions import ServiceUnavailable, TransientError
 
 from api.models import GraphResponse
 from core.graph_db import graph_db
@@ -29,13 +29,27 @@ async def get_clustered_graph(
         default=None, description="Filter graph to entities from a specific document"
     ),
     limit: int = Query(
-        default=300,
+        default=100,
         gt=0,
-        le=1000,
+        le=500,
         description="Maximum number of seed nodes to include before expansion",
     ),
 ) -> GraphResponse:
     """Return clustered graph JSON for the UI."""
+
+    # For document-scoped graphs, avoid expensive pre-counts (which can
+    # themselves trigger DB memory pressure) and conservatively cap the
+    # number of seed nodes. This prevents the backend from constructing
+    # very large transactions when the document contains thousands of
+    # entities. Users can still view smaller subsets via the Communities
+    # tab or by filtering by `community_id`.
+    if document_id:
+        # Conservative default for document-scoped visualizations
+        limit = min(limit, 50)
+    else:
+        # For global graph queries, enforce a low default when unfiltered
+        if community_id is None and node_type is None:
+            limit = min(limit, 50)
 
     try:
         graph = graph_db.get_clustered_graph(
@@ -50,6 +64,18 @@ async def get_clustered_graph(
         # Let ServiceUnavailable bubble to the global handler
         if isinstance(exc, ServiceUnavailable):
             raise
+        # If Neo4j transient memory errors occur, return a clear 503 so the UI can
+        # surface a friendly message and avoid downstream parsing errors.
+        if isinstance(exc, TransientError):
+            logger.exception("Neo4j transient error while fetching clustered graph: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Graph database memory threshold reached while building the clustered graph. "
+                    "Try reducing the 'limit' query parameter (e.g. ?limit=50) or increase Neo4j transaction memory."
+                ),
+            )
+
         logger.exception("Failed to fetch clustered graph: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to load graph data")
 

@@ -470,19 +470,19 @@ export default function ChatInput({
     <div className="relative">
       <form onSubmit={handleSubmit} className="relative">
         <div
-          className={`relative transition-all grid grid-cols-[1fr_auto] gap-2 ${isDragging ? 'is-dragging-ring rounded-lg' : ''}`}
-          style={isDragging ? { boxShadow: '0 0 0 3px rgba(36,198,230,0.12)' } : undefined}
+          className={`relative transition-all grid grid-cols-[1fr_auto]`}
+          style={isDragging ? { gap: 'var(--space-2)', boxShadow: '0 0 0 3px var(--accent-subtle)', borderRadius: 'var(--radius-md)' } : { gap: 'var(--space-2)' }}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           {isDragging && (
-            <div className="absolute inset-0 border-2 border-dashed rounded-lg flex items-center justify-center z-10"
-              style={{ backgroundColor: 'var(--neon-glow)', borderColor: 'var(--primary-500)' }}
+            <div className="absolute inset-0 border-2 border-dashed flex items-center justify-center z-10"
+              style={{ backgroundColor: 'var(--accent-subtle)', borderColor: 'var(--accent-primary)', borderRadius: 'var(--radius-md)' }}
             >
               <div className="text-center">
-                <DocumentArrowUpIcon className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--primary-500)' }} />
-                <p className="text-sm font-medium" style={{ color: 'var(--primary-500)' }}>
+                <DocumentArrowUpIcon style={{ width: '32px', height: '32px', margin: '0 auto var(--space-2)', color: 'var(--accent-primary)' }} />
+                <p style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--accent-primary)' }}>
                   Drop files to upload, or drop documents to add to context
                 </p>
               </div>
@@ -490,15 +490,15 @@ export default function ChatInput({
           )}
 
           {(selectedDocEntries.length > 0 || selectedHashtags.length > 0) && (
-            <div className="mb-2 flex flex-wrap items-center gap-2 pr-24">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-secondary-500 dark:text-secondary-400">
+            <div className="flex flex-wrap items-center pr-24" style={{ marginBottom: 'var(--space-2)', gap: 'var(--space-2)' }}>
+              <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
                 Context
               </span>
               {selectedDocEntries.map(([docId, info]) => (
                 <span
                   key={docId}
-                  className="inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs"
-                  style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}
+                  className="inline-flex max-w-full items-center"
+                  style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-full)', padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--text-xs)', backgroundColor: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}
                 >
                   <span className="truncate" title={info.original_filename || info.filename}>
                     {info.original_filename || info.filename}
@@ -506,9 +506,9 @@ export default function ChatInput({
                   <button
                     type="button"
                     onClick={() => handleRemoveDoc(docId)}
-                    className="rounded-full p-0.5 transition focus:outline-none"
+                    className="focus:outline-none"
+                    style={{ borderRadius: 'var(--radius-full)', padding: '2px', color: 'var(--accent-primary)', transition: 'opacity var(--timing-fast) var(--easing-standard)' }}
                     aria-label={`Remove ${info.original_filename || info.filename} from forced context`}
-                    style={{ color: 'var(--primary-500)' }}
                   >
                     <XMarkIcon className="h-3.5 w-3.5" />
                   </button>
@@ -517,7 +517,8 @@ export default function ChatInput({
               {selectedHashtags.map((hashtag) => (
                 <span
                   key={hashtag}
-                  className="inline-flex max-w-full items-center gap-2 rounded-full bg-green-50 px-3 py-1 text-xs text-green-700"
+                  className="inline-flex max-w-full items-center"
+                  style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-full)', padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--text-xs)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#16a34a' }}
                 >
                   <span className="truncate" title={hashtag}>
                     {hashtag.startsWith('#') ? hashtag : `#${hashtag}`}
@@ -525,7 +526,8 @@ export default function ChatInput({
                   <button
                     type="button"
                     onClick={() => handleRemoveHashtag(hashtag)}
-                    className="rounded-full p-0.5 text-green-600 transition hover:bg-green-100 focus:outline-none focus:ring-1 focus:ring-green-400"
+                    className="focus:outline-none"
+                    style={{ borderRadius: 'var(--radius-full)', padding: '2px', color: '#16a34a', transition: 'opacity var(--timing-fast) var(--easing-standard)' }}
                     aria-label={`Remove ${hashtag} from forced context`}
                   >
                     <XMarkIcon className="h-3.5 w-3.5" />
@@ -537,7 +539,8 @@ export default function ChatInput({
 
           {showMentionList && (
             <div
-              className="absolute bottom-full left-0 right-24 mb-2 max-h-56 overflow-y-auto rounded-lg border border-secondary-200 dark:border-secondary-600 bg-white dark:bg-secondary-800 shadow-lg z-20"
+              className="absolute bottom-full left-0 right-24 max-h-56 overflow-y-auto border z-20 card"
+              style={{ marginBottom: 'var(--space-2)', boxShadow: 'var(--shadow-lg)' }}
               role="listbox"
             >
               {mentionState?.type === 'hashtag' ? (
@@ -560,11 +563,14 @@ export default function ChatInput({
                         event.preventDefault()
                         handleSelectHashtag(tag)
                       }}
-                      className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition ${
-                          idx === mentionIndex
-                            ? 'accent-selected'
-                            : 'hover:bg-secondary-100'
-                        }`}
+                      className={`flex w-full items-center text-left transition`}
+                      style={{
+                        gap: 'var(--space-3)',
+                        padding: 'var(--space-2) var(--space-3)',
+                        fontSize: 'var(--text-sm)',
+                        background: idx === mentionIndex ? 'var(--accent-subtle)' : 'transparent',
+                        color: idx === mentionIndex ? 'var(--accent-primary)' : 'inherit'
+                      }}
                     >
                       <span className="truncate" title={tag}>
                         {tag.startsWith('#') ? tag : `#${tag}`}
@@ -592,11 +598,14 @@ export default function ChatInput({
                         event.preventDefault()
                         handleSelectDocument(doc)
                       }}
-                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
-                        idx === mentionIndex
-                          ? 'accent-selected'
-                          : 'hover:bg-secondary-100'
-                      }`}
+                      className="flex w-full items-center justify-between text-left transition"
+                      style={{
+                        gap: 'var(--space-3)',
+                        padding: 'var(--space-2) var(--space-3)',
+                        fontSize: 'var(--text-sm)',
+                        background: idx === mentionIndex ? 'var(--accent-subtle)' : 'transparent',
+                        color: idx === mentionIndex ? 'var(--accent-primary)' : 'inherit'
+                      }}
                     >
                       <span className="truncate" title={doc.original_filename || doc.filename}>
                         {doc.original_filename || doc.filename}
@@ -625,7 +634,8 @@ export default function ChatInput({
           />
 
           <div
-            className="col-start-2 self-end flex items-center gap-2"
+            className="col-start-2 self-end flex items-center"
+            style={{ gap: 'var(--space-2)' }}
           >
             {/* File Upload Button */}
             <Tooltip content={disabled || isStreaming || uploadingFile || !isConnected ? 'Upload disabled' : 'Upload documents'}>
@@ -644,7 +654,7 @@ export default function ChatInput({
                   accept=".pdf,.txt,.md,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
                   multiple
                 />
-                    <DocumentArrowUpIcon className="w-5 h-5" style={{ color: 'var(--primary-500)' }} />
+                    <DocumentArrowUpIcon className="w-5 h-5" style={{ color: 'var(--accent-primary)' }} />
               </label>
             </Tooltip>
 

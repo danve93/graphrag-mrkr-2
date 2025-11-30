@@ -6,7 +6,6 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import SourcesList from './SourcesList'
 import QualityBadge from './QualityBadge'
-import { motion } from 'framer-motion'
 
 interface MessageBubbleProps {
   message: Message
@@ -19,15 +18,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     : message.context_documents
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{
-        duration: 0.4,
-        ease: [0.4, 0, 0.2, 1],
-      }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-    >
+    <div className={`flex message-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
         className={`chat-message ${
           isUser ? 'chat-message-user' : 'chat-message-assistant relative pr-4 pl-4'
@@ -46,8 +37,8 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
         {isUser && Array.isArray(message.context_documents) && message.context_documents.length > 0 && contextDocDisplay && contextDocDisplay.length > 0 && (
           <div className="mt-2">
-            <span className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-white dark:bg-secondary-800/15 px-3 py-1 text-xs text-white/90 max-w-full">
-              <span className="font-semibold uppercase tracking-wide text-white/70 shrink-0">
+            <span className="inline-flex flex-wrap items-center" style={{ gap: 'var(--space-1)', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.15)', padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--text-xs)', color: 'rgba(255,255,255,0.9)', maxWidth: '100%' }}>
+              <span style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.7)', flexShrink: 0 }}>
                 {message.context_hashtags && message.context_hashtags.length > 0 
                   ? `${message.context_hashtags.map(tag => tag.startsWith('#') ? tag : `#${tag}`).join(', ')}:` 
                   : (contextDocDisplay && contextDocDisplay.length > 1 ? 'Documents:' : 'Document:')}
@@ -63,30 +54,14 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         )}
 
         {message.isStreaming && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.3 }}
-            className="flex items-center mt-2 text-secondary-500 dark:text-secondary-400"
-          >
-            <motion.div
-              animate={{
-                scale: [1, 1.2, 1],
-                opacity: [0.5, 1, 0.5],
-              }}
-              transition={{
-                duration: 1.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="w-3 h-3 bg-secondary-400 rounded-full"
-            />
-          </motion.div>
+          <div className="flex items-center mt-2" style={{ color: 'var(--text-secondary)' }}>
+            <div className="spinner" style={{ width: '12px', height: '12px' }} />
+          </div>
         )}
 
         {/* bottom area: sources list (left) and quality badge (anchored) */}
         {!isUser && ( (message.sources && message.sources.length > 0) || message.quality_score ) && (
-          <div className="mt-4 pt-4 border-t border-secondary-200 dark:border-secondary-700 relative">
+          <div className="mt-4 pt-4 relative" style={{ borderTop: '1px solid var(--border)' }}>
             {message.sources && message.sources.length > 0 ? (
               <div className="min-w-0">
                 <SourcesList sources={message.sources} />
@@ -110,6 +85,6 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
   )
 }

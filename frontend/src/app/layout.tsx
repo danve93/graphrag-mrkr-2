@@ -22,21 +22,19 @@ export const metadata: Metadata = {
   description: branding.description,
   icons: {
     icon: [
-      { url: '/favicon.svg', type: 'image/svg+xml' },
-      { url: branding.use_image && branding.image_path ? branding.image_path : '/favicon.svg' }
-    ],
+      { 
+        url: branding.use_image && branding.image_path ? branding.image_path : '/favicon.svg',
+        type: 'image/svg+xml' 
+      }
+    ]
   },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-      </head>
-      <body>
+      <head></head>
+      <body className="min-h-screen">
         <ThemeProvider>
           <BrandingProvider branding={branding}>
             <StatusIndicator />
@@ -46,5 +44,5 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </ThemeProvider>
       </body>
     </html>
-  )
+  );
 }
