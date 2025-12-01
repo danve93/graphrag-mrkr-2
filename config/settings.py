@@ -277,6 +277,28 @@ class Settings(BaseSettings):
         description="Enable caching system (set to false for rollback)"
     )
 
+    # Document detail precomputed summaries
+    enable_document_summaries: bool = Field(
+        default=True,
+        description="Enable precomputed per-document summary fields to speed up document detail pages",
+    )
+    document_summary_ttl: int = Field(
+        default=300,
+        description="TTL (seconds) for short-lived document summary caches",
+    )
+    document_detail_cache_ttl: int = Field(
+        default=60,
+        description="TTL (seconds) for cached document detail responses (frontend-level)",
+    )
+    document_summary_top_n_communities: int = Field(
+        default=10,
+        description="Number of top communities to store as a preview on the document node",
+    )
+    document_summary_top_n_similarities: int = Field(
+        default=20,
+        description="Number of top chunk similarities to store as a preview on the document node",
+    )
+
     # Application Configuration
     log_level: str = Field(default="INFO", description="Logging level")
     max_upload_size: int = Field(

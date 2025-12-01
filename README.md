@@ -119,16 +119,6 @@ docker compose logs -f
 
 Open the frontend at `http://localhost:3000` and the backend docs at `http://localhost:8000/docs`.
 
-### Clearing stale Docker ports or containers
-
-If tests or local runs fail because ports like 3000, 8000, 7474, 7687, or 6379 are already in use, run the cleanup helper to stop any leftover Compose projects and free the ports:
-
-```bash
-./scripts/cleanup_docker.sh
-```
-
-The script attempts to shut down both the main and e2e Compose projects (including override stacks) using the current `COMPOSE_PROJECT_NAME` or the default project names, removes their volumes, and then lists any containers still publishing those ports so you can decide whether to stop them.
-
 ### Docker Compose: internal vs host networking
 
 The Compose stack defaults to container-internal service hostnames (for example `bolt://neo4j:7687`) so services communicate reliably on the Compose network. This is the recommended configuration for development and CI.
@@ -172,16 +162,17 @@ Notes:
    # Set OPENAI_API_KEY, NEO4J_* credentials, etc.
    ```
 
-Environment notes:
 
-- The repository provides a `.env.example` with recommended defaults for local development. Copy it to `.env` and update values before running services.
-- For Docker Compose demos the compose file respects `NEO4J_AUTH` (format `user/password`). The repository uses a safe demo default `NEO4J_AUTH=neo4j/test` in `.env.example` to make `docker compose up` work without editing; when running the backend outside Compose, keep `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` set.
-- Example (copy-paste into your shell):
-  ```bash
-  cp .env.example .env
-  # Optionally set a demo Neo4j auth (only needed for Compose):
-  export NEO4J_AUTH=neo4j/test
-  ```
+**Important:** Neo4j must always use the password from your `.env` file for all containers, scripts, and local runs. Do not hardcode or override the password elsewhere. Ensure that `NEO4J_PASSWORD` and `NEO4J_AUTH` in your `.env` are set to the correct value (e.g., `assext2025`), and all Docker Compose services and overrides reference these variables. This prevents authentication errors and ensures consistent access across the stack.
+
+The repository provides a `.env.example` with recommended defaults for local development. Copy it to `.env` and update values before running services.
+For Docker Compose demos the compose file respects `NEO4J_AUTH` (format `user/password`). The repository uses a safe demo default `NEO4J_AUTH=neo4j/test` in `.env.example` to make `docker compose up` work without editing; when running the backend outside Compose, keep `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` set.
+Example (copy-paste into your shell):
+   ```bash
+   cp .env.example .env
+   # Set your actual Neo4j password in .env before starting services
+   export NEO4J_AUTH=neo4j/assext2025
+   ```
   
    Note about e2e/local compose runs:
 

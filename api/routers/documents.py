@@ -3,6 +3,7 @@
 import logging
 import mimetypes
 import time
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,9 @@ from neo4j.exceptions import ServiceUnavailable
 from api.models import DocumentMetadataResponse, UpdateHashtagsRequest
 from core.document_summarizer import document_summarizer
 from core.graph_db import graph_db
+from core.singletons import get_response_cache, ResponseKeyLock
+from core.cache_metrics import cache_metrics
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -72,54 +76,159 @@ async def get_document_summary(document_id: str):
     Used for fast initial page load and navigation previews.
     """
     try:
-        with graph_db.session_scope() as session:
-            result = session.run(
-                """
-                MATCH (d:Document {id: $document_id})
-                OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
-                OPTIONAL MATCH (c)-[:CONTAINS_ENTITY]->(e:Entity)
-                WITH d, 
-                     count(DISTINCT c) AS chunk_count,
-                     count(DISTINCT e) AS entity_count,
-                     count(DISTINCT e.community_id) AS community_count
-                OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c2:Chunk)-[s:SIMILAR_TO]->()
-                WHERE c2.id < id(startNode(s))
-                RETURN 
-                    d.id AS id,
-                    d.filename AS filename,
-                    d.original_filename AS original_filename,
-                    d.mime_type AS mime_type,
-                    d.size_bytes AS size_bytes,
-                    d.created_at AS created_at,
-                    d.link AS link,
-                    d.uploader AS uploader,
-                    chunk_count,
-                    entity_count,
-                    community_count,
-                    count(DISTINCT s) AS similarity_count
-                """,
-                document_id=document_id
-            ).single()
-            
-            if not result:
-                raise HTTPException(status_code=404, detail="Document not found")
-            
-            return {
-                "id": result["id"],
-                "filename": result["filename"],
-                "original_filename": result["original_filename"],
-                "mime_type": result["mime_type"],
-                "size_bytes": result["size_bytes"],
-                "created_at": result["created_at"],
-                "link": result["link"],
-                "uploader": result["uploader"],
-                "stats": {
-                    "chunks": result["chunk_count"],
-                    "entities": result["entity_count"],
-                    "communities": result["community_count"],
-                    "similarities": result["similarity_count"]
-                }
-            }
+        cache = get_response_cache()
+        cache_key = f"document_summary:{document_id}"
+
+        # Try the cache first when enabled
+        if getattr(settings, "enable_caching", True) and getattr(settings, "enable_document_summaries", True):
+            cached = cache.get(cache_key)
+            if cached is not None:
+                cache_metrics.record_document_summary_hit()
+                return cached
+            cache_metrics.record_document_summary_miss()
+
+        # Singleflight to avoid stampede on cache miss
+        with ResponseKeyLock(cache_key, timeout=3) as acquired:
+            # If another thread populated the cache while we waited, return it
+            if acquired:
+                # proceed to compute and populate
+                pass
+            else:
+                # recheck cache quickly
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    cache_metrics.record_document_summary_hit()
+                    return cached
+
+            # Prefer precomputed fields when available on Document node
+            with graph_db.session_scope() as session:
+                rec = session.run(
+                    """
+                    MATCH (d:Document {id: $document_id})
+                    RETURN d.id AS id,
+                           d.filename AS filename,
+                           d.original_filename AS original_filename,
+                           d.mime_type AS mime_type,
+                           d.size_bytes AS size_bytes,
+                           d.created_at AS created_at,
+                           d.link AS link,
+                           d.uploader AS uploader,
+                           d.precomputed_chunk_count AS pre_chunks,
+                           d.precomputed_entity_count AS pre_entities,
+                           d.precomputed_community_count AS pre_communities,
+                           d.precomputed_similarity_count AS pre_similarities
+                               , d.precomputed_top_communities_json AS top_comm_json,
+                               d.precomputed_top_similarities_json AS top_sims_json
+                    """,
+                    document_id=document_id,
+                ).single()
+
+                if not rec:
+                    raise HTTPException(status_code=404, detail="Document not found")
+
+                # If precomputed values exist (not null), use them; otherwise fall back
+                pre_chunks = rec.get("pre_chunks")
+                pre_entities = rec.get("pre_entities")
+                pre_communities = rec.get("pre_communities")
+                pre_similarities = rec.get("pre_similarities")
+
+                if (
+                    pre_chunks is not None
+                    or pre_entities is not None
+                    or pre_communities is not None
+                    or pre_similarities is not None
+                ):
+                    # Try to parse precomputed preview JSON fields when present
+                    top_communities = None
+                    top_similarities = None
+                    try:
+                        top_communities = json.loads(rec.get("top_comm_json")) if rec.get("top_comm_json") else None
+                    except Exception:
+                        top_communities = None
+                    try:
+                        top_similarities = json.loads(rec.get("top_sims_json")) if rec.get("top_sims_json") else None
+                    except Exception:
+                        top_similarities = None
+
+                    resp = {
+                        "id": rec["id"],
+                        "filename": rec["filename"],
+                        "original_filename": rec["original_filename"],
+                        "mime_type": rec["mime_type"],
+                        "size_bytes": rec["size_bytes"],
+                        "created_at": rec["created_at"],
+                        "link": rec["link"],
+                        "uploader": rec["uploader"],
+                        "stats": {
+                            "chunks": int(pre_chunks or 0),
+                            "entities": int(pre_entities or 0),
+                            "communities": int(pre_communities or 0),
+                            "similarities": int(pre_similarities or 0),
+                        },
+                        "previews": {
+                            "top_communities": top_communities,
+                            "top_similarities": top_similarities,
+                        },
+                    }
+                else:
+                    # Fall back to the original aggregation query when precomputed not present
+                    full = session.run(
+                        """
+                        MATCH (d:Document {id: $document_id})
+                        OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+                        OPTIONAL MATCH (c)-[:CONTAINS_ENTITY]->(e:Entity)
+                        WITH d, 
+                             count(DISTINCT c) AS chunk_count,
+                             count(DISTINCT e) AS entity_count,
+                             count(DISTINCT e.community_id) AS community_count
+                        OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c1:Chunk)-[s:SIMILAR_TO]-(c2:Chunk)
+                        WHERE (d)-[:HAS_CHUNK]->(c2) AND c1.id < c2.id
+                        RETURN 
+                            d.id AS id,
+                            d.filename AS filename,
+                            d.original_filename AS original_filename,
+                            d.mime_type AS mime_type,
+                            d.size_bytes AS size_bytes,
+                            d.created_at AS created_at,
+                            d.link AS link,
+                            d.uploader AS uploader,
+                            chunk_count,
+                            entity_count,
+                            community_count,
+                            count(DISTINCT s) AS similarity_count
+                        """,
+                        document_id=document_id,
+                    ).single()
+
+                    if not full:
+                        raise HTTPException(status_code=404, detail="Document not found")
+
+                    resp = {
+                        "id": full["id"],
+                        "filename": full["filename"],
+                        "original_filename": full["original_filename"],
+                        "mime_type": full["mime_type"],
+                        "size_bytes": full["size_bytes"],
+                        "created_at": full["created_at"],
+                        "link": full["link"],
+                        "uploader": full["uploader"],
+                        "stats": {
+                            "chunks": full["chunk_count"],
+                            "entities": full["entity_count"],
+                            "communities": full["community_count"],
+                            "similarities": full["similarity_count"],
+                        },
+                    }
+
+            # Populate cache for next callers
+            try:
+                if getattr(settings, "enable_caching", True) and getattr(settings, "enable_document_summaries", True):
+                    cache_ttl = getattr(settings, "document_summary_ttl", 300)
+                    cache[cache_key] = resp
+            except Exception:
+                pass
+
+            return resp
     except HTTPException:
         raise
     except Exception as exc:
@@ -228,15 +337,15 @@ async def get_document_chunk_similarities(
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
     min_score: float = Query(default=0.0, ge=0.0, le=1.0, description="Minimum similarity score"),
     exact_count: bool = Query(default=False, description="Compute exact total (slower, ~13s)"),
-    debug: bool = Query(default=False, description="Return timing debug info in response")
+    debug: bool = Query(default=False, description="Return timing debug info in response"),
 ):
     """Get chunk-to-chunk similarity relationships for a document.
-    
-    Returns only IDs and scores for efficient transfer.
-    Use /chunks/{chunk_id} to fetch full chunk content on demand.
-    
-    Performance: By default, uses fast estimation for total count on first page.
-    Set exact_count=true to compute precise total (adds ~13s for large documents).
+
+    Returns only IDs and scores for efficient transfer. Use `/chunks/{chunk_id}` to fetch
+    full chunk content on demand.
+
+    By default this endpoint uses a fast estimate for the total count on the first page.
+    Set `exact_count=true` to compute a precise total (may be slow for very large docs).
     """
     try:
         # Verify document exists
@@ -248,6 +357,7 @@ async def get_document_chunk_similarities(
         timings = {}
         start_all = time.perf_counter()
 
+        # Count chunks quickly to decide on short-circuit behavior
         with graph_db.session_scope() as session:
             t0 = time.perf_counter()
             chunk_count_rec = session.run(
@@ -267,18 +377,18 @@ async def get_document_chunk_similarities(
                     "limit": limit,
                     "offset": offset,
                     "has_more": False,
-                    "similarities": []
+                    "similarities": [],
                 }
                 if debug:
                     timings["total_elapsed_s"] = time.perf_counter() - start_all
                     base_resp["_timings"] = timings
                 return base_resp
 
-        # Optimized query - use precomputed rank when available for fast pagination
-        # Scope the query to the document to avoid fetching chunk lists in Python
+        # Main paginated query (scoped to the document to keep results compact)
         query = """
-            MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c1:Chunk)-[sim:SIMILAR_TO]-(c2:Chunk)-[:HAS_CHUNK]->(d)
-            WHERE c1.id < c2.id
+            MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c1:Chunk)-[sim:SIMILAR_TO]-(c2:Chunk)
+            WHERE (d)-[:HAS_CHUNK]->(c2)
+              AND c1.id < c2.id
               AND coalesce(sim.score, 0) >= $min_score
             WITH c1.id AS chunk1_id,
                  c2.id AS chunk2_id,
@@ -290,54 +400,53 @@ async def get_document_chunk_similarities(
             RETURN chunk1_id, chunk2_id, score, rank
         """
 
-        # Fetch main results (fast). Ordering uses `rank` when present.
         with graph_db.session_scope() as session:
             t2 = time.perf_counter()
-            results = session.run(query,
+            results = session.run(
+                query,
                 document_id=document_id,
                 offset=offset,
                 limit=limit,
-                min_score=min_score
+                min_score=min_score,
             ).data()
             t3 = time.perf_counter()
             timings["main_query_s"] = t3 - t2
 
-            # Determine count strategy for performance optimization
+            # Determine count strategy: exact if requested or if paging beyond first page
             estimated = False
             total = None
             if exact_count or offset > 0:
-                # User requested exact count OR navigating past first page (needs accurate total)
                 count_query = """
-                    MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c1:Chunk)-[sim:SIMILAR_TO]-(c2:Chunk)-[:HAS_CHUNK]->(d)
-                    WHERE c1.id < c2.id
+                    MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c1:Chunk)-[sim:SIMILAR_TO]-(c2:Chunk)
+                    WHERE (d)-[:HAS_CHUNK]->(c2)
+                      AND c1.id < c2.id
                       AND coalesce(sim.score, 0) >= $min_score
                     RETURN count(*) as total
                 """
                 t4 = time.perf_counter()
-                total_result = session.run(count_query,
+                total_result = session.run(
+                    count_query,
                     document_id=document_id,
-                    min_score=min_score
+                    min_score=min_score,
                 ).single()
                 t5 = time.perf_counter()
                 timings["count_query_s"] = t5 - t4
                 total = total_result["total"] if total_result else 0
             else:
-                # First page with default settings: use fast estimate
-                # Estimate based on typical similarity density (~3.5 similarities per chunk)
-                # Use previously fetched num_chunks
+                # Fast heuristic for first page: assume ~3.5 similarities per chunk
                 total = min(10000, int(num_chunks * 3.5))
                 estimated = True
 
         timings["total_elapsed_s"] = time.perf_counter() - start_all
-        
+
         response = {
             "document_id": document_id,
             "total": total,
             "estimated": estimated,
             "limit": limit,
             "offset": offset,
-            "has_more": len(results) == limit,  # Simple check: if we got full page, likely more exist
-            "similarities": results
+            "has_more": len(results) == limit,
+            "similarities": results,
         }
         if debug:
             response["_timings"] = timings
@@ -350,10 +459,7 @@ async def get_document_chunk_similarities(
         if isinstance(exc, ServiceUnavailable):
             raise
         logger.error("Failed to get chunk similarities for %s: %s", document_id, exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to retrieve chunk similarities"
-        ) from exc
+        raise HTTPException(status_code=500, detail="Failed to retrieve chunk similarities") from exc
 
 
 
@@ -385,8 +491,64 @@ async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequ
 async def get_document_metadata(document_id: str) -> DocumentMetadataResponse:
     """Return document metadata and related analytics."""
     try:
-        details = graph_db.get_document_details(document_id)
-        return DocumentMetadataResponse(**details)
+        # Prefer precomputed lightweight metadata for fast responses
+        with graph_db.session_scope() as session:
+            rec = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                RETURN d.id as id,
+                       d.title as title,
+                       d.filename as file_name,
+                       d.original_filename as original_filename,
+                       d.mime_type as mime_type,
+                       d.preview_url as preview_url,
+                       d.uploaded_at as uploaded_at,
+                       d.created_at as created_at,
+                       d.uploader as uploader,
+                       d.summary as summary,
+                       d.document_type as document_type,
+                       d.hashtags as hashtags,
+                       d.precomputed_chunk_count as pre_chunks,
+                       d.precomputed_entity_count as pre_entities,
+                       d.precomputed_community_count as pre_communities,
+                       d.precomputed_similarity_count as pre_similarities,
+                       d.quality_scores as quality_scores,
+                       d.metadata as metadata
+                """,
+                doc_id=document_id,
+            ).single()
+
+            if not rec:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            # Build a lightweight response that contains metadata and precomputed stats.
+            # Full chunk/entity lists should be loaded via the dedicated endpoints.
+            uploader_info = None
+            uploader_val = rec.get("uploader")
+            if isinstance(uploader_val, dict):
+                uploader_info = {"id": uploader_val.get("id"), "name": uploader_val.get("name")}
+
+            resp = {
+                "id": rec.get("id") or document_id,
+                "title": rec.get("title"),
+                "file_name": rec.get("file_name"),
+                "original_filename": rec.get("original_filename"),
+                "mime_type": rec.get("mime_type"),
+                "preview_url": rec.get("preview_url"),
+                "uploaded_at": rec.get("uploaded_at"),
+                "uploader": uploader_info,
+                "summary": rec.get("summary"),
+                "document_type": rec.get("document_type"),
+                "hashtags": rec.get("hashtags") or [],
+                # Return empty lists for chunks/entities to avoid heavy DB work on initial load
+                "chunks": [],
+                "entities": [],
+                "quality_scores": rec.get("quality_scores"),
+                "related_documents": None,
+                "metadata": rec.get("metadata"),
+            }
+
+            return DocumentMetadataResponse(**resp)
     except ValueError:
         raise HTTPException(status_code=404, detail="Document not found") from None
     except Exception as exc:  # pragma: no cover - defensive logging

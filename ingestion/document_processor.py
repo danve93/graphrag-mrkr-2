@@ -1034,6 +1034,61 @@ class DocumentProcessor:
                                 doc_id,
                                 e,
                             )
+                        # Ensure any missing chunk->entity relationships for this document are repaired.
+                        try:
+                            repair_stats = graph_db.repair_contains_entity_relationships_for_document(doc_id)
+                            logger.info(
+                                "Post-ingest CONTAINS_ENTITY repair for %s: created=%s (before=%s after=%s)",
+                                doc_id,
+                                repair_stats.get("created"),
+                                repair_stats.get("before"),
+                                repair_stats.get("after"),
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "Failed to run document-scoped CONTAINS_ENTITY repair for %s: %s",
+                                doc_id,
+                                e,
+                            )
+                        # Update precomputed summary counts for fast document loads
+                        try:
+                            if getattr(settings, "enable_document_summaries", True):
+                                stats = graph_db.update_document_precomputed_summary(doc_id)
+                                logger.info(
+                                    "Updated precomputed document summary for %s: %s",
+                                    doc_id,
+                                    stats,
+                                )
+                                try:
+                                    preview_stats = graph_db.update_document_preview(doc_id)
+                                    logger.info(
+                                        "Updated document preview for %s: %s",
+                                        doc_id,
+                                        preview_stats,
+                                    )
+                                except Exception as e:
+                                    logger.debug("Failed to update document preview for %s: %s", doc_id, e)
+                        except Exception as e:
+                            logger.debug(
+                                "Failed to update precomputed document summary for %s: %s",
+                                doc_id,
+                                e,
+                            )
+                        # Invalidate caches for this document so frontends see fresh values
+                        try:
+                            from core.singletons import get_response_cache
+                            from core.cache_metrics import cache_metrics as _cache_metrics
+
+                            cache = get_response_cache()
+                            for key in (f"document_summary:{doc_id}", f"document_metadata:{doc_id}"):
+                                try:
+                                    if key in cache:
+                                        del cache[key]
+                                except Exception:
+                                    pass
+                            _cache_metrics.record_response_invalidation()
+                        except Exception:
+                            pass
                         logger.info(
                             "Synchronous entity extraction finished for %s: %s entities, %s relationships",
                             doc_id,
@@ -1170,6 +1225,62 @@ class DocumentProcessor:
                                 logger.warning(
                                     f"Failed to validate entity embeddings for document {doc_id_local}: {e}"
                                 )
+
+                            # Run document-scoped repair and update precomputed summary in background path as well
+                            try:
+                                repair_stats = graph_db.repair_contains_entity_relationships_for_document(doc_id_local)
+                                logger.info(
+                                    "Background post-ingest CONTAINS_ENTITY repair for %s: created=%s (before=%s after=%s)",
+                                    doc_id_local,
+                                    repair_stats.get("created"),
+                                    repair_stats.get("before"),
+                                    repair_stats.get("after"),
+                                )
+                            except Exception as e:
+                                logger.debug(
+                                    "Failed to run background CONTAINS_ENTITY repair for %s: %s",
+                                    doc_id_local,
+                                    e,
+                                )
+
+                            try:
+                                if getattr(settings, "enable_document_summaries", True):
+                                    stats = graph_db.update_document_precomputed_summary(doc_id_local)
+                                    logger.info(
+                                        "Background updated precomputed document summary for %s: %s",
+                                        doc_id_local,
+                                        stats,
+                                    )
+                                    try:
+                                        preview_stats = graph_db.update_document_preview(doc_id_local)
+                                        logger.info(
+                                            "Background updated document preview for %s: %s",
+                                            doc_id_local,
+                                            preview_stats,
+                                        )
+                                    except Exception as e:
+                                        logger.debug("Failed to update background document preview for %s: %s", doc_id_local, e)
+                            except Exception as e:
+                                logger.debug(
+                                    "Failed to update precomputed document summary in background for %s: %s",
+                                    doc_id_local,
+                                    e,
+                                )
+                            # Invalidate caches for this document so frontends see fresh values
+                            try:
+                                from core.singletons import get_response_cache
+                                from core.cache_metrics import cache_metrics as _cache_metrics
+
+                                cache = get_response_cache()
+                                for key in (f"document_summary:{doc_id_local}", f"document_metadata:{doc_id_local}"):
+                                    try:
+                                        if key in cache:
+                                            del cache[key]
+                                    except Exception:
+                                        pass
+                                _cache_metrics.record_response_invalidation()
+                            except Exception:
+                                pass
 
                             logger.info(
                                 f"Background entity extraction finished for {doc_id_local}: {created_entities} entities, {created_relationships} relationships"

@@ -256,6 +256,10 @@ export const api = {
     link?: string
     uploader?: string | null
     stats: { chunks: number; entities: number; communities: number; similarities: number }
+    previews?: {
+      top_communities?: Array<{ community_id: number; count: number } | null> | null
+      top_similarities?: Array<{ chunk1_id: string; chunk2_id: string; score: number } | null> | null
+    }
   }> {
     const response = await fetch(`${API_URL}/api/documents/${documentId}/summary`)
     if (!response.ok) {

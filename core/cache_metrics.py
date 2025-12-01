@@ -26,6 +26,9 @@ class CacheMetrics:
         self.response_hits = 0
         self.response_misses = 0
         self.response_invalidations = 0
+        # Document summary cache metrics
+        self.document_summary_hits = 0
+        self.document_summary_misses = 0
     
     def record_entity_label_hit(self):
         """Record an entity label cache hit."""
@@ -62,6 +65,14 @@ class CacheMetrics:
     def record_response_invalidation(self):
         """Record a response cache invalidation (explicit clear/delete)."""
         self.response_invalidations += 1
+
+    def record_document_summary_hit(self):
+        """Record a hit for the document summary cache."""
+        self.document_summary_hits += 1
+
+    def record_document_summary_miss(self):
+        """Record a miss for the document summary cache."""
+        self.document_summary_misses += 1
     
     def get_report(self) -> Dict[str, Any]:
         """
@@ -100,6 +111,12 @@ class CacheMetrics:
                 "cache_size": len(get_response_cache()),
                 "invalidations": self.response_invalidations,
             },
+                "document_summary": {
+                    "hits": self.document_summary_hits,
+                    "misses": self.document_summary_misses,
+                    "hit_rate": calc_hit_rate(self.document_summary_hits, self.document_summary_misses),
+                    "cache_size": len(get_response_cache()),
+                },
             "summary": {
                 "total_hits": self.entity_label_hits + self.embedding_hits + self.retrieval_hits,
                 "total_misses": self.entity_label_misses + self.embedding_misses + self.retrieval_misses + self.response_misses,

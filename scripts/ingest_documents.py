@@ -132,6 +132,26 @@ Examples:
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
+    parser.add_argument(
+        "--sync-extraction",
+        action="store_true",
+        default=True,
+        help="Run entity extraction synchronously in-process (useful for CLI/test runs) (enabled by default)",
+    )
+
+    parser.add_argument(
+        "--wait-for-extraction",
+        action="store_true",
+        default=True,
+        help="When background extraction is used, wait for it to complete before exiting (enabled by default)",
+    )
+
+    parser.add_argument(
+        "--wait-timeout",
+        type=int,
+        default=120,
+        help="Timeout in seconds to wait for background extraction when --wait-for-extraction is used (default: 120)",
+    )
 
     args = parser.parse_args()
 
@@ -162,7 +182,35 @@ Examples:
                 logger.error(f"File not found: {args.file}")
                 sys.exit(1)
 
+            # Optionally force synchronous entity extraction via settings override
+            if args.sync_extraction:
+                try:
+                    from config.settings import settings as _settings
+
+                    logger.info("--sync-extraction specified: enabling sync_entity_embeddings for this run")
+                    _settings.sync_entity_embeddings = True
+                except Exception:
+                    logger.warning("Failed to enable sync_entity_embeddings; proceeding anyway")
+
             success = ingest_single_file(args.file)
+
+            # If requested, wait for any background entity extraction to finish (safe no-op if none)
+            if args.wait_for_extraction and success:
+                try:
+                    import time as _time
+                    from ingestion.document_processor import document_processor as _dp
+
+                    logger.info("--wait-for-extraction specified: waiting up to %ss for extraction to finish", args.wait_timeout)
+                    start = _time.time()
+                    while _time.time() - start < args.wait_timeout:
+                        if not _dp.is_entity_extraction_running():
+                            logger.info("Background extraction completed")
+                            break
+                        _time.sleep(1)
+                    else:
+                        logger.warning("Timeout waiting for background extraction to finish (%ss)", args.wait_timeout)
+                except Exception as e:
+                    logger.warning("Error while waiting for background extraction: %s", e)
             sys.exit(0 if success else 1)
 
         elif args.input_dir:

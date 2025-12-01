@@ -1,5 +1,3 @@
-/* Replaced duplicate/corrupted content with a single clean implementation below */
-
  'use client'
 
 import { useEffect, useMemo, useState } from 'react'

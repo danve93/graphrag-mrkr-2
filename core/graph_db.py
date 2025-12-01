@@ -23,6 +23,7 @@ from core.singletons import (
     get_blocking_executor,
     SHUTTING_DOWN,
 )
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -386,6 +387,128 @@ class GraphDB:
                 doc_id=doc_id,
                 hashtags=hashtags,
             )
+
+    def update_document_precomputed_summary(self, doc_id: str) -> Dict[str, int]:
+        """Compute and store lightweight precomputed counts on the Document node.
+
+        Stores the following properties on `:Document`:
+          - `precomputed_chunk_count`
+          - `precomputed_entity_count`
+          - `precomputed_community_count`
+          - `precomputed_similarity_count`
+          - `precomputed_summary_updated_at` (Neo4j datetime)
+
+        Returns a dict with the computed counts.
+        """
+        with self.session_scope() as session:
+            rec = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+                OPTIONAL MATCH (c)-[:CONTAINS_ENTITY]->(e:Entity)
+                WITH d, count(DISTINCT c) AS chunk_count, count(DISTINCT e) AS entity_count, count(DISTINCT e.community_id) AS community_count
+                OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c1:Chunk)-[s:SIMILAR_TO]-(c2:Chunk)
+                WHERE (d)-[:HAS_CHUNK]->(c2) AND c1.id < c2.id
+                RETURN chunk_count, entity_count, community_count, count(DISTINCT s) AS similarity_count
+                """,
+                doc_id=doc_id,
+            ).single()
+
+            if not rec:
+                # Document not found or no stats
+                return {
+                    "chunk_count": 0,
+                    "entity_count": 0,
+                    "community_count": 0,
+                    "similarity_count": 0,
+                }
+
+            chunk_count = rec["chunk_count"] or 0
+            entity_count = rec["entity_count"] or 0
+            community_count = rec["community_count"] or 0
+            similarity_count = rec["similarity_count"] or 0
+
+            # Persist precomputed values on document node
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                SET d.precomputed_chunk_count = $chunk_count,
+                    d.precomputed_entity_count = $entity_count,
+                    d.precomputed_community_count = $community_count,
+                    d.precomputed_similarity_count = $similarity_count,
+                    d.precomputed_summary_updated_at = datetime()
+                """,
+                doc_id=doc_id,
+                chunk_count=chunk_count,
+                entity_count=entity_count,
+                community_count=community_count,
+                similarity_count=similarity_count,
+            )
+
+        return {
+            "chunk_count": chunk_count,
+            "entity_count": entity_count,
+            "community_count": community_count,
+            "similarity_count": similarity_count,
+        }
+
+    def update_document_preview(self, doc_id: str, top_n_communities: int = None, top_n_similarities: int = None) -> Dict[str, Any]:
+        """Compute and persist small preview lists for a document.
+
+        - top communities: list of community_id with counts
+        - top similarities: list of {chunk1_id, chunk2_id, score}
+
+        Stores JSON-serialized strings on the Document node to keep properties simple.
+        Returns a dict containing the preview data.
+        """
+        if top_n_communities is None:
+            top_n_communities = getattr(settings, "document_summary_top_n_communities", 10)
+        if top_n_similarities is None:
+            top_n_similarities = getattr(settings, "document_summary_top_n_similarities", 20)
+
+        with self.session_scope() as session:
+            # Top communities by entity count within this document
+            comm_q = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
+                WHERE e.community_id IS NOT NULL
+                RETURN e.community_id AS community_id, count(DISTINCT e) AS cnt
+                ORDER BY cnt DESC
+                LIMIT $limit
+                """,
+                doc_id=doc_id,
+                limit=top_n_communities,
+            )
+            top_communities = [ {"community_id": record["community_id"], "count": record["cnt"]} for record in comm_q ]
+
+            # Top chunk-to-chunk similarities by score within this document
+            sim_q = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c1:Chunk)-[s:SIMILAR_TO]-(c2:Chunk)
+                WHERE (d)-[:HAS_CHUNK]->(c2) AND c1.id < c2.id
+                RETURN c1.id AS chunk1_id, c2.id AS chunk2_id, coalesce(s.score, 0) AS score
+                ORDER BY score DESC
+                LIMIT $limit
+                """,
+                doc_id=doc_id,
+                limit=top_n_similarities,
+            )
+            top_sims = [ {"chunk1_id": r["chunk1_id"], "chunk2_id": r["chunk2_id"], "score": float(r["score"] or 0)} for r in sim_q ]
+
+            # Persist JSON strings on the Document node
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                SET d.precomputed_top_communities_json = $comm_json,
+                    d.precomputed_top_similarities_json = $sims_json,
+                    d.precomputed_summary_updated_at = datetime()
+                """,
+                doc_id=doc_id,
+                comm_json=json.dumps(top_communities),
+                sims_json=json.dumps(top_sims),
+            )
+
+        return {"top_communities": top_communities, "top_similarities": top_sims}
 
     def get_documents_with_summaries(self) -> List[Dict[str, Any]]:
         """Get all documents that have summaries."""
@@ -1883,6 +2006,45 @@ class GraphDB:
                 chunk_id=chunk_id,
                 entity_id=entity_id,
             )
+
+    def repair_contains_entity_relationships_for_document(self, document_id: str) -> Dict[str, int]:
+        """Ensure CONTAINS_ENTITY relationships exist for entities referencing chunks of a document.
+
+        This method is intended to be idempotent and scoped to a single document. It computes
+        the number of CONTAINS_ENTITY relationships before and after performing MERGE operations
+        for any entity `source_chunks` that reference chunks belonging to the given document.
+
+        Returns a dict with `before`, `after`, and `created` counts.
+        """
+        with self.session_scope() as session:
+            before_rec = session.run(
+                "MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c:Chunk)-[r:CONTAINS_ENTITY]->(e:Entity) RETURN count(r) as cnt",
+                document_id=document_id,
+            ).single()
+            before = before_rec["cnt"] if before_rec else 0
+
+            # Create missing relationships by matching entity.source_chunks against the document's chunk ids
+            session.run(
+                """
+                MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c:Chunk)
+                WITH collect(c.id) as doc_chunk_ids
+                MATCH (e:Entity)
+                WHERE e.source_chunks IS NOT NULL AND size([x IN e.source_chunks WHERE x IN doc_chunk_ids]) > 0
+                UNWIND [x IN e.source_chunks WHERE x IN doc_chunk_ids] as matched_chunk_id
+                MATCH (c2:Chunk {id: matched_chunk_id})
+                MERGE (c2)-[:CONTAINS_ENTITY]->(e)
+                """,
+                document_id=document_id,
+            )
+
+            after_rec = session.run(
+                "MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c:Chunk)-[r:CONTAINS_ENTITY]->(e:Entity) RETURN count(r) as cnt",
+                document_id=document_id,
+            ).single()
+            after = after_rec["cnt"] if after_rec else 0
+
+        created = max(0, after - before)
+        return {"before": before, "after": after, "created": created}
 
     def execute_batch_unwind(
         self,

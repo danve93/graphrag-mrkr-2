@@ -594,36 +594,10 @@ export default function DocumentView() {
     )
   }
 
-  // Early summary panel before full document loads
-  if (summaryData && !documentData) {
-    return (
-      <div className="flex flex-col h-full overflow-hidden p-6">
-        <div className="border border-secondary-200 dark:border-secondary-700 rounded bg-white dark:bg-secondary-800 p-4 mb-4">
-          <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 mb-1">{summaryData.filename}</h2>
-          <p className="text-xs text-secondary-500 dark:text-secondary-400 mb-4">ID: {summaryData.id}</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-              <p className="font-semibold">Chunks</p>
-              <p>{summaryData.stats.chunks}</p>
-            </div>
-            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-              <p className="font-semibold">Entities</p>
-              <p>{summaryData.stats.entities}</p>
-            </div>
-            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-              <p className="font-semibold">Communities</p>
-              <p>{summaryData.stats.communities}</p>
-            </div>
-            <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-              <p className="font-semibold">Similarities</p>
-              <p>{summaryData.stats.similarities}</p>
-            </div>
-          </div>
-          <p className="mt-4 text-xs text-secondary-500 dark:text-secondary-400">Expand a section (Chunks, Entities, Metadata) to load full details.</p>
-        </div>
-      </div>
-    )
-  }
+  // Previously we returned early to show only the summary. Instead, render the
+  // summary as a top panel inside the full document view so the section headers
+  // (Chunks, Entities, Graph, etc.) are visible and can be expanded to lazy-load
+  // full document details.
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -683,6 +657,72 @@ export default function DocumentView() {
             <div>
               <p className="font-medium">Failed to load document</p>
               <p className="text-sm">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* When we have a summary but not the full document yet, show a lightweight
+            summary panel so the rest of the document view (sections headers)
+            remains visible and users can expand sections. */}
+        {!isLoading && !error && !documentData && summaryData && (
+          <div className="flex flex-col h-full overflow-hidden p-6">
+            <div className="border border-secondary-200 dark:border-secondary-700 rounded bg-white dark:bg-secondary-800 p-4 mb-4">
+              <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 mb-1">{summaryData.filename}</h2>
+              <p className="text-xs text-secondary-500 dark:text-secondary-400 mb-4">ID: {summaryData.id}</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                  <p className="font-semibold">Chunks</p>
+                  <p>{summaryData.stats.chunks}</p>
+                </div>
+                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                  <p className="font-semibold">Entities</p>
+                  <p>{summaryData.stats.entities}</p>
+                </div>
+                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                  <p className="font-semibold">Communities</p>
+                  <p>{summaryData.stats.communities}</p>
+                </div>
+                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                  <p className="font-semibold">Similarities</p>
+                  <p>{summaryData.stats.similarities}</p>
+                </div>
+              </div>
+              {(
+                // @ts-ignore - summaryData may include previews from backend
+                (summaryData as any)?.previews?.top_communities || (summaryData as any)?.previews?.top_similarities
+              ) && (
+                <div className="mt-4">
+                  <h4 className="text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">Preview</h4>
+                  <div className="flex flex-col gap-2 text-xs">
+                    {( (summaryData as any)?.previews?.top_communities ) && (
+                      <div>
+                        <div className="text-secondary-500 dark:text-secondary-400 mb-1">Top communities</div>
+                        <div className="flex gap-2 flex-wrap">
+                          {((summaryData as any).previews.top_communities || []).map((c: any, idx: number) => (
+                            <span key={idx} className="inline-block px-2 py-0.5 bg-secondary-100 dark:bg-secondary-800 rounded text-secondary-900 dark:text-secondary-200">
+                              {`#${c?.community_id ?? 'n/a'} (${c?.count ?? 0})`}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {((summaryData as any)?.previews?.top_similarities) && (
+                      <div>
+                        <div className="text-secondary-500 dark:text-secondary-400 mb-1">Top similarities</div>
+                        <div className="flex gap-2 flex-wrap">
+                          {((summaryData as any).previews.top_similarities || []).slice(0,5).map((s: any, idx: number) => (
+                            <span key={idx} className="inline-block px-2 py-0.5 bg-secondary-100 dark:bg-secondary-800 rounded text-secondary-900 dark:text-secondary-200">
+                              {`${s?.chunk1_id?.slice?.(0,6) ?? 'c1'} ↔ ${s?.chunk2_id?.slice?.(0,6) ?? 'c2'} ${typeof s?.score === 'number' ? `(${s.score.toFixed(2)})` : ''}`}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              <p className="mt-4 text-xs text-secondary-500 dark:text-secondary-400">Expand a section (Chunks, Entities, Metadata) to load full details.</p>
             </div>
           </div>
         )}

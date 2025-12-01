@@ -11,8 +11,12 @@ services:
     image: neo4j:5.21
     container_name: neo4j
     environment:
+      # Use the combined NEO4J_AUTH (user/password) to initialize the DB
+      # Avoid exporting NEO4J_USERNAME / NEO4J_PASSWORD into the container
+      # because the image will translate those into invalid config keys
+      # (e.g. `PASSWORD`) and write them into `neo4j.conf`.
       - NEO4J_AUTH=${NEO4J_AUTH}
-      - NEO4J_PLUGINS=["graph-data-science"]
+      - NEO4J_PLUGINS=graph-data-science
       # Memory tuning (reduced defaults for local/dev Docker Desktop)
       # Adjust these if you have more host memory available.
       - NEO4J_dbms_memory_heap_max__size=512M
@@ -30,11 +34,15 @@ services:
     restart: unless-stopped
     # Use cypher-shell for healthcheck (curl isn't installed in the base image)
     healthcheck:
-      test: ["CMD-SHELL", "bin/cypher-shell -u neo4j -p \"$NEO4J_AUTH\" \"RETURN 1\" >/dev/null 2>&1 || exit 1"]
-      interval: 30s
+      # Use explicit username/password for the healthcheck to avoid consuming the
+      # combined NEO4J_AUTH value (which is of the form 'neo4j/<password>'). This
+      # makes the healthcheck deterministic and avoids authentication failures
+      # when the composed var is interpreted differently.
+      test: ["CMD-SHELL", "bin/cypher-shell -u \"${NEO4J_USERNAME:-neo4j}\" -p \"${NEO4J_PASSWORD:-neo4j}\" \"RETURN 1\" >/dev/null 2>&1 || exit 1"]
+      interval: 45s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 60s
 
   backend:
     build:
@@ -62,8 +70,6 @@ services:
       - ENABLE_CLUSTERING=${ENABLE_CLUSTERING:-true}
       - ENABLE_GRAPH_CLUSTERING=${ENABLE_GRAPH_CLUSTERING:-true}
       - SUMMARIZATION_BATCH_SIZE=${SUMMARIZATION_BATCH_SIZE:-20}
-      # Redis URL for background job processing (worker uses the same URL)
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"  # FastAPI port
     volumes:
@@ -72,7 +78,6 @@ services:
       - graphrag_network
     depends_on:
       - neo4j
-      - redis
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
@@ -107,40 +112,13 @@ services:
       retries: 5
       start_period: 30s
 
-  redis:
-    image: redis:7-alpine
-    container_name: graphrag-redis
-    ports:
-      - "6379:6379"
-    networks:
-      - graphrag_network
-    restart: unless-stopped
+  # Redis removed: background job queueing is optional and falls back to
+  # in-process execution when `REDIS_URL` is not set. The dedicated Redis
+  # service was removed to simplify local stacks.
 
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    container_name: graphrag-worker
-    env_file:
-      - ./.env
-    environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USERNAME=${NEO4J_USERNAME}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    volumes:
-      - ./:/app
-      - ./data:/app/data
-    working_dir: /app
-    networks:
-      - graphrag_network
-    depends_on:
-      - redis
-      - backend
-    restart: unless-stopped
-    command: ["python", "-m", "scripts.run_redis_job_worker"]
-    user: "0:0"  # Run as root to ensure data directory write permissions
+  # The dedicated `worker` service (Redis job processor) was removed because
+  # Redis is not present in this Compose configuration. Background jobs will
+  # be handled in-process by the `backend` when `REDIS_URL` is not set.
 
   flashrank-worker:
     build:
