@@ -9,6 +9,8 @@ import {
   ClipboardIcon,
   ExclamationCircleIcon,
 } from '@heroicons/react/24/outline'
+import { Button } from '@mui/material'
+import { Description as DocumentIconMui, Storage as DatabaseIconMui } from '@mui/icons-material'
 import Loader from '@/components/Utils/Loader'
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/solid'
 import ReactMarkdown from 'react-markdown'
@@ -66,7 +68,11 @@ export default function DocumentView() {
   const [error, setError] = useState<string | null>(null)
   const [expandedChunks, setExpandedChunks] = useState<Record<string | number, boolean>>({})
   const [previewState, setPreviewState] = useState<PreviewState>(initialPreviewState)
-  const [showAllChunks, setShowAllChunks] = useState(false)
+  // pagination state for chunks
+  const [chunksPageSize] = useState(200)
+  const [chunksOffset, setChunksOffset] = useState(0)
+  const [docChunksTotal, setDocChunksTotal] = useState<number | null>(null)
+  const [loadingMoreChunks, setLoadingMoreChunks] = useState(false)
   const [showAllEntities, setShowAllEntities] = useState<Record<string, boolean>>({})
   const [processingState, setProcessingState] = useState<ProcessingGlobalSummary | null>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
@@ -79,6 +85,9 @@ export default function DocumentView() {
   const [isChunksExpanded, setIsChunksExpanded] = useState(false)
   const [isEntitiesExpanded, setIsEntitiesExpanded] = useState(false)
   const [isMetadataExpanded, setIsMetadataExpanded] = useState(false)
+  const [loadingChunksData, setLoadingChunksData] = useState(false)
+  const [loadingEntitiesData, setLoadingEntitiesData] = useState(false)
+  const [entitySummary, setEntitySummary] = useState<null | { document_id: string; total: number; groups: Array<{ type: string; count: number }> }>(null)
 
   const refreshProcessingState = useCallback(async () => {
     try {
@@ -142,7 +151,9 @@ export default function DocumentView() {
       setSummaryData(null)
       setDocumentData(null)
       setPreviewState(initialPreviewState)
-      setShowAllChunks(false)
+      // reset chunk pagination state
+      setChunksOffset(0)
+      setDocChunksTotal(null)
       setShowAllEntities({})
       try {
         performance.mark('document-summary-fetch-start')
@@ -172,7 +183,9 @@ export default function DocumentView() {
       setSummaryData(null)
       setDocumentData(null)
       setPreviewState(initialPreviewState)
-      setShowAllChunks(false)
+      // reset chunk pagination state
+      setChunksOffset(0)
+      setDocChunksTotal(null)
       setShowAllEntities({})
       setHasPreview(null)
       setProcessingState(null)
@@ -186,21 +199,108 @@ export default function DocumentView() {
 
   // Lazy full-document load when user expands sections
   useEffect(() => {
-    const needFull = selectedDocumentId && !documentData && (isChunksExpanded || isEntitiesExpanded || isMetadataExpanded)
-    if (needFull && selectedDocumentId) {
-      ;(async () => {
-        try {
-          setIsLoading(true)
-          const full = await api.getDocument(selectedDocumentId)
-          setDocumentData(full)
-        } catch (e) {
-          setError(e instanceof Error ? e.message : 'Failed to load document')
-        } finally {
-          setIsLoading(false)
+    const needFull = (selectedDocumentId || summaryData?.id) && !documentData && (isChunksExpanded || isEntitiesExpanded || isMetadataExpanded)
+    if (needFull) {
+      // Immediately show a minimal document object derived from the summary so
+      // sections can render without triggering an immediate metadata fetch
+      if (summaryData && !documentData) {
+        const minimal: any = {
+          id: summaryData.id,
+          title: summaryData.filename,
+          file_name: summaryData.filename,
+          original_filename: summaryData.filename,
+          mime_type: undefined,
+          preview_url: undefined,
+          uploaded_at: undefined,
+          uploader: undefined,
+          summary: undefined,
+          document_type: undefined,
+          hashtags: [],
+          chunks: [],
+          entities: [],
+          quality_scores: undefined,
+          related_documents: [],
+          metadata: {},
         }
-      })()
+        setDocumentData(minimal)
+      }
+
+      // Do not fetch full document metadata here — sections will request their
+      // own data via paginated endpoints to avoid fetching large payloads.
     }
-  }, [isChunksExpanded, isEntitiesExpanded, isMetadataExpanded, documentData, selectedDocumentId])
+  }, [isChunksExpanded, isEntitiesExpanded, isMetadataExpanded, documentData, selectedDocumentId, summaryData?.id])
+
+  // Load chunks when the Chunks section is expanded. Use dedicated endpoint so
+  // we don't rely on `documentData.chunks` which may be empty for lightweight metadata responses.
+  useEffect(() => {
+    if (!isChunksExpanded) return
+    let isActive = true
+    const loadChunks = async () => {
+      const id = selectedDocumentId || summaryData?.id
+      if (!id) return
+      // If we already loaded some chunks, skip initial load
+      if ((documentData?.chunks?.length ?? 0) > 0) return
+      try {
+        setLoadingChunksData(true)
+        const page = await api.getDocumentChunksPaginated(id, { limit: chunksPageSize, offset: 0 })
+        if (!isActive) return
+        setDocChunksTotal(page.total)
+        setChunksOffset((page.chunks || []).length)
+        const chunks = page.chunks || []
+        setDocumentData((prev) => {
+          if (prev) return { ...prev, chunks }
+          return {
+            id: id,
+            title: summaryData?.filename ?? id,
+            file_name: summaryData?.filename ?? id,
+            original_filename: summaryData?.filename ?? id,
+            mime_type: undefined,
+            preview_url: undefined,
+            uploaded_at: undefined,
+            uploader: undefined,
+            summary: undefined,
+            document_type: undefined,
+            hashtags: [],
+            chunks,
+            entities: [],
+            quality_scores: undefined,
+            related_documents: [],
+            metadata: {},
+          }
+        })
+      } catch (err) {
+        console.error('Failed to load document chunks', err)
+      } finally {
+        if (isActive) setLoadingChunksData(false)
+      }
+    }
+    void loadChunks()
+    return () => { isActive = false }
+  }, [isChunksExpanded, selectedDocumentId, summaryData?.id, documentData?.chunks])
+
+  // Load entities when Entities section is expanded (first page only).
+  useEffect(() => {
+    if (!isEntitiesExpanded) return
+    let isActive = true
+    const loadEntities = async () => {
+      const id = selectedDocumentId || summaryData?.id
+      if (!id) return
+      // If we already have loaded entities (by type), don't re-fetch the summary
+      if (entitySummary && entitySummary.groups && entitySummary.groups.length > 0) return
+      try {
+        setLoadingEntitiesData(true)
+        const summary = await api.getDocumentEntitySummary(id)
+        if (!isActive) return
+        setEntitySummary(summary)
+      } catch (err) {
+        console.error('Failed to load document entities', err)
+      } finally {
+        if (isActive) setLoadingEntitiesData(false)
+      }
+    }
+    void loadEntities()
+    return () => { isActive = false }
+  }, [isEntitiesExpanded, selectedDocumentId, summaryData?.id, documentData?.entities])
 
   useEffect(() => {
     let isSubscribed = true
@@ -253,6 +353,9 @@ export default function DocumentView() {
       return acc
     }, {})
   }, [documentData?.entities])
+
+  const docChunkCount = docChunksTotal ?? documentData?.chunks?.length ?? summaryData?.stats.chunks ?? 0
+  const docEntitiesCount = documentData?.entities?.length ?? 0
 
   const isMarkdownDocument = useMemo(() => {
     if (!documentData) return false
@@ -476,7 +579,7 @@ export default function DocumentView() {
 
   const handleRemoveHashtag = useCallback(async (tagToRemove: string) => {
     if (!documentData?.hashtags) return
-    const newHashtags = documentData.hashtags.filter(tag => tag !== tagToRemove)
+    const newHashtags = documentData?.hashtags.filter(tag => tag !== tagToRemove)
     await saveHashtags(newHashtags)
   }, [documentData?.hashtags, saveHashtags])
 
@@ -587,9 +690,37 @@ export default function DocumentView() {
 
   if (!selectedDocumentId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-secondary-600 dark:text-secondary-400">
-        <DocumentTextIcon className="w-16 h-16 text-secondary-300 mb-4" />
-        <p className="text-base font-medium">Select a document to view its details.</p>
+      <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+        {/* Header */}
+        <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ 
+              width: '40px', 
+              height: '40px', 
+              borderRadius: '8px', 
+              backgroundColor: '#f27a0320',
+              border: '1px solid #f27a03',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <DatabaseIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Database
+              </h1>
+              <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                Document repository with chunks, entities, and relationships
+              </p>
+            </div>
+          </div>
+        </div>
+        {/* Empty State */}
+        <div className="flex-1 flex flex-col items-center justify-center text-secondary-600 dark:text-secondary-400">
+          <DocumentTextIcon className="w-16 h-16 text-secondary-300 mb-4" />
+          <p className="text-base font-medium">Select a document to view its details.</p>
+        </div>
       </div>
     )
   }
@@ -600,48 +731,70 @@ export default function DocumentView() {
   // full document details.
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="border-b border-secondary-200 dark:border-secondary-700 bg-white dark:bg-secondary-800 px-6 py-4 flex items-center gap-4">
-        <button
-          type="button"
-          onClick={clearSelectedDocument}
-          className="button-secondary flex items-center gap-2 text-sm"
-        >
-          <ArrowLeftIcon className="w-4 h-4" />
-          Back to chat
-        </button>
-        <div className="flex items-center gap-3">
-          <DocumentTextIcon className="w-6 h-6" style={{ color: 'var(--primary-500)' }} />
-          <div>
-            <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50">
-              {documentData?.title || documentData?.original_filename || documentData?.file_name || 'Unnamed document'}
-            </h2>
-            <p className="text-xs text-secondary-500 dark:text-secondary-400">
-              {documentData?.document_type ? documentData.document_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown type'}
+    <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+      {/* Header */}
+      <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
+          <div style={{ 
+            width: '40px', 
+            height: '40px', 
+            borderRadius: '8px', 
+            backgroundColor: '#f27a0320',
+            border: '1px solid #f27a03',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <DocumentIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {documentData?.title || documentData?.original_filename || documentData?.file_name || summaryData?.filename || 'Document Details'}
+            </h1>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              {documentData?.document_type ? documentData?.document_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : (summaryData?.filename ? (summaryData.filename.split('.').pop()?.toUpperCase() || 'Unknown type') : 'Unknown type')}
+              {documentData?.uploaded_at && ` • Uploaded ${new Date(documentData?.uploaded_at).toLocaleString()}`}
             </p>
           </div>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          {documentData?.uploaded_at && (
-            <span className="text-xs text-secondary-500 dark:text-secondary-400">
-              Uploaded {new Date(documentData.uploaded_at).toLocaleString()}
-            </span>
-          )}
-          {(hasPreview === null ? documentData?.preview_url : hasPreview) && (
-            <button
-              type="button"
-              onClick={handleOpenPreview}
-              className="button-primary text-sm flex items-center gap-2"
-              disabled={previewState.isLoading}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {(hasPreview === null ? documentData?.preview_url : hasPreview) && (
+              <Button
+                size="small"
+                variant="contained"
+                onClick={handleOpenPreview}
+                disabled={previewState.isLoading}
+                startIcon={<MagnifyingGlassIcon className="w-4 h-4" />}
+                style={{
+                  textTransform: 'none',
+                  backgroundColor: 'var(--accent-primary)',
+                  color: 'white',
+                  fontSize: '0.75rem'
+                }}
+              >
+                {previewState.isLoading ? 'Loading...' : 'Preview'}
+              </Button>
+            )}
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={clearSelectedDocument}
+              startIcon={<ArrowLeftIcon className="w-4 h-4" />}
+              style={{
+                textTransform: 'none',
+                borderColor: 'var(--border)',
+                color: 'var(--text-primary)',
+                fontSize: '0.75rem'
+              }}
             >
-              <MagnifyingGlassIcon className="w-4 h-4" />
-              {previewState.isLoading ? 'Loading preview…' : 'Open preview'}
-            </button>
-          )}
-          {previewState.error && (
-            <span className="text-xs text-red-600 dark:text-red-400">{previewState.error}</span>
-          )}
+              Back
+            </Button>
+          </div>
         </div>
+        {previewState.error && (
+          <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--error)' }}>
+            {previewState.error}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6 bg-secondary-50 dark:bg-secondary-900">
@@ -661,74 +814,36 @@ export default function DocumentView() {
           </div>
         )}
 
-        {/* When we have a summary but not the full document yet, show a lightweight
-            summary panel so the rest of the document view (sections headers)
-            remains visible and users can expand sections. */}
-        {!isLoading && !error && !documentData && summaryData && (
-          <div className="flex flex-col h-full overflow-hidden p-6">
-            <div className="border border-secondary-200 dark:border-secondary-700 rounded bg-white dark:bg-secondary-800 p-4 mb-4">
-              <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 mb-1">{summaryData.filename}</h2>
-              <p className="text-xs text-secondary-500 dark:text-secondary-400 mb-4">ID: {summaryData.id}</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                  <p className="font-semibold">Chunks</p>
-                  <p>{summaryData.stats.chunks}</p>
-                </div>
-                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                  <p className="font-semibold">Entities</p>
-                  <p>{summaryData.stats.entities}</p>
-                </div>
-                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                  <p className="font-semibold">Communities</p>
-                  <p>{summaryData.stats.communities}</p>
-                </div>
-                <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                  <p className="font-semibold">Similarities</p>
-                  <p>{summaryData.stats.similarities}</p>
-                </div>
-              </div>
-              {(
-                // @ts-ignore - summaryData may include previews from backend
-                (summaryData as any)?.previews?.top_communities || (summaryData as any)?.previews?.top_similarities
-              ) && (
-                <div className="mt-4">
-                  <h4 className="text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">Preview</h4>
-                  <div className="flex flex-col gap-2 text-xs">
-                    {( (summaryData as any)?.previews?.top_communities ) && (
-                      <div>
-                        <div className="text-secondary-500 dark:text-secondary-400 mb-1">Top communities</div>
-                        <div className="flex gap-2 flex-wrap">
-                          {((summaryData as any).previews.top_communities || []).map((c: any, idx: number) => (
-                            <span key={idx} className="inline-block px-2 py-0.5 bg-secondary-100 dark:bg-secondary-800 rounded text-secondary-900 dark:text-secondary-200">
-                              {`#${c?.community_id ?? 'n/a'} (${c?.count ?? 0})`}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+        {/* Summary will be rendered inside the main wrapper below so there's a single consistent container */}
 
-                    {((summaryData as any)?.previews?.top_similarities) && (
-                      <div>
-                        <div className="text-secondary-500 dark:text-secondary-400 mb-1">Top similarities</div>
-                        <div className="flex gap-2 flex-wrap">
-                          {((summaryData as any).previews.top_similarities || []).slice(0,5).map((s: any, idx: number) => (
-                            <span key={idx} className="inline-block px-2 py-0.5 bg-secondary-100 dark:bg-secondary-800 rounded text-secondary-900 dark:text-secondary-200">
-                              {`${s?.chunk1_id?.slice?.(0,6) ?? 'c1'} ↔ ${s?.chunk2_id?.slice?.(0,6) ?? 'c2'} ${typeof s?.score === 'number' ? `(${s.score.toFixed(2)})` : ''}`}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+        {!isLoading && !error && (documentData || summaryData) && (
+          <div className="mt-3 bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700 p-5 space-y-4">
+            {/* Inline summary area placed inside the main wrapper so layout is unified */}
+            {summaryData && (
+              <div>
+                <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 mb-1">{summaryData.filename}</h2>
+                <p className="text-xs text-secondary-500 dark:text-secondary-400 mb-3">ID: {summaryData.id}</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-2">
+                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                    <p className="font-semibold">Chunks</p>
+                    <p>{summaryData.stats.chunks}</p>
+                  </div>
+                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                    <p className="font-semibold">Entities</p>
+                    <p>{summaryData.stats.entities}</p>
+                  </div>
+                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                    <p className="font-semibold">Communities</p>
+                    <p>{summaryData.stats.communities}</p>
+                  </div>
+                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
+                    <p className="font-semibold">Similarities</p>
+                    <p>{summaryData.stats.similarities}</p>
                   </div>
                 </div>
-              )}
-              <p className="mt-4 text-xs text-secondary-500 dark:text-secondary-400">Expand a section (Chunks, Entities, Metadata) to load full details.</p>
-            </div>
-          </div>
-        )}
-
-        {!isLoading && !error && documentData && (
-          <div className="space-y-6">
+                <p className="text-xs text-secondary-500 dark:text-secondary-400">Expand a section (Chunks, Entities, Metadata) to load full details.</p>
+              </div>
+            )}
             {actionMessage && (
               <div className="bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 text-sm">
                 {actionMessage}
@@ -739,172 +854,15 @@ export default function DocumentView() {
                 {actionError}
               </div>
             )}
-            {documentData.metadata?.processing_status === 'staged' && (
+            {documentData?.metadata?.processing_status === 'staged' && (
               <div className="bg-blue-50 border border-blue-200 text-blue-700 rounded-lg px-4 py-3 text-sm">
                 <p className="font-medium mb-1">Document ready to process</p>
                 <p>This document has been uploaded but not yet processed. Go to the <strong>Upload</strong> tab in the sidebar and click <strong>Process All</strong> to begin processing.</p>
               </div>
             )}
-            <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700 p-5">
-              <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50 mb-4">Overview</h3>
-              <dl className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <dt className="text-secondary-500 dark:text-secondary-400">File name</dt>
-                  <dd className="text-secondary-900 dark:text-secondary-50">{documentData.original_filename || documentData.file_name || 'Unknown'}</dd>
-                </div>
-                <div>
-                  <dt className="text-secondary-500 dark:text-secondary-400">Mime type</dt>
-                  <dd className="text-secondary-900 dark:text-secondary-50">{documentData.mime_type || 'Unknown'}</dd>
-                </div>
-                <div>
-                  <dt className="text-secondary-500 dark:text-secondary-400">Uploader</dt>
-                  <dd className="text-secondary-900 dark:text-secondary-50">
-                    {documentData.uploader?.name || documentData.uploader?.id || 'Unknown'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-secondary-500 dark:text-secondary-400">Uploaded at</dt>
-                  <dd className="text-secondary-900 dark:text-secondary-50">
-                    {documentData.uploaded_at
-                      ? new Date(documentData.uploaded_at).toLocaleString()
-                      : 'Unknown'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-secondary-500 dark:text-secondary-400">Chunk count</dt>
-                  <dd className="text-secondary-900 dark:text-secondary-50">{documentData.chunks.length}</dd>
-                </div>
-                <div>
-                  <dt className="text-secondary-500 dark:text-secondary-400">Preview available</dt>
-                  <dd className="text-secondary-900 dark:text-secondary-50">
-                    {hasPreview === null
-                      ? (documentData.preview_url ? 'Yes' : 'No')
-                      : hasPreview
-                      ? 'Yes'
-                      : 'No'}
-                  </dd>
-                </div>
-              </dl>
-              <div className="mt-4 pt-4 border-t border-secondary-200 dark:border-secondary-700">
-                <dt className="text-secondary-500 dark:text-secondary-400 text-sm mb-2">Tags</dt>
-                <div 
-                  className="flex flex-wrap gap-2 cursor-pointer p-2 -m-2 rounded hover:bg-secondary-50 dark:hover:bg-secondary-900 transition-colors"
-                  onClick={handleStartEditHashtags}
-                >
-                  {!isEditingHashtags ? (
-                    <>
-                      {(documentData.hashtags || []).map((tag, index) => (
-                        <span
-                          key={index}
-                          className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
-                          style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                      {(!documentData.hashtags || documentData.hashtags.length === 0) && (
-                        <span className="text-sm text-secondary-400">Click to add tags</span>
-                      )}
-                    </>
-                  ) : (
-                    <div 
-                      className="flex flex-wrap gap-2 w-full"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {(documentData.hashtags || []).map((tag, index) => (
-                        <span
-                          key={index}
-                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium"
-                          style={{ backgroundColor: 'var(--neon-glow)', color: 'var(--primary-500)' }}
-                        >
-                          {tag}
-                          <button
-                            type="button"
-                            onMouseDown={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              handleRemoveHashtag(tag)
-                            }}
-                            className="hover:opacity-80"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </span>
-                      ))}
-                      <div className="inline-flex items-center gap-1">
-                        <input
-                          type="text"
-                          value={newHashtagInput}
-                          onChange={(e) => setNewHashtagInput(e.target.value)}
-                          onKeyDown={handleHashtagInputKeyDown}
-                          onBlur={() => setIsEditingHashtags(false)}
-                          placeholder="Add tag..."
-                          className="px-2.5 py-0.5 text-xs border border-secondary-300 rounded-full focus:outline-none focus-primary"
-                          autoFocus
-                        />
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault()
-                            handleAddHashtag()
-                          }}
-                          className=""
-                          style={{ color: 'var(--primary-500)' }}
-                          disabled={!newHashtagInput.trim()}
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+            {/* Overview section removed to reduce vertical space; stats shown above. */}
 
-            {(documentData.summary || documentData.chunks.length > 0 || documentData.metadata?.processing_status !== 'staged') && (
-              <>
-                <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
-                <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Summary</h3>
-                    {documentData.document_type && (
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-secondary-100 dark:bg-secondary-700 text-secondary-700 dark:text-secondary-200">
-                        {documentData.document_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                      </span>
-                    )}
-                      {!documentData.summary && documentData.chunks.length > 0 && documentData.metadata?.processing_status !== 'staged' && (
-                      <button
-                        type="button"
-                        onClick={handleGenerateSummary}
-                        className="button-primary text-xs"
-                        disabled={disableManualActions}
-                        title={manualActionTitle}
-                      >
-                        {isActionPending ? <Loader size={14} label="Processing..." /> : 'Generate summary'}
-                      </button>
-                    )}
-                  </div>
-                </header>
-                <div className="px-5 py-4">
-                  {documentData.summary ? (
-                    <div className="prose prose-sm prose-slate dark:prose-invert dark:text-secondary-200 max-w-none">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkBreaks]}
-                      >
-                        {documentData.summary}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-secondary-500 dark:text-secondary-400">No summary generated yet.</p>
-                  )}
-                </div>
-              </section>
-            </>
-          )}
+            {/* Summary section removed: stats panel above provides the necessary overview. */}
 
           <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
               <header className={`flex items-center justify-between px-5 py-4 ${isChunksExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
@@ -921,7 +879,7 @@ export default function DocumentView() {
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Chunks</h3>
                 </button>
                 <div className="flex items-center gap-2">
-                  {documentData.chunks.length === 0 && documentData.metadata?.processing_status !== 'staged' && !processingState?.is_processing && (
+                  {(documentData && ((documentData.chunks?.length ?? 0) === 0) && documentData.metadata?.processing_status !== 'staged' && !processingState?.is_processing) && (
                     <button
                       type="button"
                       onClick={handleReprocessChunks}
@@ -932,7 +890,7 @@ export default function DocumentView() {
                       {isActionPending ? <Loader size={14} label="Processing..." /> : 'Process chunks'}
                     </button>
                   )}
-                  <span className="text-xs text-secondary-500 dark:text-secondary-400">{documentData.chunks.length} entries</span>
+                  <span className="text-xs text-secondary-500 dark:text-secondary-400">{docChunkCount} entries</span>
                 </div>
               </header>
               <AnimatePresence>
@@ -944,11 +902,15 @@ export default function DocumentView() {
                     transition={{ duration: 0.3, ease: 'easeInOut' }}
                     className="divide-y divide-secondary-200 dark:divide-secondary-700 overflow-hidden"
                   >
-                    {documentData.chunks.length === 0 ? (
+                    {loadingChunksData ? (
+                      <div className="px-5 py-4 text-sm text-secondary-500 dark:text-secondary-400">
+                        <Loader size={24} label="Loading document chunks…" />
+                      </div>
+                    ) : (!documentData || (documentData.chunks.length === 0)) ? (
                       <p className="px-5 py-4 text-sm text-secondary-500 dark:text-secondary-400">No chunks processed yet.</p>
                     ) : (
                       <>
-                        {(showAllChunks ? documentData.chunks : documentData.chunks.slice(0, CHUNKS_LIMIT)).map((chunk: DocumentChunk) => {
+                        {documentData!.chunks.map((chunk: DocumentChunk) => {
                           const expanded = expandedChunks[chunk.id]
                           const firstLine = (chunk.text || '').split(/\r?\n/)[0] || ''
                           const previewLine = firstLine.trim() || 'No preview available'
@@ -1014,14 +976,31 @@ export default function DocumentView() {
                             </article>
                           )
                         })}
-                        {documentData.chunks.length > CHUNKS_LIMIT && (
+                        {docChunksTotal !== null && (docChunksTotal > (documentData?.chunks?.length ?? 0)) && (
                           <div className="px-5 py-4 border-t border-secondary-200">
                             <button
                               type="button"
-                              onClick={() => setShowAllChunks(!showAllChunks)}
+                              onClick={async () => {
+                                try {
+                                  setLoadingMoreChunks(true)
+                                  const id = selectedDocumentId || summaryData?.id
+                                  if (!id) return
+                                  const page = await api.getDocumentChunksPaginated(id, { limit: chunksPageSize, offset: chunksOffset })
+                                  const more = page.chunks || []
+                                  setChunksOffset((prev) => prev + more.length)
+                                  setDocumentData((prev) => {
+                                    if (!prev) return prev
+                                    return { ...prev, chunks: (prev.chunks || []).concat(more) }
+                                  })
+                                } catch (err) {
+                                  console.error('Failed to load more chunks', err)
+                                } finally {
+                                  setLoadingMoreChunks(false)
+                                }
+                              }}
                               className="button-secondary text-sm flex items-center gap-2"
                             >
-                              {showAllChunks ? 'Show Less' : `Show ${documentData.chunks.length - CHUNKS_LIMIT} more Chunks`}
+                              {loadingMoreChunks ? 'Loading…' : `Load more (${Math.max(0, docChunksTotal - (documentData?.chunks?.length ?? 0))} remaining)`}
                             </button>
                           </div>
                         )}
@@ -1046,8 +1025,8 @@ export default function DocumentView() {
                   )}
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Entities</h3>
                 </button>
-                <div className="flex items-center gap-2">
-                  {documentData.entities.length === 0 && documentData.chunks.length > 0 && documentData.metadata?.processing_status !== 'staged' && !processingState?.is_processing && (
+                  <div className="flex items-center gap-2">
+                  {(documentData && ((documentData.entities?.length ?? 0) === 0) && ((documentData.chunks?.length ?? 0) > 0) && documentData.metadata?.processing_status !== 'staged' && !processingState?.is_processing) && (
                     <button
                       type="button"
                       onClick={handleReprocessEntities}
@@ -1059,9 +1038,7 @@ export default function DocumentView() {
                     </button>
                   )}
                   <span className="text-xs text-secondary-500 dark:text-secondary-400">
-                    {documentData.entities.length > 0
-                      ? `${documentData.entities.length} total`
-                      : 'No entities'}
+                    {docEntitiesCount > 0 ? `${docEntitiesCount} total` : `${summaryData?.stats.entities ?? 0} total`}
                   </span>
                 </div>
               </header>
@@ -1074,8 +1051,53 @@ export default function DocumentView() {
                     transition={{ duration: 0.3, ease: 'easeInOut' }}
                     className="overflow-hidden"
                   >
-                    {documentData.entities.length === 0 ? (
-                      <p className="px-5 py-4 text-sm text-secondary-500 dark:text-secondary-400">No entities extracted yet.</p>
+                    {loadingEntitiesData ? (
+                      <div className="px-5 py-4 text-sm text-secondary-500 dark:text-secondary-400">
+                        <Loader size={24} label="Loading entities…" />
+                      </div>
+                    ) : (!documentData || (documentData.entities?.length ?? 0) === 0) ? (
+                      (entitySummary && entitySummary.groups && entitySummary.groups.length > 0) ? (
+                        <div className="px-5 py-4">
+                          <h4 className="text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">Entity counts by type</h4>
+                          <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {entitySummary.groups.map((g) => (
+                              <li key={g.type} className="flex items-center justify-between border border-secondary-200 dark:border-secondary-700 rounded-lg px-3 py-2">
+                                <div>
+                                  <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50">{g.type}</p>
+                                  <p className="text-xs text-secondary-500 dark:text-secondary-400">{g.count} entities</p>
+                                </div>
+                                <div>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        setLoadingEntitiesData(true)
+                                        const id = selectedDocumentId || summaryData?.id
+                                        if (!id) return
+                                        const page = await api.getDocumentEntitiesPaginated(id, { entityType: g.type, limit: 200, offset: 0 })
+                                        const entities = page.entities || []
+                                        setDocumentData((prev) => {
+                                          if (!prev) return prev
+                                          return { ...prev, entities }
+                                        })
+                                      } catch (err) {
+                                        console.error('Failed to load entities for type', g.type, err)
+                                      } finally {
+                                        setLoadingEntitiesData(false)
+                                      }
+                                    }}
+                                    className="button-secondary text-xs"
+                                  >
+                                    View
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <p className="px-5 py-4 text-sm text-secondary-500 dark:text-secondary-400">No entities extracted yet.</p>
+                      )
                     ) : (
                       <div className="divide-y divide-secondary-100 dark:divide-secondary-700">
                         {Object.entries(groupedEntities).map(([type, entities]) => {
@@ -1117,20 +1139,20 @@ export default function DocumentView() {
               </AnimatePresence>
             </section>
 
-            {documentData.quality_scores && (
+            {documentData?.quality_scores && (
               <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700 p-5">
                 <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50 mb-3">Quality scores</h3>
                 <pre className="bg-secondary-900 text-secondary-50 text-xs rounded-lg p-4 overflow-auto">
-                  {JSON.stringify(documentData.quality_scores, null, 2)}
+                  {JSON.stringify(documentData?.quality_scores, null, 2)}
                 </pre>
               </section>
             )}
 
-            {documentData.related_documents && documentData.related_documents.length > 0 && (
+            {documentData?.related_documents && (documentData?.related_documents.length ?? 0) > 0 && (
               <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700 p-5">
                 <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50 mb-3">Related documents</h3>
                 <ul className="space-y-2">
-                  {documentData.related_documents.map((doc) => (
+                  {documentData?.related_documents?.map((doc) => (
                     <li key={doc.id} className="flex items-center justify-between gap-3 p-3 border border-secondary-200 rounded-lg hover:bg-secondary-50 dark:hover:bg-secondary-900 transition-colors">
                       <div className="flex-1">
                         <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50">
@@ -1164,7 +1186,7 @@ export default function DocumentView() {
               </section>
             )}
 
-              {documentData.metadata && (
+              {documentData?.metadata && (
                 <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
                   <header className={`flex items-center justify-between px-5 py-4 ${isMetadataExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
                     <button
@@ -1190,7 +1212,7 @@ export default function DocumentView() {
                         className="overflow-hidden"
                       >
                         <pre className="bg-secondary-900 text-secondary-50 text-xs rounded-b-lg p-4 overflow-auto">
-                          {JSON.stringify(documentData.metadata, null, 2)}
+                          {JSON.stringify(documentData?.metadata ?? {}, null, 2)}
                         </pre>
                       </motion.div>
                     )}
@@ -1204,17 +1226,17 @@ export default function DocumentView() {
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
                   <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
                 </header>
-                <div className="p-5">
-                  <DocumentGraph documentId={documentData.id} height={480} />
-                </div>
+                  <div className="p-5">
+                    <DocumentGraph documentId={documentData?.id ?? selectedDocumentId} height={480} />
+                  </div>
               </section>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div>
-                  <CommunitiesSection documentId={documentData.id} />
+                    <CommunitiesSection documentId={documentData?.id ?? selectedDocumentId} />
                 </div>
                 <div>
-                  <ChunkSimilaritiesSection documentId={documentData.id} />
+                    <ChunkSimilaritiesSection documentId={documentData?.id ?? selectedDocumentId} />
                 </div>
               </div>
             </div>

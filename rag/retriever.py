@@ -2,6 +2,7 @@
 Enhanced retrieval logic with support for chunk-based, entity-based, hybrid modes, and multi-hop reasoning.
 """
 
+import asyncio
 import hashlib
 import logging
 import threading
@@ -33,6 +34,31 @@ class DocumentRetriever:
         # Initialize retrieval cache for hybrid_retrieval results
         self._cache = get_retrieval_cache()
         self._cache_lock = threading.Lock()
+        # Store metadata from last retrieval (for alternative chunks)
+        self.last_retrieval_metadata: Optional[Dict[str, Any]] = None
+
+    @staticmethod
+    def _apply_rrf(ranked_lists: List[List[Dict[str, Any]]], k: int = 60) -> Dict[str, float]:
+        """Apply Reciprocal Rank Fusion over multiple ranked lists.
+
+        Args:
+            ranked_lists: List of ranked result lists (best first) each item must have a unique 'chunk_id'.
+            k: RRF constant controlling discount (typical default ~60).
+
+        Returns:
+            Mapping of chunk_id -> fused RRF score.
+        """
+        scores: Dict[str, float] = {}
+        for lst in ranked_lists:
+            # ensure we only operate on lists that have items
+            if not lst:
+                continue
+            for rank, item in enumerate(lst, start=1):
+                cid = item.get("chunk_id")
+                if not cid:
+                    continue
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank)
+        return scores
 
     @staticmethod
     def _extract_hashtags_from_query(query: str) -> List[str]:
@@ -93,6 +119,7 @@ class DocumentRetriever:
     async def chunk_based_retrieval(
         self,
         query: str,
+        search_query: Optional[str] = None,
         top_k: int = 5,
         allowed_document_ids: Optional[List[str]] = None,
         query_embedding: Optional[List[float]] = None,
@@ -101,7 +128,8 @@ class DocumentRetriever:
         Traditional chunk-based retrieval using vector similarity.
 
         Args:
-            query: User query
+            query: Original user query (for logging)
+            search_query: Contextualized query to use for embeddings (if None, uses query)
             top_k: Number of similar chunks to retrieve
             allowed_document_ids: Optional list of document IDs to restrict retrieval
             query_embedding: Pre-computed query embedding (to avoid recomputation)
@@ -110,9 +138,12 @@ class DocumentRetriever:
             List of similar chunks with metadata
         """
         try:
+            # Use search_query if provided, otherwise fall back to query
+            effective_query = search_query if search_query is not None else query
+            
             # Generate query embedding if not provided
             if query_embedding is None:
-                query_embedding = embedding_manager.get_embedding(query)
+                query_embedding = embedding_manager.get_embedding(effective_query)
             
             # Perform vector similarity search with larger top_k to allow filtering
             search_limit = top_k * 3
@@ -154,6 +185,7 @@ class DocumentRetriever:
     async def entity_based_retrieval(
         self,
         query: str,
+        search_query: Optional[str] = None,
         top_k: int = 5,
         allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
@@ -161,15 +193,20 @@ class DocumentRetriever:
         Entity-based retrieval using entity similarity and relationships.
 
         Args:
-            query: User query
+            query: Original user query (for logging)
+            search_query: Contextualized query to use for entity search (if None, uses query)
             top_k: Number of relevant chunks to retrieve
+            allowed_document_ids: Optional list of document IDs to restrict retrieval
 
         Returns:
             List of chunks related to relevant entities
         """
         try:
+            # Use search_query if provided, otherwise fall back to query
+            effective_query = search_query if search_query is not None else query
+            
             # First, find relevant entities using full-text search
-            relevant_entities = graph_db.entity_similarity_search(query, top_k)
+            relevant_entities = graph_db.entity_similarity_search(effective_query, top_k)
 
             if not relevant_entities:
                 logger.info("No relevant entities found for entity-based retrieval")
@@ -192,8 +229,8 @@ class DocumentRetriever:
                 )
                 return []
 
-            # Calculate similarity scores for chunks based on query
-            query_embedding = embedding_manager.get_embedding(query)
+            # Calculate similarity scores for chunks based on contextualized query
+            query_embedding = embedding_manager.get_embedding(effective_query)
 
             # Enhance chunks with entity information and similarity scores
             for chunk in relevant_chunks:
@@ -411,6 +448,7 @@ class DocumentRetriever:
     async def multi_hop_reasoning_retrieval(
         self,
         query: str,
+        search_query: Optional[str] = None,
         seed_top_k: int = 5,
         max_hops: int = 2,
         beam_size: int = 8,
@@ -421,11 +459,13 @@ class DocumentRetriever:
         Multi-hop reasoning retrieval using path traversal.
 
         Args:
-            query: User query
+            query: Original user query (for logging)
+            search_query: Contextualized query to use for seed selection (if None, uses query)
             seed_top_k: Number of seed entities to start from
             max_hops: Maximum number of hops to traverse
             beam_size: Beam size for path search
             use_hybrid_seeding: Whether to use hybrid seeding (chunks + entities)
+            allowed_document_ids: Optional list of document IDs to restrict retrieval
 
         Returns:
             List of chunks with path-based scoring and provenance
@@ -436,12 +476,16 @@ class DocumentRetriever:
                     "Skipping multi-hop reasoning because retrieval is restricted to specific documents"
                 )
                 return []
+            
+            # Use search_query if provided, otherwise fall back to query
+            effective_query = search_query if search_query is not None else query
+            
             # Step 1: Seed entity selection
             seed_entity_ids = []
 
             if use_hybrid_seeding:
                 # Hybrid seeding: get chunks first, then extract entities
-                query_embedding = embedding_manager.get_embedding(query)
+                query_embedding = embedding_manager.get_embedding(effective_query)
                 similar_chunks = graph_db.vector_similarity_search(
                     query_embedding, seed_top_k * 2
                 )
@@ -459,7 +503,7 @@ class DocumentRetriever:
                     ]
             else:
                 # Entity-only seeding: find entities by similarity
-                relevant_entities = graph_db.entity_similarity_search(query, seed_top_k)
+                relevant_entities = graph_db.entity_similarity_search(effective_query, seed_top_k)
                 seed_entity_ids = [e["entity_id"] for e in relevant_entities]
 
             if not seed_entity_ids:
@@ -602,6 +646,7 @@ class DocumentRetriever:
     async def hybrid_retrieval(
         self,
         query: str,
+        contextualized_query: Optional[str] = None,
         top_k: int = 5,
         chunk_weight: float = 0.5,
         entity_weight: Optional[float] = None,
@@ -613,16 +658,35 @@ class DocumentRetriever:
         allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Hybrid retrieval with result caching.
+        Hybrid retrieval with result caching and contextualized query support.
+        
+        Args:
+            query: Original user query (for logging/debugging)
+            contextualized_query: Enriched query with conversation context (used for actual search)
+            top_k: Number of results to return
+            chunk_weight: Weight for chunk-based results
+            entity_weight: Weight for entity-based results
+            path_weight: Weight for path-based results
+            use_multi_hop: Whether to use multi-hop reasoning
+            max_hops: Maximum hops for multi-hop
+            beam_size: Beam size for multi-hop
+            restrict_to_context: Whether to restrict to context documents
+            allowed_document_ids: List of allowed document IDs
         
         Cache Strategy:
             - Hit: Return cached results (TTL: 60s)
             - Miss: Perform retrieval, cache, return
         """
+        # Use contextualized query if provided, otherwise use original
+        search_query = contextualized_query or query
+        
+        if contextualized_query and contextualized_query != query:
+            logger.info(f"Using contextualized query: '{search_query[:80]}...' (original: '{query[:50]}...')")
+        
         # Check if caching is enabled
         if not settings.enable_caching:
             return await self._hybrid_retrieval_direct(
-                query, top_k, chunk_weight, entity_weight, path_weight,
+                query, search_query, top_k, chunk_weight, entity_weight, path_weight,
                 use_multi_hop, max_hops, beam_size, restrict_to_context,
                 allowed_document_ids
             )
@@ -635,26 +699,36 @@ class DocumentRetriever:
             settings.hybrid_path_weight if path_weight is None else path_weight
         )
         
-        # Generate cache key
+        # Generate cache key using contextualized query (important for follow-ups)
+        # Include ALL parameters that affect retrieval to ensure proper cache isolation
         cache_key = hash_retrieval_params(
-            query=query,
+            query=search_query,  # Use contextualized query for cache key
             mode="hybrid",
             top_k=top_k,
             chunk_weight=chunk_weight,
             entity_weight=normalized_entity_weight,
             path_weight=normalized_path_weight,
+            use_multi_hop=use_multi_hop,
+            max_hops=max_hops,
+            beam_size=beam_size,
+            restrict_to_context=restrict_to_context,
+            allowed_document_ids=allowed_document_ids,
+            embedding_model=settings.embedding_model,
+            enable_rrf=settings.enable_rrf,
+            flashrank_enabled=settings.flashrank_enabled,
+            routing_categories=allowed_document_ids,  # Include routing context in cache key
         )
         
         # Check cache (thread-safe read)
         with self._cache_lock:
             if cache_key in self._cache:
-                logger.info(f"Retrieval cache HIT for query: {query[:50]}...")
+                logger.info(f"Retrieval cache HIT for query: {search_query[:50]}...")
                 return self._cache[cache_key]
         
         # Cache miss - perform retrieval
-        logger.info(f"Retrieval cache MISS for query: {query[:50]}...")
+        logger.info(f"Retrieval cache MISS for query: {search_query[:50]}...")
         results = await self._hybrid_retrieval_direct(
-            query, top_k, chunk_weight, entity_weight, path_weight,
+            query, search_query, top_k, chunk_weight, entity_weight, path_weight,
             use_multi_hop, max_hops, beam_size, restrict_to_context,
             allowed_document_ids
         )
@@ -668,6 +742,7 @@ class DocumentRetriever:
     async def _hybrid_retrieval_direct(
         self,
         query: str,
+        search_query: str,
         top_k: int = 5,
         chunk_weight: float = 0.5,
         entity_weight: Optional[float] = None,
@@ -684,7 +759,8 @@ class DocumentRetriever:
         Combines chunk-based, entity-based, and optionally multi-hop approaches.
 
         Args:
-            query: User query
+            query: Original user query (for logging)
+            search_query: Contextualized query to use for actual retrieval
             top_k: Total number of chunks to retrieve
             chunk_weight: Weight for chunk-based results (0.0-1.0)
             entity_weight: Weight for entity-based results (0.0-1.0)
@@ -711,9 +787,26 @@ class DocumentRetriever:
             )
 
             # Analyze query to determine if multi-hop would be beneficial
-            query_analysis = analyze_query(query)
+            # Use search_query (contextualized) for analysis
+            query_analysis = analyze_query(search_query)
             multi_hop_recommended = query_analysis.get("multi_hop_recommended", True)
             query_type = query_analysis.get("query_type", "factual")
+            suggested_strategy = query_analysis.get("suggested_strategy", "balanced")
+            
+            # Initialize keyword_weight
+            keyword_weight = settings.keyword_search_weight if settings.enable_chunk_fulltext else 0.0
+            
+            # Apply strategy-based weight adjustments
+            if suggested_strategy == "entity_focused":
+                # Boost entity weight for relationship queries
+                normalized_entity_weight = min(1.0, normalized_entity_weight * 1.3)
+                normalized_chunk_weight = max(0.3, normalized_chunk_weight * 0.8)
+            elif suggested_strategy == "keyword_focused":
+                # Boost keyword weight for exact-term queries
+                if settings.enable_chunk_fulltext:
+                    keyword_weight = min(0.5, keyword_weight * 1.4)
+                normalized_chunk_weight = min(1.0, normalized_chunk_weight * 1.1)
+                normalized_entity_weight = max(0.2, normalized_entity_weight * 0.7)
 
             # Only apply restriction if both enabled AND there are actual documents to restrict to
             # Empty list means "no context documents selected" -> should search all docs
@@ -745,48 +838,96 @@ class DocumentRetriever:
                 path_weight = max(0.2, base_path_weight * 0.7)
 
             logger.info(
-                "Multi-hop decision: requested=%s, recommended=%s, effective=%s, query_type=%s, path_weight=%.2f, restricted=%s",
+                "Multi-hop decision: requested=%s, recommended=%s, effective=%s, query_type=%s, strategy=%s, path_weight=%.2f, restricted=%s",
                 use_multi_hop,
                 multi_hop_recommended,
                 effective_use_multi_hop,
                 query_type,
+                suggested_strategy,
                 path_weight,
                 bool(allowed_document_ids),
             )
+            
+            # Store metadata for potential expansion
+            retrieval_metadata = {
+                "query_analysis": query_analysis,
+                "initial_strategy": suggested_strategy,
+            }
 
-            # Calculate split for each approach
+            # Calculate split for each approach including optional keyword search
             path_weight = path_weight if effective_use_multi_hop else 0.0
+            # keyword_weight already initialized above based on strategy
+            
             combined_weight = max(
                 1e-5,
-                normalized_chunk_weight + normalized_entity_weight + path_weight,
+                normalized_chunk_weight + normalized_entity_weight + path_weight + keyword_weight,
             )
             chunk_fraction = normalized_chunk_weight / combined_weight
             entity_fraction = normalized_entity_weight / combined_weight
             path_fraction = path_weight / combined_weight
+            keyword_fraction = keyword_weight / combined_weight
 
-            chunk_count = max(1, int(top_k * chunk_fraction))
-            entity_count = max(1, int(top_k * entity_fraction))
-            path_count = max(0, int(top_k * path_fraction))
-            if chunk_count + entity_count + path_count > top_k:
-                # Trim the smallest bucket to respect the limit
-                overage = chunk_count + entity_count + path_count - top_k
-                if path_count > 0:
+            # Fetch extra results for follow-up suggestions (top_k + 3 for alternatives)
+            effective_top_k = top_k + 3
+            
+            logger.info(f"Weight fractions: chunk={chunk_fraction:.3f}, entity={entity_fraction:.3f}, path={path_fraction:.3f}, keyword={keyword_fraction:.3f}")
+            
+            # Use ceiling for counts to ensure we get enough total results for alternatives
+            import math
+            chunk_count = max(1, math.ceil(effective_top_k * chunk_fraction))
+            entity_count = max(1, math.ceil(effective_top_k * entity_fraction))
+            path_count = max(0, math.ceil(effective_top_k * path_fraction))
+            keyword_count = max(0, math.ceil(effective_top_k * keyword_fraction)) if keyword_weight > 0 else 0
+            
+            logger.info(f"Retrieval counts: top_k={top_k}, effective_top_k={effective_top_k}, chunk={chunk_count}, entity={entity_count}, path={path_count}, keyword={keyword_count}")
+            
+            total_count = chunk_count + entity_count + path_count + keyword_count
+            logger.debug(f"Before trim: chunk={chunk_count}, entity={entity_count}, path={path_count}, keyword={keyword_count}, total={total_count}, effective_top_k={effective_top_k}")
+            
+            if total_count > effective_top_k:
+                # Trim the smallest bucket to respect the limit (use effective_top_k which includes alternatives)
+                overage = total_count - effective_top_k
+                logger.debug(f"Trimming overage: {overage}")
+                if keyword_count > 0:
+                    keyword_count = max(0, keyword_count - overage)
+                elif path_count > 0:
                     path_count = max(0, path_count - overage)
                 else:
                     entity_count = max(1, entity_count - overage)
+            
+            logger.info(f"Final counts: chunk={chunk_count}, entity={entity_count}, path={path_count}, keyword={keyword_count}")
 
-            # Get results from different approaches
+            # Get results from different approaches using search_query
             chunk_results = await self.chunk_based_retrieval(
-                query, chunk_count, allowed_document_ids=allowed_document_ids
+                query, search_query, chunk_count, allowed_document_ids=allowed_document_ids
             )
             entity_results = await self.entity_based_retrieval(
-                query, entity_count, allowed_document_ids=allowed_document_ids
+                query, search_query, entity_count, allowed_document_ids=allowed_document_ids
             )
+            
+            # Get keyword search results if enabled
+            keyword_results = []
+            if settings.enable_chunk_fulltext and keyword_count > 0:
+                try:
+                    import asyncio as aio
+                    loop = aio.get_event_loop()
+                    keyword_results = await loop.run_in_executor(
+                        None,
+                        graph_db.chunk_keyword_search,
+                        query,
+                        keyword_count,
+                        allowed_document_ids,
+                    )
+                    logger.info(f"Keyword search returned {len(keyword_results)} chunks")
+                except Exception as e:
+                    logger.warning(f"Keyword search failed, continuing without it: {e}")
+                    keyword_results = []
 
             path_results = []
             if effective_use_multi_hop:
                 path_results = await self.multi_hop_reasoning_retrieval(
                     query,
+                    search_query,
                     seed_top_k=5,
                     max_hops=max_hops or settings.multi_hop_max_hops,
                     beam_size=beam_size or settings.multi_hop_beam_size,
@@ -811,6 +952,96 @@ class DocumentRetriever:
                     logger.info(
                         f"Multi-hop: keeping {keep_count}/{len(path_results)} path results (path_count={path_count}, high_quality={high_quality_count})"
                     )
+
+            # Optional: Use Reciprocal Rank Fusion to combine lists
+            if getattr(settings, "enable_rrf", False):
+                try:
+                    # Prepare ranked lists by modality-specific score
+                    ranked_chunk = sorted(
+                        chunk_results, key=lambda x: x.get("similarity", 0.0), reverse=True
+                    ) if chunk_results else []
+                    ranked_entity = sorted(
+                        entity_results, key=lambda x: x.get("similarity", 0.0), reverse=True
+                    ) if entity_results else []
+                    ranked_keyword = sorted(
+                        keyword_results, key=lambda x: x.get("keyword_score", 0.0), reverse=True
+                    ) if keyword_results else []
+                    ranked_path = sorted(
+                        path_results, key=lambda x: x.get("similarity", 0.0), reverse=True
+                    ) if path_results else []
+
+                    lists_to_fuse = [lst for lst in [ranked_chunk, ranked_entity, ranked_keyword, ranked_path] if lst]
+                    rrf_scores = self._apply_rrf(lists_to_fuse, getattr(settings, "rrf_k", 60)) if lists_to_fuse else {}
+
+                    # Choose a representative item per chunk_id, prioritizing chunk->entity->keyword->path
+                    by_chunk: Dict[str, Dict[str, Any]] = {}
+                    def ingest(lst: List[Dict[str, Any]]):
+                        for it in lst:
+                            cid = it.get("chunk_id")
+                            if cid and cid not in by_chunk:
+                                by_chunk[cid] = dict(it)
+                    ingest(ranked_chunk)
+                    ingest(ranked_entity)
+                    ingest(ranked_keyword)
+                    ingest(ranked_path)
+
+                    # Attach scores and mark source
+                    for cid, score in rrf_scores.items():
+                        if cid in by_chunk:
+                            by_chunk[cid]["rrf_score"] = score
+                            # For downstream compatibility, store under hybrid_score as well
+                            by_chunk[cid]["hybrid_score"] = score
+                            prev = by_chunk[cid].get("retrieval_source", "")
+                            if prev:
+                                by_chunk[cid]["retrieval_source"] = f"{prev}+rrf" if "rrf" not in prev else prev
+                            else:
+                                by_chunk[cid]["retrieval_source"] = "hybrid_rrf"
+
+                    final_results = [v for k, v in by_chunk.items() if k in rrf_scores]
+                    final_results.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
+
+                    # Optionally rerank top candidates using FlashRank (runs in threadpool)
+                    if getattr(settings, "flashrank_enabled", False) and final_results:
+                        try:
+                            import asyncio
+
+                            from rag.rerankers.flashrank_reranker import rerank_with_flashrank
+                            from core.singletons import get_blocking_executor, SHUTTING_DOWN
+
+                            dynamic_base = max(top_k * 4, 32)
+                            cap = min(
+                                len(final_results),
+                                getattr(settings, "flashrank_max_candidates", 100),
+                                dynamic_base,
+                            )
+                            loop = asyncio.get_running_loop()
+                            try:
+                                executor = get_blocking_executor()
+                                reranked = await loop.run_in_executor(executor, rerank_with_flashrank, query, final_results, cap)
+                            except RuntimeError as e:
+                                logger.debug(f"Blocking executor unavailable for FlashRank rerank: {e}.")
+                                if SHUTTING_DOWN:
+                                    logger.info("Process shutting down; skipping FlashRank rerank")
+                                    reranked = []
+                                else:
+                                    executor = get_blocking_executor()
+                                    reranked = await loop.run_in_executor(executor, rerank_with_flashrank, query, final_results, cap)
+
+                            if isinstance(reranked, list) and reranked:
+                                final_results = reranked
+                                logger.info("Applied FlashRank reranker to top %d candidates (RRF path)", cap)
+                        except Exception as e:
+                            logger.warning("FlashRank reranker failed on RRF path (continuing without it): %s", e)
+
+                    # Store alternative chunks for follow-up suggestions (RRF path)
+                    alternatives = final_results[top_k:top_k+3]
+                    retrieval_metadata["alternative_chunks"] = alternatives
+                    self.last_retrieval_metadata = retrieval_metadata
+                    logger.info(f"Storing {len(alternatives)} alternative chunks for follow-ups (RRF path, total results: {len(final_results)}, top_k: {top_k}, slice [{top_k}:{top_k+3}])")
+                    
+                    return final_results[:top_k]
+                except Exception as e:
+                    logger.warning(f"RRF fusion failed, falling back to weighted hybrid: {e}")
 
             # Combine and deduplicate results by chunk_id
             combined_results = {}
@@ -884,6 +1115,34 @@ class DocumentRetriever:
                         )
                         combined_results[chunk_id] = result
 
+            # Add keyword-based results (merge if duplicate)
+            for result in keyword_results:
+                chunk_id = result.get("chunk_id")
+                if chunk_id:
+                    if chunk_id in combined_results:
+                        # Merge with existing
+                        existing = combined_results[chunk_id]
+                        existing["retrieval_source"] = "hybrid_with_keywords"
+                        existing["keyword_score"] = result.get("keyword_score", 0.0)
+                        # Boost score for chunks found by multiple methods
+                        current_score = existing.get("hybrid_score", 0.0)
+                        # Normalize keyword score to 0-1 range (fulltext scores can be > 1)
+                        normalized_keyword_score = min(1.0, result.get("keyword_score", 0.0) / 5.0)
+                        weighted_score = (
+                            current_score * (chunk_fraction + entity_fraction + path_fraction)
+                            + keyword_fraction * normalized_keyword_score
+                        )
+                        existing["hybrid_score"] = min(1.0, weighted_score)
+                    else:
+                        result["retrieval_source"] = "keyword_based"
+                        # Normalize keyword score for hybrid scoring
+                        normalized_keyword_score = min(1.0, result.get("keyword_score", 0.0) / 5.0)
+                        result["similarity"] = normalized_keyword_score
+                        result["hybrid_score"] = min(
+                            1.0, keyword_fraction * normalized_keyword_score
+                        )
+                        combined_results[chunk_id] = result
+
             # Sort by hybrid score and return top_k
             final_results = list(combined_results.values())
             final_results.sort(key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
@@ -912,6 +1171,18 @@ class DocumentRetriever:
                 + (f", {path_only_count} path-only" if effective_use_multi_hop else "")
                 + f", {hybrid_count} overlapping)"
             )
+            
+            # Optional query expansion if results are sparse
+            if getattr(settings, "enable_query_expansion", False) and len(final_results) < getattr(settings, "query_expansion_threshold", 3):
+                try:
+                    from rag.query_expansion import expand_query_terms
+                    expanded_terms = expand_query_terms(query, len(final_results))
+                    if expanded_terms:
+                        retrieval_metadata["expanded_terms"] = expanded_terms
+                        logger.info(f"Query expansion generated {len(expanded_terms)} terms for sparse results")
+                        # Could optionally re-retrieve with expanded query here
+                except Exception as e:
+                    logger.warning(f"Query expansion failed: {e}")
 
             # Optionally rerank top candidates using FlashRank (runs in threadpool)
             if getattr(settings, "flashrank_enabled", False) and final_results:
@@ -921,7 +1192,12 @@ class DocumentRetriever:
                     from rag.rerankers.flashrank_reranker import rerank_with_flashrank
                     from core.singletons import get_blocking_executor, SHUTTING_DOWN
 
-                    cap = min(len(final_results), getattr(settings, "flashrank_max_candidates", 100))
+                    dynamic_base = max(top_k * 4, 32)
+                    cap = min(
+                        len(final_results),
+                        getattr(settings, "flashrank_max_candidates", 100),
+                        dynamic_base,
+                    )
                     loop = asyncio.get_running_loop()
                     # execute the synchronous reranker in a thread to avoid blocking
                     try:
@@ -942,6 +1218,14 @@ class DocumentRetriever:
                 except Exception as e:
                     logger.warning("FlashRank reranker failed (continuing without it): %s", e)
 
+            # Store alternative chunks for follow-up suggestions (next 3 after top_k)
+            retrieval_metadata["alternative_chunks"] = final_results[top_k:top_k+3]
+            
+            # Store metadata for access by retrieval node
+            self.last_retrieval_metadata = retrieval_metadata
+            
+            logger.info(f"Storing {len(final_results[top_k:top_k+3])} alternative chunks for follow-ups (total results: {len(final_results)})")
+            
             return final_results[:top_k]
 
         except Exception as e:
@@ -982,21 +1266,32 @@ class DocumentRetriever:
         allowed_document_ids = kwargs.pop("allowed_document_ids", None)
 
         if mode == RetrievalMode.CHUNK_ONLY:
+            # Note: query here is already contextualized if it came from retrieval.py
             return await self.chunk_based_retrieval(
-                query, top_k, allowed_document_ids=allowed_document_ids
+                query=query,
+                search_query=query,  # Pass same value - already contextualized
+                top_k=top_k,
+                allowed_document_ids=allowed_document_ids
             )
         elif mode == RetrievalMode.ENTITY_ONLY:
+            # Note: query here is already contextualized if it came from retrieval.py
             return await self.entity_based_retrieval(
-                query, top_k, allowed_document_ids=allowed_document_ids
+                query=query,
+                search_query=query,  # Pass same value - already contextualized
+                top_k=top_k,
+                allowed_document_ids=allowed_document_ids
             )
         elif mode == RetrievalMode.HYBRID:
+            # Note: query here is already contextualized if it came from retrieval.py
+            # We pass it as both query and contextualized_query since it's the effective search query
             return await self.hybrid_retrieval(
-                query,
-                top_k,
-                chunk_weight,
-                entity_weight,
-                path_weight,
-                use_multi_hop,
+                query=query,
+                contextualized_query=query,  # Pass same value - already contextualized
+                top_k=top_k,
+                chunk_weight=chunk_weight,
+                entity_weight=entity_weight,
+                path_weight=path_weight,
+                use_multi_hop=use_multi_hop,
                 max_hops=max_hops,
                 beam_size=beam_size,
                 restrict_to_context=restrict_to_context,

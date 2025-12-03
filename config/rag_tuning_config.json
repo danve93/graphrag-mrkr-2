@@ -2,6 +2,180 @@
   "default_llm_model": "gpt-4o-mini",
   "sections": [
     {
+      "key": "retrieval_fusion",
+      "label": "Retrieval Fusion",
+      "description": "Combine multiple ranked lists (vector, entity, keyword, paths) using Reciprocal Rank Fusion.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_rrf",
+          "label": "Enable RRF Fusion",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Use Reciprocal Rank Fusion to robustly combine rankings from vector, entity, keyword (BM25), and path-based retrieval. Recommended for product documentation to balance lexical and semantic matches."
+        },
+        {
+          "key": "rrf_k",
+          "label": "RRF k (rank discount)",
+          "value": 60,
+          "options": null,
+          "min": 10.0,
+          "max": 200.0,
+          "step": 5.0,
+          "type": "slider",
+          "tooltip": "Controls rank discount in RRF scoring (score = 1/(k + rank)). Higher values flatten differences between ranks, blending lists more evenly. 60 is a common robust default."
+        },
+        {
+          "key": "enable_chunk_fulltext",
+          "label": "Enable Keyword (BM25)",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Include Neo4j fulltext/BM25 keyword matches in retrieval. Recommended for product docs where exact terminology matters."
+        },
+        {
+          "key": "keyword_search_weight",
+          "label": "Keyword Weight (0-1)",
+          "value": 0.3,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Relative weight for keyword matches within hybrid scoring when not using RRF or for downstream blending. Increase to boost exact term matches."
+        },
+        {
+          "key": "hybrid_chunk_weight",
+          "label": "Chunk Weight (0-1)",
+          "value": 0.6,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Relative weight for vector-similarity chunk results in hybrid retrieval when blending scores."
+        },
+        {
+          "key": "hybrid_entity_weight",
+          "label": "Entity Weight (0-1)",
+          "value": 0.4,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Relative weight for entity-aware results in hybrid retrieval when blending scores."
+        }
+      ]
+    },
+    {
+      "key": "reranking",
+      "label": "Reranking",
+      "description": "Configure FlashRank reranking to refine top candidates.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "flashrank_enabled",
+          "label": "Enable FlashRank Reranker",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable the FlashRank reranker to refine candidate ordering after fusion."
+        },
+        {
+          "key": "flashrank_model_name",
+          "label": "FlashRank Model",
+          "value": "ms-marco-TinyBERT-L-2-v2",
+          "options": [
+            "ms-marco-TinyBERT-L-2-v2",
+            "ms-marco-MiniLM-L-12-v2",
+            "bge-small-en-v1.5"
+          ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "Select the reranker model. Smaller models are faster; larger models may improve ranking quality."
+        },
+        {
+          "key": "flashrank_blend_weight",
+          "label": "Blend Weight (rerank vs hybrid)",
+          "value": 0.0,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "0.0 = pure reranker order; 1.0 = pure hybrid order; values in-between blend both."
+        },
+        {
+          "key": "flashrank_max_candidates",
+          "label": "Max Candidates",
+          "value": 100,
+          "options": null,
+          "min": 10.0,
+          "max": 500.0,
+          "step": 10.0,
+          "type": "slider",
+          "tooltip": "Upper bound on how many candidates to send to the reranker. Actual cap also depends on dynamic sizing from top_k."
+        },
+        {
+          "key": "flashrank_batch_size",
+          "label": "Reranker Batch Size",
+          "value": 32,
+          "options": null,
+          "min": 8.0,
+          "max": 128.0,
+          "step": 8.0,
+          "type": "slider",
+          "tooltip": "Batch size for reranker calls where applicable. Larger batches can improve throughput but use more memory."
+        }
+      ]
+    },
+    {
+      "key": "query_analysis",
+      "label": "Query Analysis",
+      "description": "Intelligent query routing and expansion to optimize retrieval strategy.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_query_expansion",
+          "label": "Enable Query Expansion",
+          "value": false,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "When results are sparse, automatically generate synonyms and related terms to expand the query and improve recall. Uses LLM for term generation."
+        },
+        {
+          "key": "query_expansion_threshold",
+          "label": "Expansion Threshold",
+          "value": 3,
+          "options": null,
+          "min": 1.0,
+          "max": 10.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Trigger query expansion when initial retrieval returns fewer than this many results. Lower values expand more aggressively."
+        }
+      ]
+    },
+    {
       "key": "pdf_processing",
       "label": "PDF Processing",
       "description": "Controls how PDF documents are converted to text",

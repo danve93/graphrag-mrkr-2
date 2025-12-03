@@ -124,7 +124,6 @@ async def retrieve_documents_async(
                 restrict_to_context=restrict_to_context,
                 expand_depth=expansion_depth or settings.max_expansion_depth,
                 allowed_document_ids=allowed_ids,
-                embedding_model=embedding_model,
             )
         else:
             # Pass chunk_weight and multi_hop through to hybrid retriever if present
@@ -152,11 +151,25 @@ async def retrieve_documents_async(
             use_multi_hop,
             bool(allowed_docs),
         )
-        return chunks
+        
+        # Extract alternative chunks from retrieval metadata if available
+        alternatives = []
+        if hasattr(document_retriever, 'last_retrieval_metadata'):
+            metadata = document_retriever.last_retrieval_metadata or {}
+            logger.debug(f"Retrieval metadata keys: {list(metadata.keys()) if metadata else 'None'}")
+            alternatives = metadata.get('alternative_chunks', [])
+            if alternatives:
+                logger.info(f"Retrieved {len(alternatives)} alternative chunks for follow-up suggestions")
+            else:
+                logger.info("No alternative chunks found in retrieval metadata")
+        else:
+            logger.warning("document_retriever does not have last_retrieval_metadata attribute")
+        
+        return chunks, alternatives
 
     except Exception as e:
         logger.error(f"Error retrieving documents: {e}")
-        return []
+        return [], []
 
 
 def retrieve_documents(
@@ -230,7 +243,7 @@ def retrieve_documents(
                 fut = executor.submit(asyncio.run, coro)
             except RuntimeError:
                 if SHUTTING_DOWN:
-                    return []
+                    return [], []
                 executor = get_blocking_executor()
                 fut = executor.submit(asyncio.run, coro)
 

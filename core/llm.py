@@ -394,6 +394,7 @@ class LLMManager:
         temperature: float = 0.3,
         chat_history: list = None,
         model_override: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate a RAG response using retrieved context chunks.
@@ -413,14 +414,32 @@ class LLMManager:
             # Import here to avoid circular imports
             from core.token_manager import token_manager as tm
 
-            system_message = """You are a helpful assistant that answers questions based on the provided context.
-Use only the information from the given context to answer the question.
-If the context doesn't contain enough information to answer the question, say so clearly.
-Be concise and accurate in your responses.
+            system_message = """You are a documentation assistant. Follow these rules strictly:
 
-Formatting rules: return Markdown only (no HTML). If the model would normally use HTML tags such as <br> or <p>, convert them to plain-text equivalents. When presenting markdown-style tables (rows with `|`), do not insert HTML tags — keep each table cell's content together on the same row. Replace `<br>` inside markdown table rows with a single space so the cell stays on one line; outside tables, replace `<br>` with a newline.
+## Response Rules
+1. **Source-Only Answers**: Answer ONLY with information found in the provided context. Do not make assumptions or use external knowledge.
 
-Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and `\\[...\\]` but preserve the mathematical content.
+2. **Not Found Response**: If no relevant information is found in the context, respond with:
+   "I cannot find any documented instructions on this topic in the manuals. Try rephrasing your question or check the official documentation for further details."
+
+3. **Language**: Always respond in the same language as the user's question.
+
+4. **Style**: 
+   - Be concise and structured
+   - Use short lists or numbered steps for procedures
+   - Highlight warnings, prerequisites, version limits, or important notes when they matter
+   - Call out key information that affects the answer
+
+5. **Citations**: Reference the source when helpful (e.g., "According to the provided documentation...")
+
+## Formatting Rules
+- Use Markdown only (no HTML tags like <br> or <p>)
+- For tables: keep each cell's content on a single line (replace <br> inside cells with space)
+- Outside tables: replace <br> with newlines
+- Math/LaTeX: remove delimiters like $...$, $$...$$, \\(...\\), \\[...\\] but preserve the mathematical content
+
+## Context Provided
+The following context is from official documentation:
 """
 
             # Check if we need to split the request due to token limits
@@ -436,6 +455,7 @@ Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and
                     temperature,
                     chat_history,
                     model_override,
+                    custom_prompt,
                 )
             else:
                 return self._generate_rag_response_single(
@@ -446,6 +466,7 @@ Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and
                     temperature,
                     chat_history,
                     model_override,
+                    custom_prompt,
                 )
 
         except Exception as e:
@@ -461,41 +482,47 @@ Math/LaTeX: remove common LaTeX delimiters like $...$, $$...$$, `\\(...\\)`, and
         temperature: float,
         chat_history: list = None,
         model_override: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate RAG response for a single request that fits within token limits."""
         try:
-            # Build context from chunks
-            context = "\n\n".join(
-                [
-                    f"[Chunk {i + 1}]: {chunk.get('content', '')}"
-                    for i, chunk in enumerate(context_chunks)
-                ]
-            )
-
-            # Build conversation history context if provided
-            history_context = ""
-            if chat_history and len(chat_history) > 0:
-                # Limit to recent history to avoid token overflow
-                recent_history = (
-                    chat_history[-4:] if len(chat_history) > 4 else chat_history
+            # If custom_prompt provided, use it directly (it already includes query and context formatting)
+            if custom_prompt:
+                prompt = custom_prompt
+                logger.info("Using custom category-specific prompt for generation")
+            else:
+                # Build context from chunks
+                context = "\n\n".join(
+                    [
+                        f"[Chunk {i + 1}]: {chunk.get('content', '')}"
+                        for i, chunk in enumerate(context_chunks)
+                    ]
                 )
-                history_entries = []
-                for msg in recent_history:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    # Truncate very long messages
-                    if len(content) > 500:
-                        content = content[:500] + "..."
-                    history_entries.append(f"{role.title()}: {content}")
 
-                if history_entries:
-                    history_context = f"""
+                # Build conversation history context if provided
+                history_context = ""
+                if chat_history and len(chat_history) > 0:
+                    # Limit to recent history to avoid token overflow
+                    recent_history = (
+                        chat_history[-4:] if len(chat_history) > 4 else chat_history
+                    )
+                    history_entries = []
+                    for msg in recent_history:
+                        role = msg.get("role", "user")
+                        content = msg.get("content", "")
+                        # Truncate very long messages
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        history_entries.append(f"{role.title()}: {content}")
+
+                    if history_entries:
+                        history_context = f"""
 Previous conversation:
 {chr(10).join(history_entries)}
 
 """
 
-            prompt = f"""{history_context}Context:
+                prompt = f"""{history_context}Context:
 {context}
 
 Question: {query}
@@ -843,21 +870,33 @@ Return your analysis in a structured format."""
 
             for chunk in stream_resp:
                 try:
-                    # Delta may be at chunk.choices[0].delta
-                    choice = getattr(chunk, "choices", None) or chunk.get("choices")
-                    if not choice:
-                        continue
-                    delta = choice[0].get("delta") if isinstance(choice, list) else None
-                    if not delta:
-                        # Some SDKs expose as .delta
-                        delta = getattr(choice[0], "delta", None)
-                    if not delta:
-                        continue
-                    content = None
-                    if isinstance(delta, dict):
-                        content = delta.get("content")
+                    # Extract choices - handle both dict and attr access
+                    if hasattr(chunk, "choices"):
+                        choices = chunk.choices
+                    elif isinstance(chunk, dict) and "choices" in chunk:
+                        choices = chunk["choices"]
                     else:
-                        content = getattr(delta, "content", None)
+                        continue
+                    
+                    if not choices or len(choices) == 0:
+                        continue
+                    
+                    # Extract delta from first choice
+                    choice = choices[0]
+                    if hasattr(choice, "delta"):
+                        delta = choice.delta
+                    elif isinstance(choice, dict) and "delta" in choice:
+                        delta = choice["delta"]
+                    else:
+                        continue
+                    
+                    # Extract content from delta
+                    if hasattr(delta, "content"):
+                        content = delta.content
+                    elif isinstance(delta, dict) and "content" in delta:
+                        content = delta["content"]
+                    else:
+                        continue
 
                     if content:
                         yield content
@@ -866,6 +905,62 @@ Return your analysis in a structured format."""
                     continue
         except Exception as e:
             logger.warning(f"OpenAI streaming failed: {e}")
+            return
+
+    def stream_generate_ollama(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        temperature: float = 0.1,
+        max_tokens: int = 1000,
+        model_override: Optional[str] = None,
+    ):
+        """
+        Synchronous generator that streams tokens from Ollama streaming endpoint.
+
+        Yields partial strings (deltas) as they arrive from the provider.
+        """
+        model_name = str(model_override or self.model)
+        
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": True,
+            }
+
+            response = requests.post(
+                f"{self.ollama_base_url}/api/chat",
+                json=payload,
+                stream=True,
+                timeout=120,
+            )
+            response.raise_for_status()
+
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    import json
+                    chunk = json.loads(line)
+                    if "message" in chunk:
+                        content = chunk["message"].get("content", "")
+                        if content:
+                            yield content
+                    # Check for done signal
+                    if chunk.get("done", False):
+                        break
+                except Exception:
+                    # Ignore malformed chunks
+                    continue
+        except Exception as e:
+            logger.warning(f"Ollama streaming failed: {e}")
             return
 
     def stream_generate_rag_response(
@@ -912,7 +1007,7 @@ Return your analysis in a structured format."""
             cap = getattr(settings, "max_response_tokens", 2000)
             max_out = min(available, cap)
 
-            # Delegate to OpenAI streaming for now
+            # Delegate to provider-specific streaming
             if self.provider == "openai":
                 for token in self.stream_generate_openai(
                     prompt=prompt,
@@ -922,9 +1017,17 @@ Return your analysis in a structured format."""
                     model_override=model_override,
                 ):
                     yield token
+            elif self.provider == "ollama":
+                for token in self.stream_generate_ollama(
+                    prompt=prompt,
+                    system_message=system_message,
+                    temperature=temperature,
+                    max_tokens=max_out,
+                    model_override=model_override,
+                ):
+                    yield token
             else:
-                # Ollama streaming not implemented — yield nothing
-                logger.warning("Streaming not implemented for provider: %s", self.provider)
+                logger.warning("Streaming not supported for provider: %s", self.provider)
                 return
         except Exception as e:
             logger.error(f"Failed to start RAG streaming response: {e}")

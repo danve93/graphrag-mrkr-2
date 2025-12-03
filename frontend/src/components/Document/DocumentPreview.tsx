@@ -96,7 +96,7 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
       line-height: 1.6;
-      color: #1f2937;
+      color: #121212;
       background: #fff;
       padding: 2rem;
       max-width: 900px;
@@ -105,7 +105,7 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     
     @media (prefers-color-scheme: dark) {
       body {
-        background: #1f2937;
+        background: #121212;
         color: #f3f4f6;
       }
       
@@ -118,12 +118,12 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
       }
       
       code {
-        background: #111827 !important;
+        background: #121212 !important;
         color: #e5e7eb;
       }
       
       pre {
-        background: #111827 !important;
+        background: #121212 !important;
         color: #e5e7eb;
       }
       
@@ -183,7 +183,7 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     code {
       background: #f3f4f6;
       padding: 0.2rem 0.4rem;
-      border-radius: 3px;
+      border-radius: var(--radius-sm);
       font-family: 'Monaco', 'Courier New', monospace;
       font-size: 0.9em;
     }
@@ -191,7 +191,7 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     pre {
       background: #f3f4f6;
       padding: 1rem;
-      border-radius: 5px;
+      border-radius: var(--radius-md);
       overflow-x: auto;
       margin-bottom: 1rem;
       font-family: 'Monaco', 'Courier New', monospace;
@@ -240,7 +240,7 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     
     @media (prefers-color-scheme: dark) {
       th {
-        background: #111827;
+        background: #121212;
       }
     }
     

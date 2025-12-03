@@ -1,5 +1,27 @@
 import type { ProcessProgress } from './upload'
 
+export interface StageUpdate {
+  name: string
+  duration_ms?: number
+  timestamp?: number
+  metadata?: {
+    chunks_retrieved?: number
+    context_items?: number
+    response_length?: number
+    routing_category_id?: string
+    routing_confidence?: number
+    routing_categories?: string[]
+    document_count?: number
+    [key: string]: any
+  }
+}
+
+export interface RoutingInfo {
+  categories: string[]
+  confidence: number
+  category_id?: string | null
+}
+
 export interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -11,6 +33,11 @@ export interface Message {
   context_documents?: string[]
   context_document_labels?: string[]
   context_hashtags?: string[]
+  stages?: StageUpdate[]
+  total_duration_ms?: number
+  message_id?: string
+  session_id?: string
+  routing_info?: RoutingInfo
 }
 
 export interface Source {

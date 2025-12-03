@@ -3,6 +3,9 @@
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import { Button } from '@mui/material'
+import { AccountTree as GraphIconMui } from '@mui/icons-material'
+import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Loader from '@/components/Utils/Loader'
 
 import { api } from '@/lib/api'
@@ -59,6 +62,19 @@ export default function GraphView() {
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 })
   const [expanded, setExpanded] = useState(false)
   const [modalLoading, setModalLoading] = useState(false)
+  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set(['filters']))
+
+  const togglePanel = (panel: string) => {
+    setExpandedPanels((prev) => {
+      const next = new Set(prev);
+      if (next.has(panel)) {
+        next.delete(panel);
+      } else {
+        next.add(panel);
+      }
+      return next;
+    });
+  };
 
   const fetchGraph = useCallback(async () => {
     setIsLoading(true)
@@ -259,78 +275,111 @@ export default function GraphView() {
   }, [hoverEdge, hoverNode])
 
   return (
-    <div className="flex-1 h-full flex flex-col px-6 pb-6" style={{ gap: 'var(--space-6)', background: 'var(--bg-primary)' }}>
-      {/* Header Section */}
-      <div className="flex flex-wrap items-center justify-between" style={{ gap: 'var(--space-4)' }}>
-        <div>
-          <h2 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 600, color: 'var(--text-primary)' }}>Graph Explorer</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-            3D force layout with communities and provenance-rich tooltips.
-          </p>
-        </div>
-        <div className="flex items-center" style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-tertiary)', padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-          <InformationCircleIcon className="h-4 w-4" />
-          <span>Hover nodes/edges for TextUnit and document provenance.</span>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap card" style={{ gap: 'var(--space-3)' }}>
-        <div className="flex min-w-[200px] flex-col" style={{ gap: 'var(--space-1)' }}>
-          <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>Community</label>
-          <select
-            value={selectedCommunity}
-            onChange={(event) => setSelectedCommunity(event.target.value)}
-            className="input-field"
-            style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-sm)' }}
-          >
-            <option value="all">All communities</option>
-            {communities.map((community) => (
-              <option key={`${community.community_id}-${community.level}`} value={community.community_id}>
-                Community {community.community_id}
-                {community.level !== undefined ? ` (level ${community.level})` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex min-w-[200px] flex-col" style={{ gap: 'var(--space-1)' }}>
-          <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>Node type</label>
-          <select
-            value={selectedNodeType}
-            onChange={(event) => setSelectedNodeType(event.target.value)}
-            className="input-field"
-            style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-sm)' }}
-          >
-            <option value="all">All types</option>
-            {nodeTypes.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="ml-auto flex items-center" style={{ gap: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-          <span style={{ borderRadius: 'var(--radius-sm)', background: 'var(--bg-tertiary)', padding: 'var(--space-1) var(--space-2)' }}>{graphData.nodes.length} nodes</span>
-          <span style={{ borderRadius: 'var(--radius-sm)', background: 'var(--bg-tertiary)', padding: 'var(--space-1) var(--space-2)' }}>{graphData.edges.length} edges</span>
-          <button
-            type="button"
-            onClick={() => void fetchGraph()}
-            className="button-primary"
-            style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-xs)' }}
-          >
-            Refresh
-          </button>
+    <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+      {/* Header */}
+      <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
+          <div style={{ 
+            width: '40px', 
+            height: '40px', 
+            borderRadius: '8px', 
+            backgroundColor: '#f27a0320',
+            border: '1px solid #f27a03',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <GraphIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Graph Explorer
+            </h1>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              3D force layout with communities and provenance-rich tooltips
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--text-secondary)', padding: '6px 12px', borderRadius: '6px', backgroundColor: 'var(--bg-secondary)' }}>
+            <InformationCircleIcon className="h-4 w-4" />
+            <span>Hover nodes/edges for details</span>
+          </div>
         </div>
       </div>
 
-      {/* Graph Visualization */}
-      <div
-        ref={containerRef}
-        className="flex-1 relative overflow-hidden"
-        style={{ maxWidth: '100%', boxSizing: 'border-box', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', background: 'var(--bg-primary)', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)' }}
-      >
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+        {/* Filters Panel */}
+        <ExpandablePanel
+          title="Filters & Controls"
+          expanded={expandedPanels.has('filters')}
+          onToggle={() => togglePanel('filters')}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end' }}>
+            <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Community</label>
+              <select
+                value={selectedCommunity}
+                onChange={(event) => setSelectedCommunity(event.target.value)}
+                className="input-field"
+                style={{ width: '100%' }}
+              >
+                <option value="all">All communities</option>
+                {communities.map((community) => (
+                  <option key={`${community.community_id}-${community.level}`} value={community.community_id}>
+                    Community {community.community_id}
+                    {community.level !== undefined ? ` (level ${community.level})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Node type</label>
+              <select
+                value={selectedNodeType}
+                onChange={(event) => setSelectedNodeType(event.target.value)}
+                className="input-field"
+                style={{ width: '100%' }}
+              >
+                <option value="all">All types</option>
+                {nodeTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+              <span style={{ fontSize: '0.75rem', padding: '4px 8px', borderRadius: '4px', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+                {graphData.nodes.length} nodes
+              </span>
+              <span style={{ fontSize: '0.75rem', padding: '4px 8px', borderRadius: '4px', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+                {graphData.edges.length} edges
+              </span>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={() => void fetchGraph()}
+                style={{
+                  textTransform: 'none',
+                  backgroundColor: 'var(--accent-primary)',
+                  color: 'white',
+                  fontSize: '0.75rem'
+                }}
+              >
+                Refresh
+              </Button>
+            </div>
+          </div>
+        </ExpandablePanel>
+
+        {/* Graph Visualization */}
+        <div
+          ref={containerRef}
+          className="flex-1 relative overflow-hidden"
+          style={{ minHeight: '400px', borderRadius: '8px', border: '1px solid var(--border)', background: backgroundColorResolved }}
+        >
         {isLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70 text-secondary-50">
             <Loader size={28} label="Loading graph…" />
@@ -369,14 +418,15 @@ export default function GraphView() {
           <div className="pointer-events-none absolute right-4 top-12 z-20 w-80">{hoveredPanel}</div>
         )}
 
-        {/* Expand button */}
-        <button
-          aria-label="Open graph fullscreen"
-          onClick={() => setExpanded(true)}
-          className="absolute top-4 right-4 z-30 rounded bg-white/90 p-2 text-xs font-semibold shadow hover:bg-white dark:bg-secondary-800 dark:text-secondary-100"
-        >
-          Expand
-        </button>
+          {/* Expand button */}
+          <button
+            aria-label="Open graph fullscreen"
+            onClick={() => setExpanded(true)}
+            className="absolute top-4 right-4 z-30 rounded bg-white/90 p-2 text-xs font-semibold shadow hover:bg-white dark:bg-secondary-800 dark:text-secondary-100"
+          >
+            Expand
+          </button>
+        </div>
       </div>
 
       {/* Fullscreen modal */}

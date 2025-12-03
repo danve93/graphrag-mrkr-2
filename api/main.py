@@ -11,7 +11,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from neo4j.exceptions import ServiceUnavailable
 
-from api.routers import chat, database, documents, graph, history, classification, chat_tuning, rag_tuning, jobs
+from api.routers import chat, database, documents, graph, history, classification, chat_tuning, rag_tuning, jobs, prompts, structured_kg, feedback, documentation
 from config.settings import settings
 from api import auth
 from core.singletons import get_graph_db_driver, cleanup_singletons
@@ -128,6 +128,10 @@ app.include_router(classification.router, prefix="/api/classification", tags=["c
 app.include_router(chat_tuning.router, prefix="/api/chat-tuning", tags=["chat-tuning"])
 app.include_router(rag_tuning.router, prefix="/api/rag-tuning", tags=["rag-tuning"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
+app.include_router(structured_kg.router, prefix="/api/structured-kg", tags=["structured-kg"])
+app.include_router(feedback.router, prefix="/api", tags=["feedback"])
+app.include_router(documentation.router, tags=["documentation"])
 
 
 @app.get("/api/health")

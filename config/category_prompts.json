@@ -1,0 +1,62 @@
+{
+  "default": {
+    "retrieval_strategy": "balanced",
+    "generation_template": "Based on the following context, provide a detailed and accurate answer to the user's question. Include specific references to sources when applicable.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer:",
+    "format_instructions": "Provide clear, well-structured responses with proper formatting.",
+    "specificity_level": "detailed"
+  },
+  "installation": {
+    "retrieval_strategy": "step_back",
+    "generation_template": "You are helping a user with installation procedures. Provide clear, step-by-step instructions based on the context below. Include prerequisites, commands, and expected outcomes.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer with numbered steps:",
+    "format_instructions": "Use numbered lists for procedures. Include code blocks for commands. Mention prerequisites upfront.",
+    "specificity_level": "prescriptive"
+  },
+  "configuration": {
+    "retrieval_strategy": "ppr",
+    "generation_template": "You are helping with system configuration. Based on the context below, explain the configuration options, their effects, and recommended values. Include examples where helpful.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer:",
+    "format_instructions": "Use bullet points for options. Include example values in code blocks. Explain implications of choices.",
+    "specificity_level": "detailed"
+  },
+  "troubleshooting": {
+    "retrieval_strategy": "step_back",
+    "generation_template": "You are helping debug an issue. Based on the context below, identify the root cause and provide actionable solutions. Include diagnostic steps and verification methods.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer with:\n1. Likely cause\n2. Solution steps\n3. How to verify fix",
+    "format_instructions": "Structure as: Problem diagnosis, Solution steps (numbered), Verification steps. Include relevant log snippets or error messages.",
+    "specificity_level": "prescriptive"
+  },
+  "api": {
+    "retrieval_strategy": "ppr",
+    "generation_template": "You are documenting API usage. Based on the context below, explain the API endpoint, parameters, request/response formats, and provide usage examples.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer:",
+    "format_instructions": "Include: Endpoint URL, HTTP method, request parameters (with types), response format, code example in JSON or curl.",
+    "specificity_level": "technical"
+  },
+  "conceptual": {
+    "retrieval_strategy": "balanced",
+    "generation_template": "You are explaining technical concepts. Based on the context below, provide a clear explanation that builds understanding from basics to advanced details. Use analogies when helpful.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer:",
+    "format_instructions": "Start with a simple definition. Progress to technical details. Use analogies for complex concepts. Include diagrams or examples if helpful.",
+    "specificity_level": "explanatory"
+  },
+  "quickstart": {
+    "retrieval_strategy": "step_back",
+    "generation_template": "You are providing a quick-start guide. Based on the context below, give a streamlined path to get started quickly. Focus on essential steps only.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer with minimal steps:",
+    "format_instructions": "Keep it brief. Only essential steps. Single line per step. Defer advanced options to later.",
+    "specificity_level": "concise"
+  },
+  "reference": {
+    "retrieval_strategy": "ppr",
+    "generation_template": "You are providing reference documentation. Based on the context below, give comprehensive, accurate details including all parameters, options, and edge cases.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer:",
+    "format_instructions": "Complete parameter lists with types and defaults. Document all options. Include edge cases and limitations.",
+    "specificity_level": "comprehensive"
+  },
+  "example": {
+    "retrieval_strategy": "balanced",
+    "generation_template": "You are providing code examples. Based on the context below, show practical, working examples with explanations of how they work.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer with code examples and explanations:",
+    "format_instructions": "Include complete, runnable code examples. Add inline comments. Explain what the code does after each example.",
+    "specificity_level": "practical"
+  },
+  "best_practices": {
+    "retrieval_strategy": "balanced",
+    "generation_template": "You are advising on best practices. Based on the context below, recommend proven approaches, explain why they work, and highlight common pitfalls to avoid.\n\nContext:\n{context}\n\nQuestion: {query}\n\nAnswer:",
+    "format_instructions": "Structure as: Recommended approach, Why it works, Common mistakes to avoid, When to use alternatives.",
+    "specificity_level": "advisory"
+  }
+}

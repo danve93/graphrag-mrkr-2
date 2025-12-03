@@ -37,6 +37,10 @@ COPY . .
 
 # Create a non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+# Ensure classification reindex script is present (explicit copy in case of .dockerignore rules)
+COPY scripts/reindex_classification.py /app/scripts/reindex_classification.py
+# Add smoke test script for RAG verification
+COPY scripts/smoke_graph_rag.py /app/scripts/smoke_graph_rag.py
 
 # Expose FastAPI port
 EXPOSE 8000

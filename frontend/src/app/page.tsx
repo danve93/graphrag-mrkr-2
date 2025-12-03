@@ -5,10 +5,16 @@ import DocumentView from '@/components/Document/DocumentView'
 import GraphView from '@/components/Graph/GraphView'
 import ChatTuningPanel from '@/components/ChatTuning/ChatTuningPanel'
 import RAGTuningPanel from '@/components/RAGTuning/RAGTuningPanel'
+import CategoriesView from '@/components/Categories/CategoriesView'
+import RoutingView from '@/components/Routing/RoutingView'
+import StructuredKgView from '@/components/StructuredKg/StructuredKgView'
+import DocumentationView from '@/components/Documentation/DocumentationView'
 import Sidebar from '@/components/Sidebar/Sidebar'
+import ViewTransition from '@/components/Utils/ViewTransition'
 import { useEffect, useState } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import { api } from '@/lib/api'
+import { useSwipeable } from 'react-swipeable'
 
 export default function Home() {
   const activeView = useChatStore((state) => state.activeView)
@@ -17,9 +23,9 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const isConnected = useChatStore((s) => s.isConnected)
   const setIsConnected = useChatStore((s) => s.setIsConnected)
-  const DEFAULT_WIDTH = 320
-  const MIN_WIDTH = 260
-  const MAX_WIDTH = 480
+  const DEFAULT_WIDTH = 280
+  const MIN_WIDTH = 240
+  const MAX_WIDTH = 400
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH)
   const [userResized, setUserResized] = useState(false)
   useEffect(() => {
@@ -64,8 +70,25 @@ export default function Home() {
 
   const mainMarginLeft = sidebarOpen ? (sidebarCollapsed ? 72 : sidebarWidth) : 0
 
+  // Swipe gestures for mobile
+  const swipeHandlers = useSwipeable({
+    onSwipedRight: () => {
+      if (window.innerWidth < 1024 && !sidebarOpen) {
+        setSidebarOpen(true);
+      }
+    },
+    onSwipedLeft: () => {
+      if (window.innerWidth < 1024 && sidebarOpen) {
+        setSidebarOpen(false);
+      }
+    },
+    trackMouse: false,
+    trackTouch: true,
+    delta: 50, // Minimum swipe distance in pixels
+  });
+
   return (
-    <div className="h-screen overflow-hidden bg-secondary-50 dark:bg-secondary-900">
+    <div {...swipeHandlers} className="h-screen overflow-hidden bg-secondary-50 dark:bg-secondary-900">
       {/* Connection status is shown in the chat UI via `ConnectionStatus` component */}
       {/* Sidebar (fixed to left edge) */}
       <Sidebar
@@ -83,14 +106,20 @@ export default function Home() {
       />
       {/* Main Content (offset by sidebar) */}
       <main
-        className="h-screen overflow-hidden transition-all duration-300 bg-secondary-50 dark:bg-secondary-900"
-        style={{ marginLeft: `${mainMarginLeft}px` }}
+        className="h-screen overflow-hidden transition-all duration-300 bg-secondary-50 dark:bg-secondary-900 lg:ml-0"
+        style={{ marginLeft: mainMarginLeft > 0 ? `${mainMarginLeft}px` : '0' }}
       >
-        {activeView === 'graph' && <GraphView />}
-        {activeView === 'chatTuning' && <ChatTuningPanel />}
-        {activeView === 'ragTuning' && <RAGTuningPanel />}
-        {activeView === 'chat' && <ChatInterface />}
-        {activeView === 'document' && <DocumentView />}
+        <ViewTransition viewKey={activeView}>
+          {activeView === 'chat' && <ChatInterface />}
+          {activeView === 'document' && <DocumentView />}
+          {activeView === 'graph' && <GraphView />}
+          {activeView === 'categories' && <CategoriesView />}
+          {activeView === 'routing' && <RoutingView />}
+          {activeView === 'structuredKg' && <StructuredKgView />}
+          {activeView === 'ragTuning' && <RAGTuningPanel />}
+          {activeView === 'chatTuning' && <ChatTuningPanel />}
+          {activeView === 'documentation' && <DocumentationView />}
+        </ViewTransition>
       </main>
     </div>
   )

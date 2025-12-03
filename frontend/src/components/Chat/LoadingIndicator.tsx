@@ -16,9 +16,21 @@ const STAGES: Record<string, Stage> = {
     emoji: '',
     color: '',
   },
+  routing: {
+    id: 'routing',
+    label: 'Query Routing',
+    emoji: '',
+    color: '',
+  },
   retrieval: {
     id: 'retrieval',
     label: 'Retrieving Documents',
+    emoji: '',
+    color: '',
+  },
+  consolidation: {
+    id: 'consolidation',
+    label: 'Smart Consolidation',
     emoji: '',
     color: '',
   },
@@ -48,9 +60,22 @@ const STAGES: Record<string, Stage> = {
   },
 }
 
+interface StageUpdate {
+  name: string
+  duration_ms?: number
+  timestamp?: number
+  metadata?: {
+    chunks_retrieved?: number
+    context_items?: number
+    response_length?: number
+    [key: string]: any
+  }
+}
+
 interface LoadingIndicatorProps {
   currentStage?: string
   completedStages?: string[]
+  stageUpdates?: StageUpdate[]
   isLoading?: boolean
   enableQualityScoring?: boolean
 }
@@ -58,6 +83,7 @@ interface LoadingIndicatorProps {
 export default function LoadingIndicator({ 
   currentStage = 'query_analysis',
   completedStages = [],
+  stageUpdates = [],
   isLoading = true,
   enableQualityScoring = true
 }: LoadingIndicatorProps) {
@@ -98,7 +124,15 @@ export default function LoadingIndicator({
   
   const completedStagesPercent = (stageHistory.length / Object.keys(STAGES).length) * 100
   
-  // If not loading, show minimal clean display
+  // Get timing info for current or completed stages
+  const getStageInfo = (stageId: string) => {
+    return stageUpdates.find(s => s.name === stageId)
+  }
+  
+  const currentStageInfo = getStageInfo(displayedStage)
+  const totalDuration = stageUpdates.reduce((sum, s) => sum + (s.duration_ms || 0), 0)
+  
+  // If not loading, show minimal clean display with timing
   if (!isLoading) {
     return (
       <div className="w-full space-y-2">
@@ -110,15 +144,43 @@ export default function LoadingIndicator({
           ></div>
         </div>
 
-        {/* Stage history dots */}
+        {/* Stage history dots with timing */}
         <div className="flex items-center justify-center" style={{ gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           {Object.values(STAGES).map((s) => {
             const isCompleted = isStageCompleted(s.id)
+            const stageInfo = getStageInfo(s.id)
+            const hasTimingInfo = stageInfo && stageInfo.duration_ms !== undefined
+            
+            // Format tooltip with timing info
+            let tooltip = s.label
+            if (hasTimingInfo && stageInfo.duration_ms !== undefined) {
+              tooltip += ` (${stageInfo.duration_ms}ms)`
+              if (stageInfo.metadata?.chunks_retrieved) {
+                tooltip += ` - ${stageInfo.metadata.chunks_retrieved} chunks`
+              }
+              if (stageInfo.metadata?.context_items) {
+                tooltip += ` - ${stageInfo.metadata.context_items} items`
+              }
+              if (stageInfo.metadata?.routing_categories && stageInfo.metadata.routing_categories.length > 0) {
+                const conf = stageInfo.metadata?.routing_confidence
+                const confPct = typeof conf === 'number' ? ` (${(conf * 100).toFixed(0)}% confidence)` : ''
+                const categories = stageInfo.metadata.routing_categories.join(', ')
+                tooltip += ` — Routed to: ${categories}${confPct}`
+                if (stageInfo.metadata?.document_count) {
+                  tooltip += ` — ${stageInfo.metadata.document_count} documents`
+                }
+              } else if (stageInfo.metadata?.routing_category_id) {
+                const conf = stageInfo.metadata?.routing_confidence
+                const confPct = typeof conf === 'number' ? ` ${(conf * 100).toFixed(0)}%` : ''
+                tooltip += ` — Routed to category ${stageInfo.metadata.routing_category_id}${confPct}`
+              }
+            }
+            
             return (
               <div
                 key={s.id}
                 className="cursor-help group relative"
-                title={s.label}
+                title={tooltip}
               >
                 <div
                   style={{
@@ -130,12 +192,19 @@ export default function LoadingIndicator({
                   }}
                 ></div>
                 <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" style={{ padding: 'var(--space-1) var(--space-2)', background: 'var(--gray-800)', color: 'white' }}>
-                  {s.label}
+                  {tooltip}
                 </div>
               </div>
             )
           })}
         </div>
+        
+        {/* Total duration display */}
+        {totalDuration > 0 && (
+          <div className="flex items-center justify-center" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+            <span>Completed in {totalDuration}ms</span>
+          </div>
+        )}
       </div>
     )
   }
@@ -143,28 +212,19 @@ export default function LoadingIndicator({
   // Loading state
   return (
     <div className="w-full">
-      <style>{`
-        .animate-slide-in {
-          animation: slideIn var(--timing-normal) var(--easing-standard);
-        }
-
-        @keyframes slideIn {
-          from {
-            opacity: 0;
-            transform: translateX(-10px);
-          }
-          to {
-            opacity: 1;
-            transform: translateX(0);
-          }
-        }
-      `}</style>
-
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        {/* Current stage with spinner */}
-        <div className="flex items-center animate-slide-in" style={{ gap: 'var(--space-3)' }}>
-          <div className="spinner" style={{ width: '12px', height: '12px' }} />
-          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--text-secondary)' }}>{stage.label}</span>
+        {/* Current stage with spinner and timing info */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center" style={{ gap: 'var(--space-3)' }}>
+            <div className="spinner" style={{ width: '12px', height: '12px' }} />
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--text-secondary)' }}>{stage.label}</span>
+          </div>
+          {currentStageInfo?.metadata && (
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+              {currentStageInfo.metadata.chunks_retrieved && `${currentStageInfo.metadata.chunks_retrieved} chunks`}
+              {currentStageInfo.metadata.context_items && `${currentStageInfo.metadata.context_items} items`}
+            </span>
+          )}
         </div>
 
         {/* Progress bar */}
@@ -179,17 +239,37 @@ export default function LoadingIndicator({
           ></div>
         </div>
 
-        {/* Stage history dots */}
+        {/* Stage history dots with timing */}
         <div className="flex items-center justify-center" style={{ gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           {Object.values(STAGES).map((s) => {
             const isCompleted = isStageCompleted(s.id)
             const isCurrent = s.id === displayedStage
+            const stageInfo = getStageInfo(s.id)
+            
+            // Format tooltip with timing info
+            let tooltip = s.label
+            if (stageInfo && stageInfo.duration_ms !== undefined) {
+              tooltip += ` (${stageInfo.duration_ms}ms)`
+              if (stageInfo.metadata?.routing_categories && stageInfo.metadata.routing_categories.length > 0) {
+                const conf = stageInfo.metadata?.routing_confidence
+                const confPct = typeof conf === 'number' ? ` (${(conf * 100).toFixed(0)}% confidence)` : ''
+                const categories = stageInfo.metadata.routing_categories.join(', ')
+                tooltip += ` — Routed to: ${categories}${confPct}`
+                if (stageInfo.metadata?.document_count) {
+                  tooltip += ` — ${stageInfo.metadata.document_count} documents`
+                }
+              } else if (stageInfo.metadata?.routing_category_id) {
+                const conf = stageInfo.metadata?.routing_confidence
+                const confPct = typeof conf === 'number' ? ` ${(conf * 100).toFixed(0)}%` : ''
+                tooltip += ` — Routed to category ${stageInfo.metadata.routing_category_id}${confPct}`
+              }
+            }
 
             return (
               <div
                 key={s.id}
                 className="cursor-help group relative"
-                title={s.label}
+                title={tooltip}
               >
                 <div
                   style={{
@@ -203,7 +283,7 @@ export default function LoadingIndicator({
                   }}
                 ></div>
                 <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" style={{ padding: 'var(--space-1) var(--space-2)', background: 'var(--gray-800)', color: 'white' }}>
-                  {s.label}
+                  {tooltip}
                 </div>
               </div>
             )

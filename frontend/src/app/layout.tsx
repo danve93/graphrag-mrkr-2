@@ -3,6 +3,8 @@ import './globals.css'
 import ToastContainer from '@/components/Toast/ToastContainer'
 import { ThemeProvider } from '@/components/Theme/ThemeProvider'
 import StatusIndicator from '@/components/Theme/StatusIndicator'
+import BottomDock from '@/components/Navigation/BottomDock'
+import KeyboardShortcutHint from '@/components/Utils/KeyboardShortcutHint'
 import fs from 'fs'
 import path from 'path'
 import BrandingProvider from '@/components/Branding/BrandingProvider'
@@ -39,6 +41,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <BrandingProvider branding={branding}>
             <StatusIndicator />
             {children}
+            <BottomDock />
+            <KeyboardShortcutHint />
             <ToastContainer />
           </BrandingProvider>
         </ThemeProvider>

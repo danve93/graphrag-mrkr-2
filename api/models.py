@@ -79,6 +79,10 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="List of document labels/names for UI display",
     )
+    category_filter: Optional[List[str]] = Field(
+        default=None,
+        description="Override routing to specific categories (bypasses automatic routing)",
+    )
     context_hashtags: List[str] = Field(
         default_factory=list,
         description="List of hashtags used to filter documents",
@@ -97,6 +101,14 @@ class ChatResponse(BaseModel):
     context_documents: List[str] = Field(
         default_factory=list,
         description="Document IDs used to constrain retrieval",
+    )
+    stages: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Pipeline stages with timing metadata",
+    )
+    total_duration_ms: Optional[int] = Field(
+        None,
+        description="Total pipeline duration in milliseconds",
     )
 
 

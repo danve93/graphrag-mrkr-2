@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "categories": {
+    "install": {
+      "title": "Installation",
+      "description": "Setup, prerequisites, installation steps, environment configuration",
+      "keywords": ["install", "setup", "prerequisite", "configure", "deployment"],
+      "difficulty": "intermediate"
+    },
+    "configure": {
+      "title": "Configuration",
+      "description": "Service configuration, options, tuning, and best practices",
+      "keywords": ["config", "settings", "option", "tuning", "parameter"],
+      "difficulty": "intermediate"
+    },
+    "admin": {
+      "title": "Administration",
+      "description": "Operational tasks, users, permissions, maintenance",
+      "keywords": ["admin", "user", "permission", "maintenance", "backup"],
+      "difficulty": "intermediate"
+    },
+    "troubleshoot": {
+      "title": "Troubleshooting",
+      "description": "Errors, diagnostics, logs, known issues, fixes",
+      "keywords": ["error", "fail", "log", "diagnostic", "fix", "issue"],
+      "difficulty": "advanced"
+    },
+    "general": {
+      "title": "General",
+      "description": "Uncategorized or broad topics",
+      "keywords": ["overview", "general", "about"],
+      "difficulty": "beginner"
+    }
+  }
+}

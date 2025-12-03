@@ -37,6 +37,7 @@ export const api = {
         temperature?: number
         top_k?: number
       }
+      category_filter?: string[]
     },
     options?: { signal?: AbortSignal }
   ) {
@@ -302,6 +303,19 @@ export const api = {
     return response.json()
   },
 
+  // New: entity summary (counts grouped by type)
+  async getDocumentEntitySummary(documentId: string): Promise<{
+    document_id: string
+    total: number
+    groups: Array<{ type: string; count: number }>
+  }> {
+    const response = await fetch(`${API_URL}/api/documents/${documentId}/entity-summary`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
   // New: paginated similarities
   async getDocumentSimilaritiesPaginated(documentId: string, options?: {
     limit?: number
@@ -324,6 +338,26 @@ export const api = {
     if (options?.exactCount) query.append('exact_count', String(options.exactCount))
     const qs = query.toString()
     const response = await fetch(`${API_URL}/api/documents/${documentId}/similarities${qs ? `?${qs}` : ''}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // New: paginated chunks
+  async getDocumentChunksPaginated(documentId: string, options?: { limit?: number; offset?: number }): Promise<{
+    document_id: string
+    total: number
+    limit: number
+    offset: number
+    has_more: boolean
+    chunks: DocumentChunk[]
+  }> {
+    const query = new URLSearchParams()
+    if (options?.limit) query.append('limit', String(options.limit))
+    if (options?.offset) query.append('offset', String(options.offset))
+    const qs = query.toString()
+    const response = await fetch(`${API_URL}/api/documents/${documentId}/chunks${qs ? `?${qs}` : ''}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -374,13 +408,22 @@ export const api = {
   },
 
   async getDocumentChunks(documentId: string): Promise<DocumentChunk[]> {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/chunks`)
-    if (!response.ok) {
-      throw new Error(`API error: ${response.statusText}`)
+    // DEPRECATED: This method fetches ALL chunks which can be very slow for large documents.
+    // Use getDocumentChunksPaginated() instead for better performance.
+    console.warn(
+      `[api.getDocumentChunks] Fetching all chunks for document ${documentId}. ` +
+      'This may be slow for large documents. Use getDocumentChunksPaginated() instead.'
+    )
+    const pageSize = 200
+    let offset = 0
+    let all: DocumentChunk[] = []
+    while (true) {
+      const page = await this.getDocumentChunksPaginated(documentId, { limit: pageSize, offset })
+      if (Array.isArray(page.chunks)) all = all.concat(page.chunks)
+      if (!page.has_more) break
+      offset += pageSize
     }
-
-    const payload = await response.json()
-    return Array.isArray(payload?.chunks) ? payload.chunks : []
+    return all
   },
 
   async getDocumentText(documentId: string): Promise<DocumentTextPayload> {
@@ -498,6 +541,202 @@ export const api = {
     } catch (error) {
       return false
     }
+  },
+
+  // Category Management
+  async getCategories(approvedOnly: boolean = false) {
+    const response = await fetch(`${API_URL}/api/classification/categories?approved_only=${approvedOnly}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async generateCategories(maxCategories: number = 10, sampleSize: number = 100) {
+    const response = await fetch(`${API_URL}/api/classification/categories/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_categories: maxCategories, sample_size: sampleSize })
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async createCategory(data: {
+    name: string
+    description: string
+    keywords: string[]
+    patterns?: string[]
+    parent_id?: string | null
+  }) {
+    const response = await fetch(`${API_URL}/api/classification/categories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async approveCategory(categoryId: string) {
+    const response = await fetch(`${API_URL}/api/classification/categories/${categoryId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async deleteCategory(categoryId: string) {
+    const response = await fetch(`${API_URL}/api/classification/categories/${categoryId}`, {
+      method: 'DELETE'
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async updateCategory(categoryId: string, data: { name?: string; description?: string; keywords?: string[]; patterns?: string[]; parent_id?: string | null }) {
+    const response = await fetch(`${API_URL}/api/classification/categories/${categoryId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async autoCategorizeDocuments(batchSize: number = 10) {
+    const response = await fetch(`${API_URL}/api/classification/categories/auto-assign?batch_size=${batchSize}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // Category Prompts Management
+  async getPrompts() {
+    const response = await fetch(`${API_URL}/api/prompts/`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async getPrompt(category: string) {
+    const response = await fetch(`${API_URL}/api/prompts/${category}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async createPrompt(data: {
+    category: string
+    retrieval_strategy: string
+    generation_template: string
+    format_instructions: string
+    specificity_level: string
+  }) {
+    const response = await fetch(`${API_URL}/api/prompts/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async updatePrompt(category: string, data: {
+    retrieval_strategy: string
+    generation_template: string
+    format_instructions: string
+    specificity_level: string
+  }) {
+    const response = await fetch(`${API_URL}/api/prompts/${category}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async deletePrompt(category: string) {
+    const response = await fetch(`${API_URL}/api/prompts/${category}`, {
+      method: 'DELETE'
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async reloadPrompts() {
+    const response = await fetch(`${API_URL}/api/prompts/reload`, {
+      method: 'POST'
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // Structured KG endpoints
+  async executeStructuredQuery(query: string, context?: Record<string, any>) {
+    const response = await fetch(`${API_URL}/api/structured-kg/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, context })
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async getStructuredKGConfig() {
+    const response = await fetch(`${API_URL}/api/structured-kg/config`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async getStructuredKGSchema() {
+    const response = await fetch(`${API_URL}/api/structured-kg/schema`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async validateCypher(cypher: string) {
+    const response = await fetch(`${API_URL}/api/structured-kg/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cypher })
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
   },
 
 }

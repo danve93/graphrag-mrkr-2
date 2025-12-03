@@ -350,6 +350,72 @@ class GraphDB:
                 metadata=metadata,
             )
 
+    def list_document_ids(self, limit: Optional[int] = None) -> List[str]:
+        """Return list of document ids."""
+        with self.session_scope() as session:
+            q = "MATCH (d:Document) RETURN d.id AS id"
+            if limit:
+                q += " LIMIT $limit"
+            result = session.run(q, limit=limit)
+            return [r["id"] for r in result]
+
+    def get_document_metadata(self, doc_id: str) -> Dict[str, Any]:
+        """Return document properties as a dict."""
+        with self.session_scope() as session:
+            rec = session.run(
+                "MATCH (d:Document {id: $doc_id}) RETURN d AS doc",
+                doc_id=doc_id,
+            ).single()
+            if not rec:
+                return {}
+            node = rec["doc"]
+            try:
+                return dict(node)
+            except Exception:
+                return {}
+
+    def run_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a read query and return list of record dictionaries."""
+        with self.session_scope() as session:
+            result = session.run(query, **(params or {}))
+            return [dict(record) for record in result]
+
+    def get_document_text(self, doc_id: str, max_chars: int = 10000) -> str:
+        """Return concatenated chunk contents for a document (truncated)."""
+        with self.session_scope() as session:
+            res = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
+                RETURN c.content AS content
+                ORDER BY c.chunk_index ASC
+                """,
+                doc_id=doc_id,
+            )
+            parts = []
+            total = 0
+            for r in res:
+                s = r["content"] or ""
+                if not s:
+                    continue
+                need = max_chars - total
+                if need <= 0:
+                    break
+                parts.append(s[:need])
+                total += len(s[:need])
+            return "\n\n".join(parts)
+
+    def update_chunk_metadata(self, chunk_id: str, metadata: Dict[str, Any]) -> None:
+        """Update chunk metadata (merge properties)."""
+        with self.session_scope() as session:
+            session.run(
+                """
+                MATCH (c:Chunk {id: $chunk_id})
+                SET c += $metadata
+                """,
+                chunk_id=chunk_id,
+                metadata=metadata,
+            )
+
     def update_document_summary(
         self,
         doc_id: str,
@@ -1648,7 +1714,100 @@ class GraphDB:
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Chunk) ON (c.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.name)")
+            
+            # Create fulltext index on chunk content for BM25-style keyword search
+            try:
+                session.run(
+                    "CREATE FULLTEXT INDEX chunk_content_fulltext IF NOT EXISTS "
+                    "FOR (c:Chunk) ON EACH [c.content]"
+                )
+                logger.info("Chunk fulltext index created successfully")
+            except Exception as e:
+                logger.warning(f"Failed to create chunk fulltext index (may already exist): {e}")
+            
             logger.info("Database indexes created successfully")
+
+    def chunk_keyword_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        allowed_document_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform BM25-style keyword search on chunk content using fulltext index.
+
+        Args:
+            query: Search query text
+            top_k: Maximum number of results to return
+            allowed_document_ids: Optional list of document IDs to restrict search
+
+        Returns:
+            List of chunks with keyword match scores
+        """
+        try:
+            with self.session_scope() as session:
+                # Build Cypher query with optional document filter
+                if allowed_document_ids:
+                    cypher = """
+                    CALL db.index.fulltext.queryNodes('chunk_content_fulltext', $query)
+                    YIELD node, score
+                    MATCH (d:Document)-[:HAS_CHUNK]->(node)
+                    WHERE d.id IN $allowed_doc_ids
+                    RETURN node.id AS chunk_id,
+                           node.content AS content,
+                           node.chunk_index AS chunk_index,
+                           d.id AS document_id,
+                           d.filename AS document_name,
+                           d.original_filename AS filename,
+                           score AS keyword_score
+                    ORDER BY score DESC
+                    LIMIT $limit
+                    """
+                    result = session.run(
+                        cypher,
+                        query=query,
+                        allowed_doc_ids=allowed_document_ids,
+                        limit=top_k,
+                    )
+                else:
+                    cypher = """
+                    CALL db.index.fulltext.queryNodes('chunk_content_fulltext', $query)
+                    YIELD node, score
+                    MATCH (d:Document)-[:HAS_CHUNK]->(node)
+                    RETURN node.id AS chunk_id,
+                           node.content AS content,
+                           node.chunk_index AS chunk_index,
+                           d.id AS document_id,
+                           d.filename AS document_name,
+                           d.original_filename AS filename,
+                           score AS keyword_score
+                    ORDER BY score DESC
+                    LIMIT $limit
+                    """
+                    result = session.run(cypher, query=query, limit=top_k)
+
+                chunks = []
+                for record in result:
+                    chunk = {
+                        "chunk_id": record["chunk_id"],
+                        "content": record["content"],
+                        "chunk_index": record["chunk_index"],
+                        "document_id": record["document_id"],
+                        "document_name": record["document_name"],
+                        "filename": record["filename"],
+                        "keyword_score": float(record["keyword_score"]),
+                    }
+                    chunks.append(chunk)
+
+                logger.info(
+                    "Keyword search returned %d chunks (restricted=%s)",
+                    len(chunks),
+                    bool(allowed_document_ids),
+                )
+                return chunks
+
+        except Exception as e:
+            logger.error(f"Keyword search failed: {e}")
+            return []
 
     # Entity-related methods
 

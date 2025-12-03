@@ -2,7 +2,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { InformationCircleIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline'
+import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import { Button } from '@mui/material'
+import { Tune as TuneIcon } from '@mui/icons-material'
+import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Tooltip from '@/components/Utils/Tooltip'
 import Loader from '@/components/Utils/Loader'
 import { API_URL } from '@/lib/api'
@@ -54,6 +57,26 @@ export default function RAGTuningPanel() {
     loadConfig()
   }, [])
 
+  // Listen for section selection from sidebar
+  useEffect(() => {
+    const handleSectionSelect = (event: CustomEvent<string>) => {
+      const sectionId = event.detail;
+      const element = document.getElementById(sectionId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // Expand the section if it's not already expanded
+        if (!expandedSections.has(sectionId)) {
+          setExpandedSections((prev) => new Set([...prev, sectionId]));
+        }
+      }
+    };
+
+    window.addEventListener('rag-tuning-section-select', handleSectionSelect as EventListener);
+    return () => {
+      window.removeEventListener('rag-tuning-section-select', handleSectionSelect as EventListener);
+    };
+  }, [expandedSections])
+
   const loadConfig = async () => {
     try {
       setIsLoading(true)
@@ -64,10 +87,12 @@ export default function RAGTuningPanel() {
       }
       const data = await response.json()
       setConfig(data)
-      // Expand first section by default
+      // Expand default and first section by default
+      const defaultSections = ['default']
       if (data.sections && data.sections.length > 0) {
-        setExpandedSections(new Set([data.sections[0].key]))
+        defaultSections.push(data.sections[0].key)
       }
+      setExpandedSections(new Set(defaultSections))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load configuration')
     } finally {
@@ -210,10 +235,47 @@ export default function RAGTuningPanel() {
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
         {/* Header */}
-          <div style={{ borderBottom: '1px solid var(--border)', padding: '0 var(--space-6) var(--space-6)' }}>
-        <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
-          RAG Tuning
-        </h1>
+          <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
+          <div style={{ 
+            width: '40px', 
+            height: '40px', 
+            borderRadius: '8px', 
+            backgroundColor: '#f27a0320',
+            border: '1px solid #f27a03',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <TuneIcon style={{ fontSize: '24px', color: '#f27a03' }} />
+          </div>
+          <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
+            RAG Tuning
+          </h1>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <Button
+              size="small"
+              onClick={handleReset}
+              disabled={isSaving}
+              style={{ textTransform: 'none', color: 'var(--text-secondary)' }}
+            >
+              Reset
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={handleSave}
+              disabled={isSaving}
+              style={{
+                textTransform: 'none',
+                backgroundColor: 'var(--accent-primary)',
+                color: 'white',
+              }}
+            >
+              {isSaving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </div>
+        </div>
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           Configure document ingestion and entity extraction behavior. Changes apply to newly ingested documents only.
         </p>
@@ -236,75 +298,75 @@ export default function RAGTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: '0 var(--space-6) var(--space-6)' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {/* Default LLM Model */}
-        <div style={{ marginBottom: 'var(--space-12)', paddingBottom: 'var(--space-8)', borderBottom: '1px solid var(--border)' }}>
-          <h2 className="font-display" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 'var(--space-6)' }}>
-            Default Configuration
-          </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-            <label style={{ fontSize: 'var(--text-base)', fontWeight: 500, color: 'var(--text-primary)' }}>
-              LLM Model
-            </label>
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-2)' }}>
-              Used for all ingestion operations unless overridden in specific stages below
-            </p>
-            <select
-              value={config.default_llm_model}
-              onChange={(e) => handleDefaultModelChange(e.target.value)}
-              className="input-field"
-              style={{ maxWidth: '400px' }}
-            >
-              {LLM_MODEL_OPTIONS.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
+        <div id="default" style={{ scrollMarginTop: '24px' }}>
+        <ExpandablePanel
+          title="Default Configuration"
+          expanded={expandedSections.has('default')}
+          onToggle={() => toggleSection('default')}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                LLM Model
+              </label>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                Used for all ingestion operations unless overridden in specific stages below
+              </p>
+              <select
+                value={config.default_llm_model}
+                onChange={(e) => handleDefaultModelChange(e.target.value)}
+                className="input-field"
+                style={{ width: '100%' }}
+              >
+                {LLM_MODEL_OPTIONS.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
+        </ExpandablePanel>
         </div>
 
         {/* Sections */}
-        {config.sections.map((section, idx) => {
+        {config.sections.map((section) => {
           const effectiveModel = section.llm_override_value || config.default_llm_model
 
           return (
-            <div key={section.key} style={{ marginBottom: 'var(--space-12)', paddingBottom: idx < config.sections.length - 1 ? 'var(--space-8)' : 0, borderBottom: idx < config.sections.length - 1 ? '1px solid var(--border)' : 'none' }}>
-              {/* Section Header */}
-              <div style={{ marginBottom: 'var(--space-6)' }}>
-                <h2 className="font-display" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                  {section.label}
-                </h2>
-                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginTop: 'var(--space-2)' }}>
-                  {section.description}
-                </p>
-              </div>
-
-              {/* Section Content */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+            <div key={section.key} id={section.key} style={{ scrollMarginTop: '24px' }}>
+            <ExpandablePanel
+              title={section.label}
+              expanded={expandedSections.has(section.key)}
+              onToggle={() => toggleSection(section.key)}
+            >
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                {section.description}
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {/* LLM Override */}
                 {section.llm_override_enabled && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                    <label style={{ fontSize: 'var(--text-base)', fontWeight: 500, color: 'var(--text-primary)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
                       LLM Model Override
                     </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <select
-                        value={section.llm_override_value || ''}
-                        onChange={(e) => handleSectionLLMOverride(section.key, e.target.value || null)}
-                        className="input-field"
-                        style={{ maxWidth: '400px' }}
-                      >
-                        <option value="">(use default) — {config.default_llm_model}</option>
-                        {LLM_MODEL_OPTIONS.map((model) => (
-                          <option key={model} value={model}>
+                    <select
+                      value={section.llm_override_value || ''}
+                      onChange={(e) => handleSectionLLMOverride(section.key, e.target.value || null)}
+                      className="input-field"
+                      style={{ width: '100%' }}
+                    >
+                      <option value="">(use default) — {config.default_llm_model}</option>
+                      {LLM_MODEL_OPTIONS.map((model) => (
+                        <option key={model} value={model}>
                             {model}
                           </option>
                         ))}
                       </select>
-                    </div>
                     {section.llm_override_value && (
-                      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--accent-primary)' }}>
+                      <p style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>
                         ✓ Override active: using {effectiveModel}
                       </p>
                     )}
@@ -313,21 +375,21 @@ export default function RAGTuningPanel() {
 
                 {/* Parameters */}
                 {section.parameters.map((param) => (
-                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                    <div className="flex items-center" style={{ gap: 'var(--space-2)' }}>
-                      <label style={{ fontSize: 'var(--text-base)', fontWeight: 500, color: 'var(--text-primary)' }}>
+                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div className="flex items-center" style={{ gap: '8px' }}>
+                      <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
                         {param.label}
                       </label>
                       <Tooltip content={param.tooltip}>
                         <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
-                          <InformationCircleIcon style={{ width: '18px', height: '18px' }} />
+                          <InformationCircleIcon style={{ width: '16px', height: '16px' }} />
                         </button>
                       </Tooltip>
                     </div>
 
                     {param.type === 'slider' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontSize: 'var(--text-sm)', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
                           {param.value}
                         </span>
                         <input
@@ -338,7 +400,7 @@ export default function RAGTuningPanel() {
                           value={param.value as number}
                           onChange={(e) => handleParameterChange(section.key, param.key, parseFloat(e.target.value))}
                           className="slider"
-                          style={{ flex: 1, maxWidth: '500px' }}
+                          style={{ flex: 1 }}
                           title={String(param.value)}
                         />
                       </div>
@@ -353,29 +415,27 @@ export default function RAGTuningPanel() {
                         value={param.value as number}
                         onChange={(e) => handleParameterChange(section.key, param.key, parseInt(e.target.value))}
                         className="input-field"
-                        style={{ maxWidth: '200px' }}
+                        style={{ width: '100%' }}
                       />
                     )}
 
                     {param.type === 'select' && param.options && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                        <select
-                          value={String(param.value)}
-                          onChange={(e) => handleParameterChange(section.key, param.key, e.target.value)}
-                          className="input-field"
-                          style={{ maxWidth: '400px' }}
-                        >
-                          {param.options.map((opt) => (
-                            <option key={opt} value={opt}>
-                              {opt}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                      <select
+                        value={String(param.value)}
+                        onChange={(e) => handleParameterChange(section.key, param.key, e.target.value)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      >
+                        {param.options.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
                     )}
 
                     {param.type === 'toggle' && (
-                      <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <button
                           onClick={() => handleParameterChange(section.key, param.key, !param.value)}
                           className={`relative inline-flex h-6 w-11 items-center transition-colors ${
@@ -394,7 +454,7 @@ export default function RAGTuningPanel() {
                             }}
                           />
                         </button>
-                        <span style={{ marginLeft: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                           {param.value ? 'Enabled' : 'Disabled'}
                         </span>
                       </div>
@@ -402,27 +462,10 @@ export default function RAGTuningPanel() {
                   </div>
                 ))}
               </div>
+            </ExpandablePanel>
             </div>
           )
         })}
-      </div>
-
-      {/* Footer Actions */}
-      <div className="flex" style={{ borderTop: '1px solid var(--border)', padding: 'var(--space-6)', gap: 'var(--space-4)' }}>
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex-1 button-primary"
-        >
-          {isSaving ? <Loader size={14} label="Saving..." /> : 'Save Configuration'}
-        </button>
-        <button
-          onClick={handleReset}
-          disabled={isSaving}
-          className="button-secondary"
-        >
-          Reset
-        </button>
       </div>
     </div>
   )

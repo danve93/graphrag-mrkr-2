@@ -86,3 +86,33 @@ fi; \
 NEO4J_URI=bolt://localhost:7687 bash scripts/wait_for_services.sh echo ok; \
 NEO4J_URI=bolt://localhost:7687 pytest -q tests/e2e/test_full_pipeline.py; \
 docker compose -f docker-compose.e2e.yml down'
+
+# Benchmark and performance testing targets
+.PHONY: bench bench-ttft bench-e2e bench-breakdown bench-compare test-performance
+
+bench:
+	@echo "Running full latency benchmark suite..."
+	@./scripts/bench_latency.sh --benchmark all
+
+bench-ttft:
+	@echo "Running TTFT (Time To First Token) benchmark..."
+	@./scripts/bench_latency.sh --benchmark ttft
+
+bench-e2e:
+	@echo "Running end-to-end latency benchmark..."
+	@./scripts/bench_latency.sh --benchmark e2e
+
+bench-breakdown:
+	@echo "Running latency breakdown benchmark (retrieval vs generation)..."
+	@./scripts/bench_latency.sh --benchmark breakdown
+
+bench-compare:
+	@if [ -z "$(PREV)" ]; then \
+		echo "Error: PREV variable not set. Usage: make bench-compare PREV=path/to/previous_results.json"; \
+		exit 1; \
+	fi
+	@echo "Running benchmark and comparing with previous results..."
+	@./scripts/bench_latency.sh --benchmark all --compare $(PREV)
+
+test-performance: bench
+	@echo "Performance tests complete. Check benchmark_results.json for details."

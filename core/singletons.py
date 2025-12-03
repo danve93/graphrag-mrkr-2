@@ -304,6 +304,50 @@ def get_response_cache() -> TTLCache:
         return _response_cache
 
 
+def clear_response_cache() -> None:
+    """Clear and reset the response cache safely.
+
+    If the cache exists, clears entries and reinitializes the singleton
+    to ensure subsequent calls get a fresh TTLCache instance. Records
+    metrics when available.
+    """
+    global _response_cache
+    try:
+        with _response_lock:
+            if _response_cache is not None:
+                try:
+                    _response_cache.clear()
+                except Exception:
+                    pass
+                _response_cache = None
+            # Recreate cache instance so callers immediately have an available cache
+            try:
+                _ = get_response_cache()
+            except Exception:
+                pass
+        try:
+            # Lazy import to avoid circular deps at module import time
+            from core.cache_metrics import cache_metrics as _metrics
+            _metrics.record_response_invalidation()
+        except Exception:
+            pass
+        logger.info("Response cache cleared and reinitialized")
+    except Exception:
+        logger.warning("Failed to clear response cache")
+
+    with _response_lock:
+        if _response_cache is not None:
+            return _response_cache
+
+        maxsize = settings.response_cache_size
+        ttl = settings.response_cache_ttl
+
+        _response_cache = TTLCache(maxsize=maxsize, ttl=ttl)
+        logger.info(f"Initialized response cache (size={maxsize}, ttl={ttl}s)")
+
+        return _response_cache
+
+
 def _get_key_lock(key: str) -> threading.Lock:
     """Return a persistent lock object for the given cache key.
 
@@ -446,8 +490,41 @@ def hash_retrieval_params(
     chunk_weight: float,
     entity_weight: float,
     path_weight: float,
+    use_multi_hop: bool = False,
+    max_hops: Optional[int] = None,
+    beam_size: Optional[int] = None,
+    restrict_to_context: bool = False,
+    allowed_document_ids: Optional[list] = None,
+    embedding_model: Optional[str] = None,
+    enable_rrf: bool = False,
+    flashrank_enabled: bool = False,
+    routing_categories: Optional[list] = None,
 ) -> str:
-    """Generate cache key for retrieval parameters."""
+    """Generate cache key for retrieval parameters.
+    
+    Includes all parameters that affect retrieval results to ensure proper
+    cache isolation. This prevents cache hits when parameters differ.
+    
+    Args:
+        query: Search query (should be contextualized for follow-ups)
+        mode: Retrieval mode (hybrid, chunk, entity, etc.)
+        top_k: Number of results to return
+        chunk_weight: Weight for chunk-based retrieval
+        entity_weight: Weight for entity-based retrieval
+        path_weight: Weight for path-based retrieval
+        use_multi_hop: Whether multi-hop reasoning is enabled
+        max_hops: Maximum hops for multi-hop reasoning
+        beam_size: Beam size for multi-hop reasoning
+        restrict_to_context: Whether to restrict to context documents
+        allowed_document_ids: List of allowed document IDs (for context restriction)
+        embedding_model: Embedding model name (affects vector similarity)
+        enable_rrf: Whether RRF fusion is enabled
+        flashrank_enabled: Whether FlashRank reranking is enabled
+        routing_categories: List of routing categories (affects document filtering)
+    
+    Returns:
+        MD5 hash of all parameters
+    """
     key_parts = [
         query,
         mode,
@@ -455,6 +532,15 @@ def hash_retrieval_params(
         f"{chunk_weight:.2f}",
         f"{entity_weight:.2f}" if entity_weight else "None",
         f"{path_weight:.2f}" if path_weight else "None",
+        str(use_multi_hop),
+        str(max_hops) if max_hops is not None else "None",
+        str(beam_size) if beam_size is not None else "None",
+        str(restrict_to_context),
+        ",".join(sorted(allowed_document_ids)) if allowed_document_ids else "None",
+        embedding_model or "default",
+        str(enable_rrf),
+        str(flashrank_enabled),
+        ",".join(sorted(routing_categories)) if routing_categories else "None",
     ]
     key = ":".join(key_parts)
     return hashlib.md5(key.encode('utf-8')).hexdigest()

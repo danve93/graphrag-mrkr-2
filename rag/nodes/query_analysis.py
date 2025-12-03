@@ -27,20 +27,23 @@ def analyze_query(
         # Check if this is a follow-up question
         is_follow_up = False
         needs_context = False
-        context_query = query  # The enriched query with context if needed
-
-        if chat_history and len(chat_history) >= 2:
-            # Detect follow-up questions using LLM
-            follow_up_detection = _detect_follow_up_question(query, chat_history)
-            is_follow_up = follow_up_detection.get("is_follow_up", False)
-            needs_context = follow_up_detection.get("needs_context", False)
-
-            if is_follow_up and needs_context:
-                # Create a contextualized version of the query
-                context_query = _create_contextualized_query(query, chat_history)
-                logger.info(
-                    f"Follow-up question detected. Original: '{query}' -> Contextualized: '{context_query}'"
-                )
+        context_query = query  # Always use original query for retrieval
+        
+        # DISABLED: Contextualization was making retrieval worse by rephrasing queries
+        # The chat history is already passed to the LLM during generation, so it has context
+        # Let retrieval work with the user's exact words for better matching
+        # if chat_history and len(chat_history) >= 2:
+        #     # Detect follow-up questions using LLM
+        #     follow_up_detection = _detect_follow_up_question(query, chat_history)
+        #     is_follow_up = follow_up_detection.get("is_follow_up", False)
+        #     needs_context = follow_up_detection.get("needs_context", False)
+        #
+        #     if is_follow_up and needs_context:
+        #         # Create a contextualized version of the query
+        #         context_query = _create_contextualized_query(query, chat_history)
+        #         logger.info(
+        #             f"Follow-up question detected. Original: '{query}' -> Contextualized: '{context_query}'"
+        #         )
 
         # Use LLM to analyze the query (using contextualized version if needed)
         analysis_result = llm_manager.analyze_query(context_query)
@@ -58,6 +61,9 @@ def analyze_query(
             "analysis_text": analysis_result.get("analysis", ""),
             "requires_reasoning": False,
             "requires_multiple_sources": False,
+            "suggested_strategy": "balanced",  # balanced, entity_focused, keyword_focused
+            "confidence": 0.7,  # confidence in query type classification
+            "expanded_terms": [],  # for optional query expansion
         }
 
         # Simple heuristics to enhance analysis (use contextualized query for better analysis)
@@ -223,9 +229,14 @@ def analyze_query(
 
         analysis["multi_hop_recommended"] = multi_hop_beneficial
 
+        # Determine suggested retrieval strategy
+        strategy, confidence = _determine_retrieval_strategy(analysis, query_lower)
+        analysis["suggested_strategy"] = strategy
+        analysis["confidence"] = confidence
+
         logger.info(
             f"Query analysis completed: {analysis['query_type']}, {len(key_concepts)} concepts, "
-            f"multi-hop recommended: {multi_hop_beneficial}, is_follow_up: {is_follow_up}"
+            f"multi-hop recommended: {multi_hop_beneficial}, strategy: {strategy}, is_follow_up: {is_follow_up}"
         )
         return analysis
 
@@ -243,8 +254,48 @@ def analyze_query(
             "analysis_text": "",
             "requires_reasoning": False,
             "requires_multiple_sources": False,
+            "suggested_strategy": "balanced",
+            "confidence": 0.5,
+            "expanded_terms": [],
             "error": str(e),
         }
+
+
+def _determine_retrieval_strategy(analysis: Dict[str, Any], query_lower: str) -> tuple[str, float]:
+    """
+    Determine the optimal retrieval strategy based on query characteristics.
+    
+    Returns:
+        Tuple of (strategy, confidence)
+        - strategy: 'entity_focused', 'keyword_focused', or 'balanced'
+        - confidence: float between 0 and 1
+    """
+    query_type = analysis["query_type"]
+    complexity = analysis["complexity"]
+    key_concepts = analysis["key_concepts"]
+    
+    # Entity-focused strategy for relationship and analytical queries
+    if query_type in ["comparative", "analytical"]:
+        return ("entity_focused", 0.8)
+    
+    # Keyword-focused for exact-term lookups (version numbers, codes, specific names)
+    if any(word in query_lower for word in ["version", "code", "id", "number", "exact"]):
+        return ("keyword_focused", 0.75)
+    
+    # Keyword-focused for procedural how-to queries
+    if query_type == "factual" and any(word in query_lower for word in ["how to", "steps", "procedure", "install", "configure"]):
+        return ("keyword_focused", 0.7)
+    
+    # Entity-focused for relationship questions
+    if any(word in query_lower for word in ["relationship", "connection", "related to", "between"]):
+        return ("entity_focused", 0.85)
+    
+    # Balanced for simple factual queries
+    if query_type == "factual" and complexity == "simple":
+        return ("balanced", 0.65)
+    
+    # Default to balanced with moderate confidence
+    return ("balanced", 0.6)
 
 
 def _detect_follow_up_question(

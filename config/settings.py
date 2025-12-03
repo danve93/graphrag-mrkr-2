@@ -49,6 +49,28 @@ class Settings(BaseSettings):
     embedding_model: str = Field(
         default="text-embedding-ada-002", description="Embedding model"
     )
+
+    # Streaming Configuration
+    enable_llm_streaming: bool = Field(
+        default=True, description="Enable true LLM token streaming for responses"
+    )
+
+    # Keyword Search Configuration
+    enable_chunk_fulltext: bool = Field(
+        default=True, description="Enable BM25-style fulltext search on chunk content"
+    )
+    keyword_search_weight: float = Field(
+        default=0.3, description="Weight for keyword search results in hybrid retrieval"
+    )
+    # Reciprocal Rank Fusion (RRF)
+    enable_rrf: bool = Field(
+        default=False,
+        description="Enable Reciprocal Rank Fusion to combine ranked lists"
+    )
+    rrf_k: int = Field(
+        default=60,
+        description="RRF constant k controlling rank discount (higher = flatter)"
+    )
     # Number of concurrent embedding requests
     embedding_concurrency: int = Field(default=3, description="Embedding concurrency")
     llm_concurrency: int = Field(default=2, description="LLM concurrency")
@@ -114,6 +136,24 @@ class Settings(BaseSettings):
     )
     ocr_quality_threshold: float = Field(
         default=0.6, description="Quality threshold for OCR processing"
+    )
+
+    # Document Classification During Ingestion
+    enable_document_classification: bool = Field(
+        default=False,
+        description="Enable LLM-assisted document category classification during ingestion"
+    )
+    classification_model: str = Field(
+        default="gpt-4o-mini",
+        description="LLM model to use for document classification"
+    )
+    classification_confidence_threshold: float = Field(
+        default=0.7,
+        description="Minimum confidence (0.0-1.0) to apply category metadata"
+    )
+    classification_default_category: str = Field(
+        default="general",
+        description="Fallback category when classification is disabled or low confidence"
     )
 
     # Retrieval Configuration
@@ -233,6 +273,16 @@ class Settings(BaseSettings):
         description="Batch size for reranker calls (where applicable)",
     )
 
+    # Query Analysis & Expansion
+    enable_query_expansion: bool = Field(
+        default=False,
+        description="Enable automatic query expansion for sparse results",
+    )
+    query_expansion_threshold: int = Field(
+        default=3,
+        description="Trigger expansion when initial results < threshold",
+    )
+
     # Caching Configuration
     entity_label_cache_size: int = Field(
         default=5000,
@@ -275,6 +325,121 @@ class Settings(BaseSettings):
     enable_caching: bool = Field(
         default=True,
         description="Enable caching system (set to false for rollback)"
+    )
+
+    # === Query Routing ===
+    enable_query_routing: bool = Field(
+        default=False,
+        description="Enable automatic query routing to document categories",
+    )
+    query_routing_confidence_threshold: float = Field(
+        default=0.7,
+        description="Minimum confidence (0.0-1.0) to apply category filtering",
+    )
+    query_routing_strict: bool = Field(
+        default=False,
+        description="If True, ONLY search routed categories (no fallback to all docs)",
+    )
+
+    # === Semantic Routing Cache ===
+    enable_routing_cache: bool = Field(
+        default=True, description="Enable semantic caching for routing decisions"
+    )
+    routing_cache_similarity_threshold: float = Field(
+        default=0.92, description="Minimum cosine similarity (0.0-1.0) for cache hit"
+    )
+    routing_cache_size: int = Field(default=1000)
+    routing_cache_ttl: int = Field(default=3600)
+
+    # === Fallback Validation ===
+    fallback_enabled: bool = Field(
+        default=True,
+        description="Enable fallback strategies when routing returns insufficient results",
+    )
+    fallback_min_results: int = Field(
+        default=3, description="Minimum chunks required before triggering fallback"
+    )
+    fallback_expand_to_related: bool = Field(default=True)
+    fallback_all_documents: bool = Field(default=True)
+
+    # === Smart Consolidation ===
+    consolidation_strategy: str = Field(
+        default="category_aware",
+        description="Consolidation mode: 'category_aware', 'semantic_dedup', 'balanced', 'none'",
+    )
+    consolidation_max_context_tokens: int = Field(
+        default=8000,
+        description="Maximum tokens for LLM context (8K optimal per research)",
+    )
+    consolidation_ensure_representation: bool = Field(
+        default=True,
+        description="Ensure at least one chunk from each category appears in top-k",
+    )
+    consolidation_semantic_threshold: float = Field(
+        default=0.95,
+        description="Threshold for semantic deduplication (cosine similarity)",
+    )
+
+    # Category-Specific Prompts (M3.2)
+    enable_category_prompts: bool = Field(
+        default=True,
+        description="Use category-specific prompt templates for generation",
+    )
+    enable_category_prompt_instructions: bool = Field(
+        default=True,
+        description="Include format instructions from category prompts",
+    )
+    category_prompts_file: str = Field(
+        default="config/category_prompts.json",
+        description="Path to category prompts configuration file",
+    )
+
+    # Structured KG Query Path (M3.3)
+    enable_structured_kg: bool = Field(
+        default=True,
+        description="Enable structured knowledge graph query path (Text-to-Cypher)",
+    )
+    structured_kg_entity_threshold: float = Field(
+        default=0.85,
+        description="Confidence threshold for entity linking in structured queries",
+    )
+    structured_kg_max_corrections: int = Field(
+        default=2,
+        description="Maximum Cypher correction attempts on query errors",
+    )
+    structured_kg_timeout: int = Field(
+        default=5000,
+        description="Query execution timeout in milliseconds",
+    )
+    structured_kg_query_types: List[str] = Field(
+        default=['aggregation', 'path', 'comparison', 'hierarchical', 'relationship'],
+        description="Query types suitable for structured path",
+    )
+
+    # Adaptive routing with user feedback (M3.4)
+    enable_adaptive_routing: bool = Field(
+        default=True,
+        description="Enable adaptive weight adjustment based on user feedback",
+    )
+    adaptive_learning_rate: float = Field(
+        default=0.1,
+        description="Learning rate for weight adjustments (0.0-1.0)",
+    )
+    adaptive_min_samples: int = Field(
+        default=5,
+        description="Minimum feedback samples before adjusting weights",
+    )
+    adaptive_weight_min: float = Field(
+        default=0.1,
+        description="Minimum allowed weight value",
+    )
+    adaptive_weight_max: float = Field(
+        default=0.9,
+        description="Maximum allowed weight value",
+    )
+    adaptive_decay_factor: float = Field(
+        default=0.95,
+        description="Exponential moving average decay factor",
     )
 
     # Document detail precomputed summaries
@@ -532,6 +697,24 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "marker_force_ocr": "marker_force_ocr",
         "marker_strip_existing_ocr": "marker_strip_existing_ocr",
         "marker_pdftext_workers": "marker_pdftext_workers",
+        # Retrieval fusion & ranking
+        "enable_rrf": "enable_rrf",
+        "rrf_k": "rrf_k",
+        # Lexical search controls
+        "enable_chunk_fulltext": "enable_chunk_fulltext",
+        "keyword_search_weight": "keyword_search_weight",
+        # Hybrid weights
+        "hybrid_chunk_weight": "hybrid_chunk_weight",
+        "hybrid_entity_weight": "hybrid_entity_weight",
+        # Reranker controls
+        "flashrank_enabled": "flashrank_enabled",
+        "flashrank_model_name": "flashrank_model_name",
+        "flashrank_blend_weight": "flashrank_blend_weight",
+        "flashrank_max_candidates": "flashrank_max_candidates",
+        "flashrank_batch_size": "flashrank_batch_size",
+        # Query analysis & expansion
+        "enable_query_expansion": "enable_query_expansion",
+        "query_expansion_threshold": "query_expansion_threshold",
     }
     
     for config_key, settings_attr in param_mappings.items():

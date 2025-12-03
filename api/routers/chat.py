@@ -27,6 +27,7 @@ router = APIRouter()
 async def stream_response_generator(
     result: dict,
     session_id: str,
+    message_id: str,
     user_query: str,
     context_documents: List[str],
     context_document_labels: List[str],
@@ -36,23 +37,31 @@ async def stream_response_generator(
 ) -> AsyncGenerator[str, None]:
     """Generate streaming response with SSE format."""
     try:
-        # Emit pipeline stages progressively with timing
-        # Map actual backend stages to what was executed
+        # Emit pipeline stages progressively with timing metadata
         if stage_updates:
-            logger.info(f"Emitting pipeline stages: {stage_updates}")
+            logger.info(f"Emitting {len(stage_updates)} pipeline stages with timing")
             
-            # Core pipeline stages that always execute
-            core_stages = ['query_analysis', 'retrieval', 'graph_reasoning', 'generation']
-            
-            for stage in core_stages:
-                if stage in stage_updates:
-                    logger.info(f"Emitting stage: {stage}")
+            for stage_info in stage_updates:
+                # Handle both old format (strings) and new format (dicts with timing)
+                if isinstance(stage_info, str):
+                    # Legacy format: just stage name
                     stage_data = {
                         "type": "stage",
-                        "content": stage,
+                        "content": stage_info,
                     }
-                    yield f"data: {json.dumps(stage_data)}\n\n"
-                    await asyncio.sleep(1.0)  # Pause to show each stage
+                else:
+                    # New format: stage dict with name, duration_ms, timestamp, metadata
+                    stage_data = {
+                        "type": "stage",
+                        "content": stage_info.get("name"),
+                        "duration_ms": stage_info.get("duration_ms"),
+                        "timestamp": stage_info.get("timestamp"),
+                        "metadata": stage_info.get("metadata", {}),
+                    }
+                
+                logger.info(f"Emitting stage: {stage_data['content']} ({stage_data.get('duration_ms', 0)}ms)")
+                yield f"data: {json.dumps(stage_data)}\n\n"
+                await asyncio.sleep(0.1)  # Small pause for smoother UI updates
 
         response_text = result.get("response", "")
 
@@ -125,11 +134,14 @@ async def stream_response_generator(
             yield f"data: {json.dumps(stage_data)}\n\n"
             await asyncio.sleep(0.05)
 
+            alternative_chunks = result.get("alternative_chunks", [])
+            logger.info(f"[Streaming] Passing {len(alternative_chunks)} alternative chunks to follow-up service")
             follow_up_questions = await follow_up_service.generate_follow_ups(
                 query=user_query,
                 response=response_text,
                 sources=result.get("sources", []),
                 chat_history=chat_history,
+                alternative_chunks=alternative_chunks,
             )
         except Exception as e:
             logger.warning(f"Follow-up generation failed: {e}")
@@ -158,12 +170,51 @@ async def stream_response_generator(
         except Exception as e:
             logger.warning(f"Could not save to chat history: {e}")
 
-        # Send sources
-        sources_data = {
-            "type": "sources",
-            "content": result.get("sources", []),
-        }
-        yield f"data: {json.dumps(sources_data)}\n\n"
+        # Send sources in batches to avoid SSE size limits
+        sources = result.get("sources", [])
+        MAX_CONTENT_LENGTH = 300  # Limit content to 300 chars for SSE transmission
+        BATCH_SIZE = 5  # Send sources in batches of 5
+        
+        total_sources = len(sources)
+        for batch_start in range(0, total_sources, BATCH_SIZE):
+            batch_sources = sources[batch_start:batch_start + BATCH_SIZE]
+            truncated_batch = []
+            
+            for source in batch_sources:
+                # Create a minimal source object with only essential fields
+                truncated_source = {
+                    "chunk_id": source.get("chunk_id", ""),
+                    "content": source.get("content", "")[:MAX_CONTENT_LENGTH] + ("..." if len(source.get("content", "")) > MAX_CONTENT_LENGTH else ""),
+                    "similarity": source.get("similarity", 0.0),
+                    "document_name": source.get("document_name", ""),
+                    "citation": source.get("citation", ""),
+                    "preview_url": source.get("preview_url", ""),
+                }
+                # Add entity-specific fields if present
+                if "entity_name" in source:
+                    truncated_source["entity_name"] = source.get("entity_name", "")
+                    truncated_source["entity_type"] = source.get("entity_type", "")
+                if len(source.get("content", "")) > MAX_CONTENT_LENGTH:
+                    truncated_source["content_truncated"] = True
+                truncated_batch.append(truncated_source)
+            
+            sources_data = {
+                "type": "sources",
+                "content": truncated_batch,
+                "batch_info": {
+                    "batch_start": batch_start,
+                    "batch_size": len(truncated_batch),
+                    "total_sources": total_sources,
+                }
+            }
+            try:
+                # Use ensure_ascii=False to properly handle unicode, separators to minimize size
+                sources_json = json.dumps(sources_data, ensure_ascii=False, separators=(',', ':'))
+                logger.info(f"Sending batch {batch_start//BATCH_SIZE + 1}/{(total_sources + BATCH_SIZE - 1)//BATCH_SIZE}: {len(truncated_batch)} sources, {len(sources_json)} bytes")
+                yield f"data: {sources_json}\n\n"
+            except Exception as e:
+                logger.error(f"Failed to serialize sources batch: {e}")
+                # Continue with next batch
 
         # Send quality score
         quality_payload = quality_score or result.get("quality_score")
@@ -182,16 +233,32 @@ async def stream_response_generator(
             }
             yield f"data: {json.dumps(followup_data)}\n\n"
 
-        # Send metadata
+        # Send metadata (with safe JSON serialization)
         metadata_data = {
             "type": "metadata",
             "content": {
+                "message_id": message_id,
                 "session_id": session_id,
                 "metadata": result.get("metadata", {}),
                 "context_documents": result.get("context_documents", []),
             },
         }
-        yield f"data: {json.dumps(metadata_data)}\n\n"
+        try:
+            metadata_json = json.dumps(metadata_data, ensure_ascii=False, separators=(',', ':'))
+            yield f"data: {metadata_json}\n\n"
+        except Exception as e:
+            logger.error(f"Failed to serialize metadata: {e}")
+            # Send minimal metadata on error
+            minimal_metadata = {
+                "type": "metadata",
+                "content": {
+                    "message_id": message_id,
+                    "session_id": session_id,
+                    "metadata": {},
+                    "context_documents": [],
+                },
+            }
+            yield f"data: {json.dumps(minimal_metadata)}\n\n"
 
         # Send done signal
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -318,6 +385,7 @@ async def _prepare_chat_context(
         chat_history=chat_history,
         session_id=session_id,
         context_documents=context_documents,
+        category_filter=request.category_filter,
     )
 
     metadata = result.get("metadata", {}) or {}
@@ -395,12 +463,16 @@ async def chat_query(request: ChatRequest):
         stages = result.get("stages", [])
         logger.info(f"RAG pipeline completed with stages: {stages}")
 
+        # Generate unique message_id for feedback
+        message_id = str(uuid.uuid4())
+
         # If streaming is requested, return SSE stream
         if request.stream:
             return StreamingResponse(
                 stream_response_generator(
                     result,
                     session_id,
+                    message_id,
                     request.message,
                     context_documents,
                     context_document_labels,
@@ -421,11 +493,14 @@ async def chat_query(request: ChatRequest):
         # Generate follow-up questions
         follow_up_questions = []
         try:
+            alternative_chunks = result.get("alternative_chunks", [])
+            logger.info(f"Passing {len(alternative_chunks)} alternative chunks to follow-up service")
             follow_up_questions = await follow_up_service.generate_follow_ups(
                 query=request.message,
                 response=result.get("response", ""),
                 sources=result.get("sources", []),
                 chat_history=chat_history,
+                alternative_chunks=alternative_chunks,
             )
         except Exception as e:
             logger.warning(f"Follow-up generation failed: {e}")
@@ -454,6 +529,12 @@ async def chat_query(request: ChatRequest):
         except Exception as e:
             logger.warning(f"Could not save to chat history: {e}")
 
+        # Calculate total duration from stages
+        stages = result.get("stages", [])
+        total_duration_ms = sum(
+            stage.get("duration_ms", 0) for stage in stages if isinstance(stage, dict)
+        )
+        
         return ChatResponse(
             message=result.get("response", ""),
             sources=result.get("sources", []),
@@ -462,6 +543,8 @@ async def chat_query(request: ChatRequest):
             session_id=session_id,
             metadata=result.get("metadata", {}),
             context_documents=result.get("context_documents", context_documents),
+            stages=stages,
+            total_duration_ms=total_duration_ms if total_duration_ms > 0 else None,
         )
 
     except Exception as e:
@@ -581,10 +664,14 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         stages = result.get("stages", [])
         logger.info(f"RAG pipeline completed with stages: {stages}")
 
+        # Generate unique message_id for feedback
+        message_id = str(uuid.uuid4())
+
         return StreamingResponse(
             stream_response_generator(
                 result,
                 session_id,
+                message_id,
                 request.message,
                 context_documents,
                 context_document_labels,
@@ -622,6 +709,7 @@ async def generate_follow_ups(request: FollowUpRequest):
             response=request.response,
             sources=request.sources,
             chat_history=request.chat_history,
+            alternative_chunks=getattr(request, 'alternative_chunks', []),
         )
 
         return FollowUpResponse(questions=questions)

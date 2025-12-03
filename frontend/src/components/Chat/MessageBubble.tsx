@@ -6,12 +6,16 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import SourcesList from './SourcesList'
 import QualityBadge from './QualityBadge'
+import { FeedbackButtons } from './FeedbackButtons'
+import RoutingBadge from './RoutingBadge'
+import CategoryRetry from './CategoryRetry'
 
 interface MessageBubbleProps {
   message: Message
+  onRetryWithCategories?: (query: string, categories: string[]) => void
 }
 
-export default function MessageBubble({ message }: MessageBubbleProps) {
+export default function MessageBubble({ message, onRetryWithCategories }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const contextDocDisplay = message.context_document_labels && message.context_document_labels.length > 0
     ? message.context_document_labels
@@ -53,11 +57,46 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           </div>
         )}
 
+        {/* Display routing badge for assistant messages */}
+        {!isUser && message.routing_info && (
+          <div className="mt-2 flex items-center gap-2">
+            <RoutingBadge routingInfo={message.routing_info} />
+            {onRetryWithCategories && (
+              <CategoryRetry
+                query={message.content}
+                currentCategories={message.routing_info.categories}
+                onRetry={onRetryWithCategories}
+              />
+            )}
+          </div>
+        )}
+
         {message.isStreaming && (
           <div className="flex items-center mt-2" style={{ color: 'var(--text-secondary)' }}>
             <div className="spinner" style={{ width: '12px', height: '12px' }} />
           </div>
         )}
+
+        {/* Feedback buttons for assistant messages */}
+        {!isUser && !message.isStreaming && (() => {
+          // Don't show feedback buttons for fallback messages (no sources = no context found)
+          const hasSources = message.sources && message.sources.length > 0;
+          
+          if (!hasSources) return null;
+          
+          return (
+            <div className="mt-2 flex justify-start">
+              {message.message_id && message.session_id && (
+                <FeedbackButtons
+                  messageId={message.message_id}
+                  sessionId={message.session_id}
+                  query={message.content}
+                  routingInfo={message.stages?.find(s => s.name === 'routing')?.metadata || {}}
+                />
+              )}
+            </div>
+          );
+        })()}
 
         {/* bottom area: sources list (left) and quality badge (anchored) */}
         {!isUser && ( (message.sources && message.sources.length > 0) || message.quality_score ) && (

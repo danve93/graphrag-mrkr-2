@@ -50,21 +50,24 @@ export default function StatusIndicator() {
   }, [])
 
   return (
-    <div className="fixed top-4 right-4 z-50 flex items-center gap-3">
-      {isConnected ? (
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#24c6e6' }} />
-          <span className="text-sm text-secondary-200">Connected</span>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full bg-secondary-700" />
-          <span className="text-sm text-secondary-500">Disconnected</span>
-        </div>
-      )}
+    <div className="flex flex-col gap-3">
+      {/* Connection Status */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-default">
+        {isConnected ? (
+          <>
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#f27a03' }} />
+            <span className="text-xs" style={{ color: 'white' }}>Connected</span>
+          </>
+        ) : (
+          <>
+            <span className="w-3 h-3 rounded-full bg-secondary-500" />
+            <span className="text-xs" style={{ color: 'white' }}>Disconnected</span>
+          </>
+        )}
+      </div>
       {/* FlashRank prewarm indicator */}
       {flashrankInProgress && !dismissed ? (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 px-3">
           <Loader size={14} label={flashrankError ? 'Prewarm failed' : 'Pre-warming ranker...'} />
           <button
             aria-label="Dismiss prewarm notice"

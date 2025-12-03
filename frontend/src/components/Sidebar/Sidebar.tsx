@@ -5,15 +5,17 @@ import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } fro
 import {
   Bars3Icon,
   XMarkIcon,
-  ChatBubbleLeftIcon,
-  CircleStackIcon,
-  PlusCircleIcon,
 } from '@heroicons/react/24/outline'
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
-import HistoryTab from './HistoryTab'
-import DatabaseTab from './DatabaseTab'
+import SidebarHeader from './SidebarHeader'
+import ChatSidebarContent from './ChatSidebarContent'
+import DatabaseSidebarContent from './DatabaseSidebarContent'
+import GenericSidebarContent from './GenericSidebarContent'
+import DocumentationSidebarContent from './DocumentationSidebarContent'
+import ChatTuningSidebarContent from './ChatTuningSidebarContent'
+import RAGTuningSidebarContent from './RAGTuningSidebarContent'
+import StatusIndicator from '@/components/Theme/StatusIndicator'
 import { useChatStore } from '@/store/chatStore'
-import { useBranding } from '@/components/Branding/BrandingProvider'
 import Tooltip from '@/components/Utils/Tooltip'
 
 interface SidebarProps {
@@ -32,24 +34,15 @@ export default function Sidebar({
   onToggle,
   width,
   onWidthChange,
-  minWidth = 260,
-  maxWidth = 480,
+  minWidth = 240,
+  maxWidth = 400,
   collapsed = false,
   onCollapseToggle = () => {},
 }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<'chat' | 'database'>('chat')
   const [isResizing, setIsResizing] = useState(false)
-  const branding = useBranding()
-  
-  const isConnected = useChatStore((state) => state.isConnected)
+  const activeView = useChatStore((state) => state.activeView)
 
-  const tabs = [
-    { id: 'chat' as const, label: 'Chat', icon: ChatBubbleLeftIcon },
-    { id: 'database' as const, label: 'Database', icon: CircleStackIcon },
-  ]
 
-  const clearChat = useChatStore((state) => state.clearChat)
-  const setActiveView = useChatStore((state) => state.setActiveView)
 
   const resizeWithinBounds = useCallback(
     (nextWidth: number) => {
@@ -126,7 +119,8 @@ export default function Sidebar({
       <Tooltip content={open ? 'Close sidebar' : 'Open sidebar'}>
         <button
           onClick={onToggle}
-          className="fixed top-4 left-4 z-50 lg:hidden button-primary p-2"
+          className="fixed top-4 left-4 z-50 lg:hidden button-primary"
+          style={{ minWidth: '44px', minHeight: '44px', padding: '10px' }}
           aria-label={open ? 'Close sidebar' : 'Open sidebar'}
         >
           {open ? <XMarkIcon className="w-6 h-6" /> : <Bars3Icon className="w-6 h-6" />}
@@ -135,11 +129,11 @@ export default function Sidebar({
 
       {/* Sidebar (fixed to left edge and separate from content grid) */}
       <aside
-        className={`fixed left-0 top-0 z-40 h-screen border-r ${
+        className={`fixed left-0 top-0 z-40 h-screen border-r transition-transform duration-300 ${
           isResizing ? 'no-transition' : ''
-        } overflow-hidden`}
+        } ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} overflow-hidden`}
         style={{ 
-          width: open ? `${collapsed ? 72 : width}px` : '0px',
+          width: `${collapsed ? 72 : width}px`,
           background: 'var(--bg-secondary)',
           borderColor: 'var(--border)'
         }}
@@ -164,95 +158,77 @@ export default function Sidebar({
           {/* When collapsed we hide the rest of the content entirely */}
           {!collapsed && (
             <>
-              {/* Logo/Brand */}
-              <div className="p-6 border-b border-secondary-200 dark:border-secondary-700">
-                <h1 className="text-lg branding-heading flex items-center">
-                  {branding?.use_image && branding.image_path ? (
-                    <img src={branding.image_path} alt={branding.short_name || branding.heading} className="w-6 h-6 mr-2" />
-                  ) : null}
-                  <span>{branding?.use_image ? (branding.short_name || branding.heading) : branding?.heading}</span>
-                </h1>
-                <p className="text-sm text-secondary-500 mt-1">{branding?.tagline}</p>
-              </div>
+              {/* Header (Logo/Brand) - Always visible */}
+              <SidebarHeader />
 
-              {/* Tabs */}
-              <div className={`flex border-b border-secondary-200 dark:border-secondary-700 transition-all duration-300 ${
-                !isConnected ? 'blur-sm pointer-events-none' : ''
-              }`}>
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex-1 flex items-center justify-center py-3 text-sm font-medium transition-colors ${
-                      activeTab === tab.id ? '' : 'text-secondary-500 hover:text-secondary-200'
-                    }`}
-                    style={
-                      activeTab === tab.id
-                        ? { color: 'var(--accent-primary)', borderBottom: '2px solid var(--accent-primary)' }
-                        : undefined
-                    }
-                  >
-                    <tab.icon className="w-5 h-5 mr-1 text-current" />
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* New Chat button in sidebar, shown under tabs when Chat tab is active */}
-              {activeTab === 'chat' && (
-                <div className="px-6 py-3 border-b border-secondary-200 dark:border-secondary-700">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      clearChat()
-                      setActiveView('chat')
-                      setActiveTab('chat')
+              {/* Dynamic Content based on active view */}
+              <div
+                key={activeView}
+                className="flex-1 min-h-0 flex flex-col animate-in fade-in duration-200"
+              >
+                {activeView === 'chat' && <ChatSidebarContent />}
+                {activeView === 'document' && <DatabaseSidebarContent />}
+                {activeView === 'graph' && (
+                  <GenericSidebarContent
+                    title="Graph Explorer"
+                    description="Visualize entities and relationships in your knowledge graph"
+                  />
+                )}
+                {activeView === 'categories' && (
+                  <GenericSidebarContent
+                    title="Categories"
+                    description="Manage document categories and LLM-generated taxonomy"
+                  />
+                )}
+                {activeView === 'routing' && (
+                  <GenericSidebarContent
+                    title="Routing Metrics"
+                    description="Monitor query routing performance and cache statistics"
+                  />
+                )}
+                {activeView === 'structuredKg' && (
+                  <GenericSidebarContent
+                    title="Structured KG"
+                    description="Execute Text-to-Cypher/SPARQL queries with entity linking"
+                  />
+                )}
+                {activeView === 'ragTuning' && (
+                  <RAGTuningSidebarContent
+                    onSectionClick={(sectionId) => {
+                      window.dispatchEvent(new CustomEvent('rag-tuning-section-select', { detail: sectionId }));
                     }}
-                    className="w-full button-primary"
-                    aria-label="Start a new chat"
-                  >
-                    <PlusCircleIcon className="w-5 h-5" />
-                    New Chat
-                  </button>
-                </div>
-              )}
-
-              {/* Tab Content */}
-              <div className={`flex-1 overflow-y-auto overscroll-contain p-6 transition-all duration-300 ${
-                !isConnected ? 'blur-sm pointer-events-none' : ''
-              }`}>
-                <div key={activeTab} className="tab-content">
-                  {activeTab === 'chat' && <HistoryTab />}
-                  {activeTab === 'database' && <DatabaseTab />}
-                </div>
+                  />
+                )}
+                {activeView === 'chatTuning' && (
+                  <ChatTuningSidebarContent
+                    onSectionClick={(sectionId) => {
+                      window.dispatchEvent(new CustomEvent('chat-tuning-section-select', { detail: sectionId }));
+                    }}
+                  />
+                )}
+                {activeView === 'documentation' && (
+                  <DocumentationSidebarContent
+                    onFileSelect={(path) => {
+                      // Store selected file in a way the DocumentationView can access it
+                      window.dispatchEvent(new CustomEvent('documentation-file-select', { detail: path }));
+                    }}
+                    selectedFile={null}
+                  />
+                )}
               </div>
 
-              {/* Additional Panels Navigation */}
-              <div className="border-t border-secondary-200 dark:border-secondary-700 p-4">
-                <p className="text-xs font-semibold text-secondary-500 dark:text-secondary-400 mb-2 px-2">TOOLS</p>
-                <div className="space-y-1">
-                  <button
-                    onClick={() => setActiveView('graph')}
-                    className="w-full text-left px-3 py-2 text-sm rounded"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    Graph Explorer
-                  </button>
-                  <button
-                    onClick={() => setActiveView('chatTuning')}
-                    className="w-full text-left px-3 py-2 text-sm rounded"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    Chat Tuning
-                  </button>
-                  <button
-                    onClick={() => setActiveView('ragTuning')}
-                    className="w-full text-left px-3 py-2 text-sm rounded"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    RAG Tuning
-                  </button>
-                </div>
+              {/* Status Indicator at bottom */}
+              <div 
+                className="border-t p-3" 
+                style={{ 
+                  borderColor: 'var(--border)',
+                  background: 'var(--bg-secondary)',
+                  boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)',
+                  position: 'relative',
+                  zIndex: 10
+                }}
+              >
+                <StatusIndicator />
               </div>
             </>
           )}

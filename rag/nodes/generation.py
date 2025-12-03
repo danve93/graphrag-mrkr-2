@@ -18,6 +18,7 @@ def generate_response(
     temperature: float = 0.7,
     chat_history: List[Dict[str, str]] = None,
     llm_model: str | None = None,
+    custom_prompt: str | None = None,
 ) -> Dict[str, Any]:
     """
     Generate response using retrieved context and query analysis.
@@ -81,6 +82,7 @@ def generate_response(
             temperature=temperature,
             chat_history=chat_history if query_analysis.get("is_follow_up") else None,
             model_override=llm_model,
+            custom_prompt=custom_prompt,
         )
 
         # Prepare sources information with entity support

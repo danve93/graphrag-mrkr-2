@@ -61,8 +61,8 @@
     --gray-500: #6b7280;
     --gray-600: #4b5563;
     --gray-700: #374151;
-    --gray-800: #1f2937;
-    --gray-900: #111827;
+    --gray-800: #121212;
+    --gray-900: #121212;
     --gray-950: #030712;
 
     /* Border Radius */
@@ -365,6 +365,50 @@
   }
 }
 
+/* Ensure Tailwind typography (`.prose`) uses app design tokens so code/pre
+   blocks and headings match the app background/colors. This prevents
+   the typography plugin from applying `#1f2937` / `#111827` backgrounds.
+*/
+.markdown-content {
+  --tw-prose-body: var(--muted-text);
+  --tw-prose-headings: var(--heading-text);
+  --tw-prose-lead: var(--muted-text);
+  --tw-prose-links: var(--accent-primary);
+  --tw-prose-bold: var(--heading-text);
+  --tw-prose-counters: var(--muted-text);
+  --tw-prose-bullets: var(--gray-300);
+  --tw-prose-hr: var(--gray-200);
+  --tw-prose-quotes: var(--muted-text);
+  --tw-prose-quote-borders: var(--gray-200);
+  --tw-prose-captions: var(--muted-text);
+  --tw-prose-kbd: var(--heading-text);
+  --tw-prose-code: var(--text-primary);
+  --tw-prose-pre-code: var(--text-primary);
+  --tw-prose-pre-bg: var(--bg-primary);
+  --tw-prose-th-borders: var(--gray-200);
+  --tw-prose-td-borders: var(--gray-200);
+}
+
+html.dark .markdown-content {
+  --tw-prose-body: var(--muted-text);
+  --tw-prose-headings: var(--heading-text);
+  --tw-prose-lead: var(--muted-text);
+  --tw-prose-links: var(--accent-primary);
+  --tw-prose-bold: var(--heading-text);
+  --tw-prose-counters: var(--muted-text);
+  --tw-prose-bullets: var(--gray-300);
+  --tw-prose-hr: var(--gray-200);
+  --tw-prose-quotes: var(--muted-text);
+  --tw-prose-quote-borders: var(--gray-200);
+  --tw-prose-captions: var(--muted-text);
+  --tw-prose-kbd: var(--heading-text);
+  --tw-prose-code: var(--text-primary);
+  --tw-prose-pre-code: var(--text-primary);
+  --tw-prose-pre-bg: var(--bg-primary);
+  --tw-prose-th-borders: var(--gray-200);
+  --tw-prose-td-borders: var(--gray-200);
+}
+
 /* Explicit blockquote border color using Apple tokens */
 .markdown-content blockquote {
   border-left-width: 4px;
@@ -372,45 +416,7 @@
   padding-left: 12px;
 }
 
-/* Shimmer animation for suggestions */
-@keyframes shimmer {
-  0% {
-    background-position: -200% center;
-  }
-  100% {
-    background-position: 200% center;
-  }
-}
-
-.suggestion-shimmer {
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    transparent 40%,
-    rgba(255, 255, 255, 0.6) 50%,
-    transparent 60%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  background-position: -200% center;
-}
-
-html.dark .suggestion-shimmer {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    transparent 40%,
-    rgba(0, 0, 0, 0.3) 50%,
-    transparent 60%,
-    transparent 100%
-  );
-}
-
-.suggestion-shimmer:hover {
-  animation: shimmer 1.5s ease-in-out;
-}
+/* Shimmer removed to comply with safe UI animations policy. */
 
 /* Tab content transitions */
 .tab-content {
@@ -562,4 +568,58 @@ html.dark .suggestion-shimmer {
 /* Utility to constrain content inside a grid cell */
 .grid-cell {
   min-width: 0;
+}
+
+/* Focus visibility for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Mobile touch optimizations */
+@media (max-width: 768px) {
+  /* Improve tap targets */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Prevent text selection during touch interactions */
+  .no-select {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  /* Smooth scrolling on mobile */
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Prevent pull-to-refresh interference */
+  body {
+    overscroll-behavior-y: contain;
+  }
+}
+
+/* Tablet optimizations */
+@media (min-width: 768px) and (max-width: 1024px) {
+  /* Adjust spacing for tablet */
+  .container {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }

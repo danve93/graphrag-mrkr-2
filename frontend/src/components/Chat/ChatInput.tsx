@@ -518,7 +518,7 @@ export default function ChatInput({
                 <span
                   key={hashtag}
                   className="inline-flex max-w-full items-center"
-                  style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-full)', padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--text-xs)', backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#16a34a' }}
+                  style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-full)', padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--text-xs)', backgroundColor: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}
                 >
                   <span className="truncate" title={hashtag}>
                     {hashtag.startsWith('#') ? hashtag : `#${hashtag}`}
@@ -527,7 +527,7 @@ export default function ChatInput({
                     type="button"
                     onClick={() => handleRemoveHashtag(hashtag)}
                     className="focus:outline-none"
-                    style={{ borderRadius: 'var(--radius-full)', padding: '2px', color: '#16a34a', transition: 'opacity var(--timing-fast) var(--easing-standard)' }}
+                    style={{ borderRadius: 'var(--radius-full)', padding: '2px', color: 'var(--accent-primary)', transition: 'opacity var(--timing-fast) var(--easing-standard)' }}
                     aria-label={`Remove ${hashtag} from forced context`}
                   >
                     <XMarkIcon className="h-3.5 w-3.5" />

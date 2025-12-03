@@ -548,6 +548,16 @@ async def get_cache_stats():
     from core.cache_metrics import cache_metrics
     return cache_metrics.get_report()
 
+@router.get("/routing-metrics")
+async def get_routing_metrics():
+    """Get query routing performance metrics."""
+    try:
+        from core.routing_metrics import routing_metrics
+        return routing_metrics.get_stats()
+    except Exception as e:
+        logger.error(f"Failed to get routing metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/stats", response_model=DatabaseStats)
 async def get_database_stats():

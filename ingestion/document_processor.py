@@ -436,6 +436,90 @@ class DocumentProcessor:
         }
         return mapping.get(ext, "unknown")
 
+    def _load_category_config(self) -> Dict[str, Any]:
+        """Load category configuration from `config/document_categories.json`."""
+        try:
+            config_path = Path(__file__).parent.parent / "config" / "document_categories.json"
+            with open(config_path, "r", encoding="utf-8") as f:
+                import json as _json
+                return _json.load(f)
+        except Exception as e:
+            logger.debug(f"Failed to load category config: {e}")
+            return {"categories": {"general": {"title": "General", "keywords": []}}}
+
+    def classify_document_categories(
+        self,
+        filename: str,
+        content: str,
+    ) -> Dict[str, Any]:
+        """Classify document into categories using LLM with heuristic fallback.
+
+        Returns dict with keys: categories (List[str]), confidence (float), keywords (List[str]), difficulty (str).
+        """
+        try:
+            from core.llm import llm_manager
+            config = self._load_category_config()
+            cats = config.get("categories", {})
+            cats_lines = []
+            for cid, data in cats.items():
+                title = data.get("title", cid)
+                kws = ", ".join(data.get("keywords", [])[:8])
+                cats_lines.append(f"- {cid}: {title} (keywords: {kws})")
+            categories_desc = "\n".join(cats_lines)
+
+            prompt = (
+                "You are a document classification assistant. "
+                "Classify the document into 1-2 categories and extract 3-6 keywords.\n\n"
+                f"Filename: {filename}\n\n"
+                "Content (truncated to first 1200 chars):\n" + content[:1200] + "\n\n"
+                "Available Categories:\n" + categories_desc + "\n\n"
+                "Respond strictly as JSON: {\n"
+                "  \"categories\": [\"install\"],\n"
+                "  \"confidence\": 0.8,\n"
+                "  \"keywords\": [\"setup\", \"prerequisites\"],\n"
+                "  \"difficulty\": \"beginner\"\n"
+                "}"
+            )
+
+            resp = llm_manager.generate_response(
+                prompt=prompt,
+                model=getattr(settings, "classification_model", "gpt-4o-mini"),
+                temperature=0.1,
+                max_tokens=200,
+            )
+            text = (resp or "").strip()
+            if "```json" in text:
+                text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+            elif "```" in text:
+                text = text.split("```", 1)[1].split("```", 1)[0].strip()
+            import json as _json
+            parsed = _json.loads(text)
+            categories = parsed.get("categories") or [getattr(settings, "classification_default_category", "general")]
+            confidence = float(parsed.get("confidence", 0.0))
+            keywords = parsed.get("keywords") or []
+            difficulty = parsed.get("difficulty") or "intermediate"
+            return {
+                "categories": categories,
+                "confidence": confidence,
+                "keywords": keywords,
+                "difficulty": difficulty,
+            }
+        except Exception as e:
+            logger.debug(f"Classification failed, using heuristic fallback: {e}")
+            # Simple keyword heuristic
+            lower = content.lower()
+            categories = []
+            if any(k in lower for k in ("install", "setup", "prerequisite")):
+                categories.append("install")
+            if any(k in lower for k in ("config", "setting", "parameter")):
+                categories.append("configure")
+            if any(k in lower for k in ("error", "fail", "diagnostic", "log")):
+                categories.append("troubleshoot")
+            if not categories:
+                categories = [getattr(settings, "classification_default_category", "general")]
+            keywords = []
+            return {"categories": categories[:2], "confidence": 0.5, "keywords": keywords, "difficulty": "intermediate"}
+
     async def process_file_async(
         self, chunks: List[Dict[str, Any]], doc_id: str, progress_callback=None
     ) -> List[Dict[str, Any]]:
@@ -874,14 +958,20 @@ class DocumentProcessor:
                 chunks = document_chunker.chunk_text(content, doc_id)
                 logger.info(f"Used standard chunking for {doc_id}")
 
-            for chunk in chunks:
+            # Annotate chunk-level positional metadata
+            for idx, chunk in enumerate(chunks, start=1):
                 chunk_metadata = chunk.get("metadata", {}) or {}
                 chunk_metadata.update(
                     {
                         "document_id": doc_id,
                         "source_document": metadata.get("filename"),
+                        "chunk_number": idx,
                     }
                 )
+                # Inherit section title if provided by converter/chunker
+                section_title = chunk_metadata.get("section_title") or None
+                if section_title:
+                    chunk_metadata["semantic_group"] = section_title.lower().replace(" ", "_")
                 chunk["metadata"] = chunk_metadata
 
             # Extract document summary, type, and hashtags after chunking
@@ -891,14 +981,45 @@ class DocumentProcessor:
                 doc_id,
                 {"processing_stage": "summarization", "processing_progress": 60.0},
             )
-            
+
             # Update document node with summary information
             graph_db.update_document_summary(
                 doc_id=doc_id,
                 summary=summary_data.get("summary", ""),
                 document_type=summary_data.get("document_type", "other"),
-                hashtags=summary_data.get("hashtags", [])
+                hashtags=summary_data.get("hashtags", []),
             )
+            # Document classification and metadata enrichment
+            if getattr(settings, "enable_document_classification", False):
+                    cls = self.classify_document_categories(
+                        metadata.get("filename"), content
+                    )
+                    confidence = cls.get("confidence", 0.0)
+                    categories = cls.get("categories", [])
+                    apply_cls = confidence >= getattr(
+                        settings, "classification_confidence_threshold", 0.7
+                    )
+                    doc_category = (
+                        categories[0]
+                        if (categories and apply_cls)
+                        else getattr(settings, "classification_default_category", "general")
+                    )
+                    enrich = {
+                        "category": doc_category,
+                        "categories": categories,
+                        "classification_confidence": confidence,
+                        "keywords": cls.get("keywords", []),
+                        "difficulty": cls.get("difficulty", "intermediate"),
+                    }
+                    graph_db.create_document_node(doc_id, enrich)
+                    # Propagate category to chunks in-memory so metadata is stored during embedding persist
+                    for c in chunks:
+                        md = c.get("metadata", {}) or {}
+                        md["category"] = doc_category
+                        c["metadata"] = md
+                    logger.info(
+                        f"Classified document {doc_id} → {doc_category} (confidence={confidence:.2f})"
+                    )
             logger.info(
                 f"Summary extracted for {doc_id}: type={summary_data.get('document_type')}, "
                 f"hashtags={len(summary_data.get('hashtags', []))}"

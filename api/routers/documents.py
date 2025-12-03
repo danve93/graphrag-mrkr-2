@@ -486,69 +486,44 @@ async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequ
         raise HTTPException(status_code=500, detail="Failed to update hashtags") from exc
 
 
+
+
+
 # Generic document metadata route comes LAST to avoid catching sub-paths
 @router.get("/{document_id}", response_model=DocumentMetadataResponse)
 async def get_document_metadata(document_id: str) -> DocumentMetadataResponse:
     """Return document metadata and related analytics."""
     try:
-        # Prefer precomputed lightweight metadata for fast responses
-        with graph_db.session_scope() as session:
-            rec = session.run(
-                """
-                MATCH (d:Document {id: $doc_id})
-                RETURN d.id as id,
-                       d.title as title,
-                       d.filename as file_name,
-                       d.original_filename as original_filename,
-                       d.mime_type as mime_type,
-                       d.preview_url as preview_url,
-                       d.uploaded_at as uploaded_at,
-                       d.created_at as created_at,
-                       d.uploader as uploader,
-                       d.summary as summary,
-                       d.document_type as document_type,
-                       d.hashtags as hashtags,
-                       d.precomputed_chunk_count as pre_chunks,
-                       d.precomputed_entity_count as pre_entities,
-                       d.precomputed_community_count as pre_communities,
-                       d.precomputed_similarity_count as pre_similarities,
-                       d.quality_scores as quality_scores,
-                       d.metadata as metadata
-                """,
-                doc_id=document_id,
-            ).single()
+        # Use the shared graph_db helper to retrieve document details (ensures
+        # consistent behavior with other endpoints like /chunks and /entities).
+        try:
+            details = graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found") from None
 
-            if not rec:
-                raise HTTPException(status_code=404, detail="Document not found")
+        # Build a lightweight response using the details returned by the helper.
+        resp = {
+            "id": details.get("id") or document_id,
+            "title": details.get("title"),
+            "file_name": details.get("file_name"),
+            "original_filename": details.get("original_filename"),
+            "mime_type": details.get("mime_type"),
+            "preview_url": details.get("preview_url"),
+            "uploaded_at": details.get("uploaded_at"),
+            "uploader": details.get("uploader"),
+            "summary": details.get("summary"),
+            "document_type": details.get("document_type"),
+            "hashtags": details.get("hashtags") or [],
+            # Avoid sending full chunks/entities on this route; frontend
+            # should lazy-load them via the dedicated endpoints.
+            "chunks": [],
+            "entities": [],
+            "quality_scores": details.get("quality_scores"),
+            "related_documents": details.get("related_documents"),
+            "metadata": details.get("metadata"),
+        }
 
-            # Build a lightweight response that contains metadata and precomputed stats.
-            # Full chunk/entity lists should be loaded via the dedicated endpoints.
-            uploader_info = None
-            uploader_val = rec.get("uploader")
-            if isinstance(uploader_val, dict):
-                uploader_info = {"id": uploader_val.get("id"), "name": uploader_val.get("name")}
-
-            resp = {
-                "id": rec.get("id") or document_id,
-                "title": rec.get("title"),
-                "file_name": rec.get("file_name"),
-                "original_filename": rec.get("original_filename"),
-                "mime_type": rec.get("mime_type"),
-                "preview_url": rec.get("preview_url"),
-                "uploaded_at": rec.get("uploaded_at"),
-                "uploader": uploader_info,
-                "summary": rec.get("summary"),
-                "document_type": rec.get("document_type"),
-                "hashtags": rec.get("hashtags") or [],
-                # Return empty lists for chunks/entities to avoid heavy DB work on initial load
-                "chunks": [],
-                "entities": [],
-                "quality_scores": rec.get("quality_scores"),
-                "related_documents": None,
-                "metadata": rec.get("metadata"),
-            }
-
-            return DocumentMetadataResponse(**resp)
+        return DocumentMetadataResponse(**resp)
     except ValueError:
         raise HTTPException(status_code=404, detail="Document not found") from None
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -763,3 +738,115 @@ async def get_document_preview(
         )
     
     return FileResponse(path, media_type=media_type, filename=info.get("file_name"))
+
+
+@router.get("/{document_id}/chunks")
+async def get_document_chunks(document_id: str, limit: int = Query(default=500, ge=1, le=2000), offset: int = Query(default=0, ge=0)):
+    """Return chunk list for a document with server-side pagination.
+
+    - `limit` (default 500) controls page size.
+    - `offset` controls pagination offset.
+
+    Returns `total` count and `has_more` flag to help the frontend lazy-load large documents.
+    """
+    try:
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        with graph_db.session_scope() as session:
+            # total count
+            total_rec = session.run(
+                "MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk) RETURN count(c) AS total",
+                doc_id=document_id,
+            ).single()
+            total = total_rec["total"] if total_rec else 0
+
+            # paginated records
+            records = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
+                RETURN c.id AS id, c.content AS content, c.chunk_index AS chunk_index, coalesce(c.offset, 0) AS offset
+                ORDER BY c.chunk_index ASC
+                SKIP $offset
+                LIMIT $limit
+                """,
+                doc_id=document_id,
+                offset=offset,
+                limit=limit,
+            ).data()
+
+            chunks = [
+                {
+                    "id": r.get("id"),
+                    "text": r.get("content") or r.get("text") or "",
+                    "index": r.get("chunk_index"),
+                    "offset": r.get("offset"),
+                }
+                for r in records
+            ]
+
+        return {
+            "document_id": document_id,
+            "total": int(total),
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(chunks)) < int(total),
+            "chunks": chunks,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to load chunks for %s", document_id)
+        raise HTTPException(status_code=500, detail="Failed to retrieve chunks") from exc
+
+
+@router.get("/{document_id}/entity-summary")
+async def get_document_entity_summary(document_id: str):
+    """Return aggregated counts of entities grouped by entity type for the document.
+
+    Example response:
+    {
+      "document_id": "...",
+      "total": 1234,
+      "groups": [ {"type": "ACCOUNT", "count": 506}, {"type": "MAILING_LIST", "count": 30}, ... ]
+    }
+    """
+    try:
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        with graph_db.session_scope() as session:
+            # Aggregation by entity type and total
+            agg_q = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
+                WITH e.type AS type, count(DISTINCT e) AS cnt
+                ORDER BY cnt DESC
+                RETURN type, cnt
+                """,
+                doc_id=document_id,
+            )
+
+            groups = [
+                {"type": rec["type"] or "<unknown>", "count": int(rec["cnt"])}
+                for rec in agg_q
+            ]
+
+            total_rec = session.run(
+                "MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(:Chunk)-[:CONTAINS_ENTITY]->(e:Entity) RETURN count(DISTINCT e) AS total",
+                doc_id=document_id,
+            ).single()
+            total = int(total_rec["total"]) if total_rec else 0
+
+        return {"document_id": document_id, "total": total, "groups": groups}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to load entity summary for %s", document_id)
+        raise HTTPException(status_code=500, detail="Failed to retrieve entity summary") from exc

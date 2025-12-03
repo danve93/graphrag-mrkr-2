@@ -25,12 +25,38 @@ export default function DocumentGraph({
   const [graphData, setGraphData] = useState<GraphResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // filtering state: node types & communities
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set<string>())
+  const [selectedCommunities, setSelectedCommunities] = useState<Set<number | null>>(new Set<number | null>())
+  const [selectedNode, setSelectedNode] = useState<any | null>(null)
   const [width, setWidth] = useState(800)
   const [computedHeight, setComputedHeight] = useState(height)
   const [expanded, setExpanded] = useState(false)
   const [modalLoading, setModalLoading] = useState(false)
 
   useEffect(() => {
+    // derive canvas background color from CSS variables so canvas matches panel
+    const setCanvasBgFromCss = () => {
+      try {
+        const root = document.documentElement
+        const isDark = root.classList.contains('dark') || root.getAttribute('data-theme') === 'dark'
+        const light = getComputedStyle(root).getPropertyValue('--gray-50') || '#f8fafc'
+        const dark = getComputedStyle(root).getPropertyValue('--bg-primary') || '#0f172a'
+        setCanvasBg((isDark ? dark : light).trim())
+      } catch (e) {
+        // ignore and keep default
+      }
+    }
+
+    setCanvasBgFromCss()
+    // react to theme changes (class toggles)
+    const mo = new MutationObserver(() => setCanvasBgFromCss())
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] })
+    return () => mo.disconnect()
+  }, [documentId])
+
+  const [canvasBg, setCanvasBg] = useState('#f8fafc')
+
     const loadGraph = async () => {
       try {
         setLoading(true)
@@ -51,6 +77,7 @@ export default function DocumentGraph({
       }
     }
 
+  useEffect(() => {
     if (documentId) {
       loadGraph()
     }
@@ -105,12 +132,50 @@ export default function DocumentGraph({
     if (communityId === undefined || communityId === null) return '#9ca3af'
     return COMMUNITY_COLORS[Math.abs(communityId) % COMMUNITY_COLORS.length]
   }
+  // Derive lists of available node types & communities from the graph data
+  const availableTypes = useMemo(() => {
+    if (!graphData) return [] as string[]
+    const types = graphData.nodes
+      .map((n) => n.type)
+      .filter((t): t is string => typeof t === 'string' && t.length > 0)
+    return Array.from(new Set(types)).sort()
+  }, [graphData])
 
+  const availableCommunities = useMemo(() => {
+    if (!graphData) return [] as Array<number | null>
+    const s = new Set<number | null>()
+    graphData.nodes.forEach((n) => s.add(n.community_id === undefined ? null : n.community_id))
+    return Array.from(s).sort((a, b) => {
+      if (a === null) return 1
+      if (b === null) return -1
+      return (a as number) - (b as number)
+    })
+  }, [graphData])
+
+  // initialize selection to include all available items when graphData changes
+  useEffect(() => {
+    if (!graphData) return
+    setSelectedTypes(new Set<string>(availableTypes))
+    setSelectedCommunities(new Set<number | null>(availableCommunities))
+  }, [graphData, availableTypes, availableCommunities])
+
+  // Build filtered payload for ForceGraph; preserve metadata (level, documents, text_units)
   const graphPayload = useMemo(() => {
     if (!graphData) return { nodes: [], links: [] }
 
-    return {
-      nodes: graphData.nodes.map((node) => ({
+    // first, compute allowed node ids based on selected filters
+    const allowedNodeIds = new Set<string>()
+    graphData.nodes.forEach((node) => {
+      const nodeType = node.type
+      const typeOk = selectedTypes.size === 0 || (typeof nodeType === 'string' && selectedTypes.has(nodeType))
+      const comm = node.community_id === undefined ? null : node.community_id
+      const commOk = selectedCommunities.size === 0 || selectedCommunities.has(comm)
+      if (typeOk && commOk) allowedNodeIds.add(node.id)
+    })
+
+    const nodes = graphData.nodes
+      .filter((n) => allowedNodeIds.has(n.id))
+      .map((node) => ({
         id: node.id,
         name: node.label,
         val: Math.max(Math.sqrt(node.degree || 1) * 2, 2),
@@ -118,23 +183,30 @@ export default function DocumentGraph({
         type: node.type,
         communityId: node.community_id,
         degree: node.degree,
-      })),
-      links: graphData.edges.map((edge) => ({
+        level: node.level, // preserve level
+        documents: node.documents, // preserve document refs
+      }))
+
+    const links = graphData.edges
+      .filter((edge) => allowedNodeIds.has(edge.source) && allowedNodeIds.has(edge.target))
+      .map((edge) => ({
         source: edge.source,
         target: edge.target,
         value: edge.weight || 1,
         type: edge.type,
         description: edge.description,
-      })),
-    }
-  }, [graphData])
+        text_units: edge.text_units,
+      }))
+
+    return { nodes, links }
+  }, [graphData, selectedTypes, selectedCommunities])
 
   if (loading) {
     return (
       <div
         id={`graph-${documentId}`}
         style={{ height: `${height}px` }}
-        className="flex items-center justify-center bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700"
+        className="flex items-center justify-center bg-secondary-50 dark:bg-secondary-900 rounded-lg border border-slate-200 dark:border-slate-700"
       >
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-2" />
@@ -161,7 +233,7 @@ export default function DocumentGraph({
   // If the graph returned no nodes for this document, show a clear CTA to process entities
   if (graphData && Array.isArray(graphData.nodes) && graphData.nodes.length === 0) {
     return (
-      <div id={`graph-${documentId}`} style={{ height: `${height}px` }} className="flex items-center justify-center bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+      <div id={`graph-${documentId}`} style={{ height: `${height}px` }} className="flex items-center justify-center bg-secondary-50 dark:bg-secondary-900 rounded-lg border border-slate-200 dark:border-slate-700">
         <div className="text-center p-6">
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-2">No entities extracted for this document</p>
           <p className="text-xs text-slate-600 dark:text-slate-400 mb-4">Run entity extraction to populate the graph and community data.</p>
@@ -192,42 +264,170 @@ export default function DocumentGraph({
     )
   }
 
+  const toggleType = (t: string) => {
+    setSelectedTypes((prev) => {
+      const next = new Set(prev)
+      if (next.has(t)) next.delete(t)
+      else next.add(t)
+      return next
+    })
+  }
+
+  const toggleCommunity = (c: number | null) => {
+    setSelectedCommunities((prev) => {
+      const next = new Set(prev)
+      if (next.has(c)) next.delete(c)
+      else next.add(c)
+      return next
+    })
+  }
+
+  const clearFilters = () => {
+    setSelectedTypes(new Set<string>(availableTypes))
+    setSelectedCommunities(new Set<number | null>(availableCommunities))
+  }
+
   return (
     <>
-      <div id={`graph-${documentId}`} className="relative w-full border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
-        <div style={{ height: `${computedHeight}px`, width: '100%' }}>
+      <div id={`graph-${documentId}`} className="w-full grid grid-cols-4 gap-4 min-h-[250px]" style={{ height: `${computedHeight}px` }}>
+        {/* Left sidebar: filters (1 column) */}
+        <div className="col-span-1 bg-white dark:bg-secondary-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold">Filters</h3>
+            <button className="text-xs text-blue-600 dark:text-blue-400 underline" onClick={clearFilters}>Reset</button>
+          </div>
+
+          {/* Node Types Dropdown */}
+          <div className="mb-4">
+            <label className="block text-xs font-medium mb-2">Node Types</label>
+            <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-600 rounded p-2">
+              {availableTypes.map((t) => (
+                <label key={t} className="flex items-center text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-1 rounded">
+                  <input
+                    type="checkbox"
+                    checked={selectedTypes.has(t)}
+                    onChange={() => toggleType(t)}
+                    className="mr-2"
+                  />
+                  <span className="truncate">{t}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Communities Dropdown */}
+          {availableCommunities.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium mb-2">Communities</label>
+              <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-600 rounded p-2">
+                {availableCommunities.map((c) => (
+                  <label key={`${String(c)}`} className="flex items-center text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-1 rounded">
+                    <input
+                      type="checkbox"
+                      checked={selectedCommunities.has(c)}
+                      onChange={() => toggleCommunity(c)}
+                      className="mr-2"
+                    />
+                    <span className="inline-flex items-center">
+                      <span style={{ background: getCommunityColor(c as any) }} className="inline-block w-3 h-3 rounded mr-2" />
+                      <span>{c === null ? 'None' : String(c)}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: graph view (3 columns) */}
+        <div className="col-span-3 relative bg-secondary-50 dark:bg-secondary-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
           <ForceGraph3D
             graphData={graphPayload}
             nodeLabel={(node: any) => `${node.name} (${node.type})`}
             nodeColor={(node: any) => node.color}
             nodeVal={(node: any) => node.val}
+            onNodeClick={(node: any) => setSelectedNode(node)}
             linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
             linkColor={() => '#cbd5e1'}
             linkOpacity={0.5}
-            backgroundColor="#f8fafc"
-            height={computedHeight}
+            backgroundColor={canvasBg}
             width={width}
+            height={computedHeight}
             {...({} as any)}
           />
-        </div>
-        <div className="absolute top-2 right-2">
-          <button
-            onClick={() => setExpanded(true)}
-            className="rounded bg-white/90 px-2 py-1 text-xs font-medium shadow dark:bg-secondary-800"
+          
+          {/* Node details panel with slide-in animation */}
+          <div 
+            className={`absolute bottom-16 left-3 z-30 w-64 p-3 bg-white/95 dark:bg-secondary-800 rounded-md shadow-md text-xs transition-all duration-200 ease-out ${
+              selectedNode ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0 pointer-events-none'
+            }`}
           >
-            Expand
-          </button>
-        </div>
-        <div className="text-xs text-slate-500 dark:text-slate-400 p-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-          <span>{graphData.nodes.length} entities</span>
-          {' · '}
-          <span>{graphData.edges.length} relationships</span>
-          {graphData.communities && graphData.communities.length > 0 && (
-            <>
-              {' · '}
-              <span>{graphData.communities.length} communities</span>
-            </>
-          )}
+            {selectedNode && (
+              <>
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <div className="font-semibold text-sm">{selectedNode.name}</div>
+                    <div className="text-[11px] text-slate-600 dark:text-slate-300">{selectedNode.type}</div>
+                  </div>
+                  <button onClick={() => setSelectedNode(null)} className="text-xs ml-2">Close</button>
+                </div>
+                <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                  <div><strong>Degree:</strong> {selectedNode.degree ?? '-'}</div>
+                  <div><strong>Level:</strong> {selectedNode.level ?? '-'}</div>
+                  {selectedNode.documents && selectedNode.documents.length > 0 && (
+                    <div className="mt-2">
+                      <div className="font-medium">Documents</div>
+                      <ul className="list-disc ml-4 max-h-28 overflow-auto mt-1">
+                        {selectedNode.documents.slice(0, 6).map((d: any) => {
+                          const docId = (d && (d.id || d.document_id)) || (typeof d === 'string' ? d : null)
+                          const title = (d && (d.title || d.name)) || docId || String(d)
+                          return (
+                            <li key={docId || title} className="flex items-center justify-between">
+                              <span className="truncate pr-2">{title}</span>
+                              {docId ? (
+                                <a
+                                  href={`/documents/${docId}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-blue-600 dark:text-blue-400 ml-2"
+                                >
+                                  Open
+                                </a>
+                              ) : null}
+                            </li>
+                          )
+                        })}
+                        {selectedNode.documents.length > 6 && <li className="text-[11px]">and more...</li>}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          
+          {/* Expand button */}
+          <div className="absolute top-2 right-2 z-20">
+            <button
+              onClick={() => setExpanded(true)}
+              className="rounded bg-white/90 px-2 py-1 text-xs font-medium shadow dark:bg-secondary-800"
+            >
+              Expand
+            </button>
+          </div>
+          
+          {/* Stats bar pinned to bottom overlay */}
+          <div className="absolute bottom-0 left-0 right-0 z-10 text-xs text-slate-500 dark:text-slate-400 p-2 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-secondary-800/90 backdrop-blur-sm">
+            <span>{graphData.nodes.length} entities</span>
+            {' · '}
+            <span>{graphData.edges.length} relationships</span>
+            {graphData.communities && graphData.communities.length > 0 && (
+              <>
+                {' · '}
+                <span>{graphData.communities.length} communities</span>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -256,6 +456,7 @@ export default function DocumentGraph({
                   nodeLabel={(node: any) => `${node.name} (${node.type})`}
                   nodeColor={(node: any) => node.color}
                   nodeVal={(node: any) => node.val}
+                  onNodeClick={(node: any) => setSelectedNode(node)}
                   linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
                   linkColor={() => '#cbd5e1'}
                   linkOpacity={0.5}

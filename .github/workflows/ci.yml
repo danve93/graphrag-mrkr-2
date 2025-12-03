@@ -1,13 +1,10 @@
 name: CI
 
 on:
-  name: CI
+  push:
+  pull_request:
 
-  on:
-    push:
-    pull_request:
-
-  jobs:
+jobs:
     unit-tests:
       name: Unit Tests
       runs-on: ubuntu-latest
@@ -101,8 +98,107 @@ on:
         - name: Run E2E tests
           env:
             NEO4J_URI: bolt://localhost:7687
-            NEO4J_USER: neo4j
+            NEO4J_USERNAME: neo4j
             NEO4J_PASSWORD: test
           run: |
             . .venv/bin/activate
             pytest -q tests/e2e/
+
+    benchmarks:
+      name: Performance Benchmarks
+      needs: unit-tests
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      runs-on: ubuntu-latest
+      services:
+        neo4j:
+          image: neo4j:5.21
+          env:
+            NEO4J_AUTH: neo4j/test
+          ports:
+            - 7687:7687
+          options: >-
+            --health-cmd="cypher-shell --version || exit 1"
+            --health-interval=10s
+            --health-timeout=5s
+            --health-retries=5
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+
+        - name: Set up Python
+          uses: actions/setup-python@v4
+          with:
+            python-version: '3.11'
+
+        - name: Cache pip dependencies
+          uses: actions/cache@v4
+          with:
+            path: ~/.cache/pip
+            key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+            restore-keys: |
+              ${{ runner.os }}-pip-
+
+        - name: Install dependencies
+          run: |
+            python -m venv .venv
+            . .venv/bin/activate
+            pip install -r requirements.txt
+
+        - name: Start backend server
+          env:
+            NEO4J_URI: bolt://localhost:7687
+            NEO4J_USERNAME: neo4j
+            NEO4J_PASSWORD: test
+            OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          run: |
+            . .venv/bin/activate
+            python api/main.py &
+            sleep 10  # Wait for server to start
+          
+        - name: Run latency benchmarks
+          run: |
+            . .venv/bin/activate
+            chmod +x scripts/bench_latency.sh
+            ./scripts/bench_latency.sh --benchmark all --output benchmark_results_ci.json
+
+        - name: Upload benchmark results
+          uses: actions/upload-artifact@v4
+          with:
+            name: benchmark-results
+            path: benchmark_results_ci.json
+
+        - name: Comment benchmark results on PR
+          if: github.event_name == 'pull_request'
+          uses: actions/github-script@v7
+          with:
+            script: |
+              const fs = require('fs');
+              const results = JSON.parse(fs.readFileSync('benchmark_results_ci.json', 'utf8'));
+              
+              let comment = '## 📊 Benchmark Results\\n\\n';
+              
+              if (results.ttft_stats) {
+                comment += '### TTFT (Time To First Token)\\n';
+                comment += `- Median: ${results.ttft_stats.median_ms.toFixed(1)}ms\\n`;
+                comment += `- P90: ${results.ttft_stats.p90_ms.toFixed(1)}ms\\n\\n`;
+              }
+              
+              if (results.e2e_cold_stats) {
+                comment += '### End-to-End Latency (Cold)\\n';
+                comment += `- Median: ${results.e2e_cold_stats.median_ms.toFixed(1)}ms\\n`;
+                comment += `- P90: ${results.e2e_cold_stats.p90_ms.toFixed(1)}ms\\n\\n`;
+              }
+              
+              if (results.e2e_warm_stats) {
+                comment += '### End-to-End Latency (Warm/Cached)\\n';
+                comment += `- Median: ${results.e2e_warm_stats.median_ms.toFixed(1)}ms\\n`;
+                comment += `- P90: ${results.e2e_warm_stats.p90_ms.toFixed(1)}ms\\n`;
+                comment += `- Cache Speedup: ${results.e2e_warm_stats.cache_speedup_factor.toFixed(2)}x\\n`;
+              }
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });

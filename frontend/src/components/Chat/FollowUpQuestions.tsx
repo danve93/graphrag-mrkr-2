@@ -12,7 +12,7 @@ export default function FollowUpQuestions({
   onQuestionClick,
 }: FollowUpQuestionsProps) {
   return (
-    <div className="mt-4 ml-0 animate-slide-up">
+    <div className="mt-4 ml-0">
       <div className="flex items-center text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">
         <SparklesIcon className="w-4 h-4 mr-1" />
         Follow-up questions
@@ -22,7 +22,7 @@ export default function FollowUpQuestions({
           <button
             key={index}
             onClick={() => onQuestionClick(question)}
-            className="block w-full text-left px-4 py-3 bg-white dark:bg-secondary-800 border border-secondary-300 dark:border-secondary-600 rounded-lg transition-all duration-200 text-sm text-secondary-700 dark:text-secondary-300 suggestion-shimmer accent-hover"
+            className="block w-full text-left px-4 py-3 bg-white dark:bg-secondary-800 border border-secondary-300 dark:border-secondary-600 rounded-lg transition-all duration-200 text-sm text-secondary-700 dark:text-secondary-300 accent-hover"
           >
             {question}
           </button>

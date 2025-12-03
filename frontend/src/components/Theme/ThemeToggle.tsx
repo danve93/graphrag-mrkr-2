@@ -49,7 +49,7 @@ export function ThemeToggle() {
           'bg-secondary-200 dark:bg-secondary-700',
           'text-secondary-700 dark:text-secondary-200',
           'hover:bg-secondary-300 dark:hover:bg-secondary-600',
-          'shadow-lg hover:shadow-xl',
+          'shadow-lg',
           'transition-all duration-200',
           'border border-secondary-300 dark:border-secondary-600'
         )}

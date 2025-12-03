@@ -4,8 +4,6 @@
  # To rebuild images after changing Dockerfiles:
  #   docker compose up -d --build
 
-version: '3.8'
-
 services:
   neo4j:
     image: neo4j:5.21
@@ -70,6 +68,9 @@ services:
       - ENABLE_CLUSTERING=${ENABLE_CLUSTERING:-true}
       - ENABLE_GRAPH_CLUSTERING=${ENABLE_GRAPH_CLUSTERING:-true}
       - SUMMARIZATION_BATCH_SIZE=${SUMMARIZATION_BATCH_SIZE:-20}
+      - ENABLE_DOCUMENT_CLASSIFICATION=${ENABLE_DOCUMENT_CLASSIFICATION:-1}
+      - CLASSIFICATION_MODEL=${CLASSIFICATION_MODEL:-gpt-4o-mini}
+      - CLASSIFICATION_CONFIDENCE_THRESHOLD=${CLASSIFICATION_CONFIDENCE_THRESHOLD:-0.7}
     ports:
       - "8000:8000"  # FastAPI port
     volumes:

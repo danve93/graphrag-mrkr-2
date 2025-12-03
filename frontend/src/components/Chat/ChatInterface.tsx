@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { flushSync } from 'react-dom'
 import { Message } from '@/types'
 import { api } from '@/lib/api'
+import { Button } from '@mui/material'
+import { Chat as ChatIconMui } from '@mui/icons-material'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
 import FollowUpQuestions from './FollowUpQuestions'
@@ -27,6 +29,7 @@ export default function ChatInterface() {
   const abortControllerRef = useRef<AbortController | null>(null)
   const [currentStage, setCurrentStage] = useState<string>('query_analysis')
   const [completedStages, setCompletedStages] = useState<string[]>([])
+  const [stageUpdates, setStageUpdates] = useState<any[]>([])
   const [settings, setSettings] = useState<any>(null)
   const [chatTuningParams, setChatTuningParams] = useState({
     chunk_weight: 0.6,
@@ -190,13 +193,15 @@ export default function ChatInterface() {
     message: string,
     contextDocuments: string[],
     contextDocumentLabels: string[],
-    contextHashtags?: string[]
+    contextHashtags?: string[],
+    categoryFilter?: string[]
   ) => {
     if (!message.trim() || isLoading || isHistoryLoading) return
 
     // Reset stage indicators for new query
     setCurrentStage('query_analysis')
     setCompletedStages([])
+    setStageUpdates([])
 
     // Add user message
     const userMessage: Message = {
@@ -215,7 +220,9 @@ export default function ChatInterface() {
     let sources: any[] = []
     let qualityScore: any = null
     let followUpQuestions: string[] = []
+    let routingInfo: any = null
     let newSessionId = sessionId
+    let messageId: string | undefined = undefined
     let streamCompleted = false
     let animationFrameId: number | null = null
     let contentBuffer: string[] = []
@@ -280,6 +287,7 @@ export default function ChatInterface() {
           context_documents: contextDocuments,
           context_document_labels: contextDocumentLabels,
           context_hashtags: contextHashtags,
+          category_filter: categoryFilter,
           chunk_weight: chatTuningParams.chunk_weight,
           entity_weight: chatTuningParams.entity_weight,
           path_weight: chatTuningParams.path_weight,
@@ -321,30 +329,54 @@ export default function ChatInterface() {
                 // Add to buffer instead of updating immediately
                 contentBuffer.push(data.content)
               } else if (data.type === 'stage') {
-                console.log('Received stage:', data.content)
+                console.log('Received stage:', data.content, data)
                 flushSync(() => {
-                  setCurrentStage(data.content)
+                  // Handle both legacy string format and new dict format
+                  const stageName = typeof data.content === 'string' ? data.content : data.content
+                  setCurrentStage(stageName)
+                  
+                  // Store stage update with timing metadata
+                  const stageUpdate: any = {
+                    name: stageName,
+                    duration_ms: data.duration_ms,
+                    timestamp: data.timestamp,
+                    metadata: data.metadata || {}
+                  }
+                  setStageUpdates((prev) => [...prev, stageUpdate])
+                  
                   // Track completed stages
                   setCompletedStages((prev) => {
-                    if (!prev.includes(data.content)) {
-                      return [...prev, data.content]
+                    if (!prev.includes(stageName)) {
+                      return [...prev, stageName]
                     }
                     return prev
                   })
                 })
               } else if (data.type === 'sources') {
-                sources = data.content
+                // Accumulate sources from batches
+                if (Array.isArray(data.content)) {
+                  sources = [...sources, ...data.content]
+                }
               } else if (data.type === 'quality_score') {
                 qualityScore = data.content
               } else if (data.type === 'follow_ups') {
                 followUpQuestions = data.content
               } else if (data.type === 'metadata') {
+                console.log('📋 Metadata event received:', {
+                  session_id: data.content.session_id,
+                  message_id: data.content.message_id
+                })
                 newSessionId = data.content.session_id
+                messageId = data.content.message_id
                 if (Array.isArray(data.content.context_documents)) {
                   effectiveContextDocs = data.content.context_documents
                   effectiveContextDocLabels = data.content.context_documents.map(
                     (docId: string) => contextDocLabelMap.get(docId) || docId
                   )
+                }
+                // Capture routing info from metadata
+                if (data.content.metadata?.routing_info) {
+                  routingInfo = data.content.metadata.routing_info
                 }
               } else if (data.type === 'done') {
                 streamCompleted = true
@@ -373,6 +405,16 @@ export default function ChatInterface() {
         checkComplete()
       })
 
+      // Calculate total duration from stages
+      const totalDuration = stageUpdates.reduce((sum, stage) => sum + (stage.duration_ms || 0), 0)
+      
+      console.log('✅ Final message update:', {
+        message_id: messageId,
+        session_id: newSessionId,
+        has_sources: sources.length > 0,
+        sources_count: sources.length
+      })
+      
       // Final update with all metadata
       updateLastMessage((prev) => ({
         ...prev,
@@ -383,6 +425,11 @@ export default function ChatInterface() {
         follow_up_questions: followUpQuestions,
         context_documents: effectiveContextDocs,
         context_document_labels: effectiveContextDocLabels,
+        stages: stageUpdates,
+        total_duration_ms: totalDuration,
+        message_id: messageId,
+        session_id: newSessionId,
+        routing_info: routingInfo,
       }))
 
       if (newSessionId && !sessionId) {
@@ -439,20 +486,55 @@ export default function ChatInterface() {
     handleSendMessage(question, [], [])
   }
 
+  const handleRetryWithCategories = (query: string, categories: string[]) => {
+    // Send the query again with category filter override
+    handleSendMessage(query, [], [], undefined, categories)
+  }
+
   // Get user messages for history navigation
   const userMessages = messages
     .filter((msg) => msg.role === 'user')
     .map((msg) => msg.content)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       {/* Connection Status Alert */}
       <ConnectionStatus />
 
-      {/* New Chat button is shown in empty-state below the tabs */}
+      {/* Header */}
+      <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ 
+            width: '40px', 
+            height: '40px', 
+            borderRadius: '8px', 
+            backgroundColor: '#f27a0320',
+            border: '1px solid #f27a03',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <ChatIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {messages.length > 0 && messages[0].role === 'user' 
+                ? messages[0].content.slice(0, 100) + (messages[0].content.length > 100 ? '...' : '')
+                : 'Chat Interface'
+              }
+            </h1>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              {messages.length > 0 
+                ? `${messages.length} message${messages.length !== 1 ? 's' : ''} in this conversation`
+                : 'Graph-enhanced RAG with streaming responses and provenance'
+              }
+            </p>
+          </div>
+        </div>
+      </div>
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-6 pt-6 pb-32">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
@@ -483,7 +565,7 @@ export default function ChatInterface() {
           <div className="max-w-4xl mx-auto space-y-4">
             {messages.map((message, index) => (
               <div key={index}>
-                <MessageBubble message={message} />
+                <MessageBubble message={message} onRetryWithCategories={handleRetryWithCategories} />
                 {message.role === 'assistant' &&
                   !message.isStreaming &&
                   message.follow_up_questions &&
@@ -502,7 +584,8 @@ export default function ChatInterface() {
                     <div className="mt-4">
                       <LoadingIndicator 
                         currentStage={completedStages[completedStages.length - 1]} 
-                        completedStages={completedStages} 
+                        completedStages={completedStages}
+                        stageUpdates={stageUpdates}
                         isLoading={false}
                         enableQualityScoring={settings?.enable_quality_scoring ?? true}
                       />
@@ -510,14 +593,14 @@ export default function ChatInterface() {
                   )}
               </div>
             ))}
-            {(isLoading || isHistoryLoading) && <LoadingIndicator currentStage={currentStage} completedStages={completedStages} isLoading={isLoading || isHistoryLoading} enableQualityScoring={settings?.enable_quality_scoring ?? true} />}
+            {(isLoading || isHistoryLoading) && <LoadingIndicator currentStage={currentStage} completedStages={completedStages} stageUpdates={stageUpdates} isLoading={isLoading || isHistoryLoading} enableQualityScoring={settings?.enable_quality_scoring ?? true} />}
             <div ref={messagesEndRef} />
           </div>
         )}
       </div>
 
-      {/* Input */}
-      <div className="flex-shrink-0 border-t px-6 py-4" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
+      {/* Input - Sticky to bottom */}
+      <div className="sticky bottom-0 left-0 right-0 border-t px-4 md:px-6 py-4 pb-28 md:pb-28 mt-auto" style={{ borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}>
         <div className="max-w-4xl mx-auto">
           <ChatInput
             onSend={handleSendMessage}

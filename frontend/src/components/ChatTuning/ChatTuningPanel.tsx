@@ -2,6 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import { Button } from '@mui/material'
+import { Settings as SettingsIcon } from '@mui/icons-material'
+import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Tooltip from '@/components/Utils/Tooltip'
 import Loader from '@/components/Utils/Loader'
 
@@ -37,9 +40,26 @@ export default function ChatTuningPanel() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(CATEGORY_ORDER))
 
   useEffect(() => {
     loadConfig()
+  }, [])
+
+  // Listen for section selection from sidebar
+  useEffect(() => {
+    const handleSectionSelect = (event: CustomEvent<string>) => {
+      const sectionId = event.detail;
+      const element = document.getElementById(sectionId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+
+    window.addEventListener('chat-tuning-section-select', handleSectionSelect as EventListener);
+    return () => {
+      window.removeEventListener('chat-tuning-section-select', handleSectionSelect as EventListener);
+    };
   }, [])
 
   const loadConfig = async () => {
@@ -103,6 +123,18 @@ export default function ChatTuningPanel() {
     setError(null)
   }
 
+  const toggleCategory = (category: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev)
+      if (next.has(category)) {
+        next.delete(category)
+      } else {
+        next.add(category)
+      }
+      return next
+    })
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -146,10 +178,47 @@ export default function ChatTuningPanel() {
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
         {/* Header */}
-          <div style={{ borderBottom: '1px solid var(--border)', padding: '0 var(--space-6) var(--space-6)' }}>
-        <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
-          Chat Tuning
-        </h1>
+          <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
+          <div style={{ 
+            width: '40px', 
+            height: '40px', 
+            borderRadius: '8px', 
+            backgroundColor: '#f27a0320',
+            border: '1px solid #f27a03',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <SettingsIcon style={{ fontSize: '24px', color: '#f27a03' }} />
+          </div>
+          <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
+            Chat Tuning
+          </h1>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <Button
+              size="small"
+              onClick={handleReset}
+              disabled={isSaving}
+              style={{ textTransform: 'none', color: 'var(--text-secondary)' }}
+            >
+              Reset
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={handleSave}
+              disabled={isSaving}
+              style={{
+                textTransform: 'none',
+                backgroundColor: 'var(--accent-primary)',
+                color: 'white',
+              }}
+            >
+              {isSaving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </div>
+        </div>
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           Adjust retrieval and generation parameters for chat responses. Changes apply instantly to new queries.
         </p>
@@ -172,32 +241,36 @@ export default function ChatTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: '0 var(--space-6) var(--space-6)' }}>
-        {sortedCategories.map((category, idx) => {
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {sortedCategories.map((category) => {
           const params = groupedParams[category]
+          const isExpanded = expandedCategories.has(category)
+          const sectionId = category.toLowerCase().replace(/\s+/g, '-');
+          
           return (
-            <div key={category} style={{ marginBottom: 'var(--space-12)', paddingBottom: idx < sortedCategories.length - 1 ? 'var(--space-8)' : 0, borderBottom: idx < sortedCategories.length - 1 ? '1px solid var(--border)' : 'none' }}>
-              <h2 className="font-display" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 'var(--space-6)' }}>
-                {category}
-              </h2>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+            <div key={category} id={sectionId} style={{ scrollMarginTop: '24px' }}>
+            <ExpandablePanel
+              title={category}
+              expanded={isExpanded}
+              onToggle={() => toggleCategory(category)}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {params.map((param) => (
-                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                    <div className="flex items-center" style={{ gap: 'var(--space-2)' }}>
-                      <label style={{ fontSize: 'var(--text-base)', fontWeight: 500, color: 'var(--text-primary)' }}>
+                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div className="flex items-center" style={{ gap: '8px' }}>
+                      <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
                         {param.label}
                       </label>
                       <Tooltip content={param.tooltip}>
                         <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
-                          <InformationCircleIcon style={{ width: '18px', height: '18px' }} />
+                          <InformationCircleIcon style={{ width: '16px', height: '16px' }} />
                         </button>
                       </Tooltip>
                     </div>
 
                     {param.type === 'slider' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontSize: 'var(--text-sm)', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
                           {param.value}
                         </span>
                         <input
@@ -208,31 +281,29 @@ export default function ChatTuningPanel() {
                           value={param.value as number}
                           onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
                           className="slider"
-                          style={{ flex: 1, maxWidth: '500px' }}
+                          style={{ flex: 1 }}
                           title={String(param.value)}
                         />
                       </div>
                     )}
 
                     {param.type === 'select' && param.options && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                        <select
-                          value={String(param.value)}
-                          onChange={(e) => handleValueChange(param.key, e.target.value)}
-                          className="input-field"
-                          style={{ maxWidth: '400px' }}
-                        >
-                          {param.options.map((opt) => (
-                            <option key={opt} value={opt}>
-                              {opt}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                      <select
+                        value={String(param.value)}
+                        onChange={(e) => handleValueChange(param.key, e.target.value)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      >
+                        {param.options.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
                     )}
 
                     {param.type === 'toggle' && (
-                      <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <button
                           onClick={() => handleValueChange(param.key, !param.value)}
                           className={`relative inline-flex h-6 w-11 items-center transition-colors ${
@@ -251,7 +322,7 @@ export default function ChatTuningPanel() {
                             }}
                           />
                         </button>
-                        <span style={{ marginLeft: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                           {param.value ? 'Enabled' : 'Disabled'}
                         </span>
                       </div>
@@ -259,28 +330,12 @@ export default function ChatTuningPanel() {
                   </div>
                 ))}
               </div>
+            </ExpandablePanel>
             </div>
           )
         })}
       </div>
 
-      {/* Footer Actions */}
-      <div className="flex" style={{ borderTop: '1px solid var(--border)', padding: 'var(--space-6)', gap: 'var(--space-4)' }}>
-        <button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex-1 button-primary"
-        >
-          {isSaving ? <Loader size={14} label="Saving..." /> : 'Save Configuration'}
-        </button>
-        <button
-          onClick={handleReset}
-          disabled={isSaving}
-          className="button-secondary"
-        >
-          Reset
-        </button>
-      </div>
     </div>
   )
 }

@@ -47,6 +47,59 @@ def setup_indexes():
         return False
 
 
+def setup_constraints():
+    """Create database constraints (idempotent)."""
+    try:
+        logger.info("Setting up database constraints...")
+        # Case-sensitive unique constraint on Category.name
+        with graph_db.session_scope() as session:
+            session.run(
+                """
+                CREATE CONSTRAINT category_name_unique IF NOT EXISTS
+                FOR (c:Category) REQUIRE c.name IS UNIQUE
+                """
+            )
+        logger.info("✅ Ensured unique constraint on Category.name (case-sensitive)")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Constraint setup failed: {e}")
+        return False
+
+
+def setup_casefold_constraints(populate: bool = True):
+    """Optional case-insensitive uniqueness via `name_lower` property.
+
+    - Adds/ensures a unique constraint on `Category.name_lower`.
+    - Optionally populates `name_lower = toLower(name)` for existing Category nodes.
+    """
+    try:
+        logger.info("Setting up casefold (name_lower) constraint...")
+        with graph_db.session_scope() as session:
+            # Create unique constraint on name_lower
+            session.run(
+                """
+                CREATE CONSTRAINT category_name_lower_unique IF NOT EXISTS
+                FOR (c:Category) REQUIRE c.name_lower IS UNIQUE
+                """
+            )
+            logger.info("✅ Ensured unique constraint on Category.name_lower")
+
+            if populate:
+                logger.info("Populating `name_lower` for existing Category nodes...")
+                session.run(
+                    """
+                    MATCH (c:Category)
+                    WHERE c.name IS NOT NULL
+                    SET c.name_lower = toLower(c.name)
+                    """
+                )
+                logger.info("✅ Populated name_lower from name for existing categories")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Casefold setup failed: {e}")
+        return False
+
+
 def clear_database():
     """Clear all data from the database (use with caution!)."""
     try:
@@ -341,6 +394,23 @@ Examples:
         "--setup", "-s", action="store_true", help="Setup database indexes"
     )
 
+    # Backwards-compatible alias often used: --setup-indexes
+    parser.add_argument(
+        "--setup-indexes", action="store_true", help="Alias for --setup (setup indexes)"
+    )
+
+    # Explicit constraints setup
+    parser.add_argument(
+        "--setup-constraints", action="store_true", help="Setup database constraints"
+    )
+
+    # Optional case-insensitive uniqueness support
+    parser.add_argument(
+        "--setup-casefold",
+        action="store_true",
+        help="Setup case-insensitive uniqueness via name_lower and populate existing nodes",
+    )
+
     parser.add_argument("--stats", action="store_true", help="Show database statistics")
 
     parser.add_argument(
@@ -371,10 +441,13 @@ Examples:
         logging.getLogger().setLevel(logging.DEBUG)
 
     # If no action specified, run all setup tasks
-    if not any([args.test, args.setup, args.stats, args.clear]):
+    if not any([args.test, args.setup, args.setup_indexes, args.setup_constraints, args.setup_casefold, args.stats, args.clear]):
         logger.info("No specific action requested, running full setup...")
         args.test = True
         args.setup = True
+        args.setup_constraints = True
+        # Default full setup includes casefold population as well
+        args.setup_casefold = True
         args.stats = True
 
     success = True
@@ -400,8 +473,15 @@ Examples:
             else:
                 logger.info("Database clear cancelled")
 
-        if args.setup:
+        # Allow alias flag
+        if args.setup or args.setup_indexes:
             success &= setup_indexes()
+
+        if args.setup_constraints:
+            success &= setup_constraints()
+
+        if args.setup_casefold:
+            success &= setup_casefold_constraints(populate=True)
 
         if args.stats:
             success &= show_stats()

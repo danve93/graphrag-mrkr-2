@@ -27,6 +27,7 @@ For a short technical overview and architecture notes, see [`AGENTS.md`](./AGENT
   - [Backend](#backend)
   - [Frontend](#frontend)
 - [Important CLI Scripts](#important-cli-scripts)
+ - [Neo4j Setup Flags](#neo4j-setup-flags)
 - [Selected API Endpoints](#selected-api-endpoints)
 - [Ingestion & Processing](#ingestion--processing)
 - [Advanced Features](#advanced-features)
@@ -47,13 +48,21 @@ Key components:
 
 ## Implementation Details
 
-- Entity accumulation and deduplication: an in-memory graph layer is used to accumulate extracted entities and relationships before persistence. Implementations merge duplicate entities, accumulate descriptions, sum relationship strengths, track provenance, and export batch Cypher (UNWIND) to Neo4j to reduce database round-trips.
+- **Entity accumulation and deduplication:** an in-memory graph layer is used to accumulate extracted entities and relationships before persistence. Implementations merge duplicate entities, accumulate descriptions, sum relationship strengths, track provenance, and export batch Cypher (UNWIND) to Neo4j to reduce database round-trips.
 
-- Multi-layer caching: the application provides long-lived service instances with multiple caches — an entity-label TTL cache to reduce DB lookups, an embeddings cache keyed by text+model to avoid redundant embedding calls, and a short-TTL retrieval cache for recent queries. Cache metrics are exposed via an API endpoint for monitoring.
+- **Multi-layer caching:** the application provides long-lived service instances with multiple caches — an entity-label TTL cache to reduce DB lookups, an embeddings cache keyed by text+model to avoid redundant embedding calls, and a short-TTL retrieval cache for recent queries. Cache metrics are exposed via an API endpoint for monitoring. Retrieval caching uses a comprehensive 14-parameter hash (query, model, mode, top-k, expansion settings, reranking, weights, RRF, fulltext flags) ensuring cache hits only occur when all parameters match.
 
-- Marker-based PDF/document conversion integration: the ingestion pipeline supports calling an external high-accuracy document conversion tool in-process, via CLI, or via a small server. The integration supports LLM-assisted extraction, optional forced OCR, table merging, and configurable device/dtype settings. Operational and licensing considerations are handled via configuration and recommended isolation.
+- **Conversation context preservation:** the chat system maintains conversation history across follow-up queries by preserving messages in the RAG state. Follow-up queries correctly reference previous messages without re-sending full context, reducing token usage and improving response relevance.
 
-- UI and interaction updates: layout fixes removed unintended top padding from scroll containers; tooltip logic was refactored to attach handlers to DOM children when possible to avoid adding positioned wrapper elements; color parsing and community-color rendering were made defensive to avoid runtime errors. Design system updates include typography, spacing tokens, simplified color palette, and animation reductions.
+- **Stage timing instrumentation:** the RAG pipeline tracks execution time for all four stages (query analysis, retrieval, graph reasoning, generation) with millisecond precision. Each stage emits duration_ms, timestamp, and metadata (chunks retrieved, context items, response length, model used) enabling detailed performance monitoring and optimization.
+
+- **UI timing visualization:** the frontend displays real-time stage progress with timing information in tooltips (e.g., "Retrieving Documents (350ms) - 5 chunks") and shows total query duration after completion. Stage metadata is rendered inline to provide visibility into pipeline behavior.
+
+- **Marker-based PDF/document conversion integration:** the ingestion pipeline supports calling an external high-accuracy document conversion tool in-process, via CLI, or via a small server. The integration supports LLM-assisted extraction, optional forced OCR, table merging, and configurable device/dtype settings. Operational and licensing considerations are handled via configuration and recommended isolation.
+
+- **Query routing with semantic caching:** the system implements intelligent query routing that classifies queries into 1-3 relevant document categories using LLM-based analysis. Routing decisions are cached using embedding-based semantic similarity (0.92 cosine threshold) to reduce latency by 30%+ on similar queries. The implementation includes automatic fallback validation that expands search scope when insufficient results are found (<3 chunks), multi-category support for queries spanning multiple areas, and comprehensive metrics tracking (accuracy, cache hit rates, fallback rates) exposed via API. Feature-flagged design enables zero-downtime rollback to legacy CategoryManager behavior.
+
+- **UI and interaction updates:** layout fixes removed unintended top padding from scroll containers; tooltip logic was refactored to attach handlers to DOM children when possible to avoid adding positioned wrapper elements; color parsing and community-color rendering were made defensive to avoid runtime errors. Design system updates include typography, spacing tokens, simplified color palette, and animation reductions.
 
 ## Pipeline Diagram
 
@@ -118,6 +127,55 @@ docker compose logs -f
 ```
 
 Open the frontend at `http://localhost:3000` and the backend docs at `http://localhost:8000/docs`.
+### Ingestion-Time Document Classification (M2.4)
+
+Enable LLM-assisted document classification during ingestion to improve retrieval precision. Category metadata is stored on Document and Chunk nodes.
+
+```bash
+# Backend: enable classification
+export ENABLE_DOCUMENT_CLASSIFICATION=1
+export CLASSIFICATION_MODEL=gpt-4o-mini
+export CLASSIFICATION_CONFIDENCE_THRESHOLD=0.7
+
+# Batch reindex (classify existing docs)
+docker compose exec backend python scripts/reindex_classification.py --limit 100
+
+# Single doc reindex
+docker compose exec backend python scripts/reindex_classification.py --doc-id <doc_id>
+```
+
+Behavior:
+- Documents get `category`, `categories`, `classification_confidence`, `keywords`, `difficulty`.
+- Chunks inherit `category` and include `chunk_number` and optional `semantic_group`.
+- Low-confidence classifications fall back to `general`.
+
+### Query Routing with Semantic Caching (M2.3)
+
+Enable intelligent query routing to automatically classify queries and filter retrieval to relevant document categories. Reduces latency and improves precision.
+
+```bash
+# Backend: enable query routing
+export ENABLE_QUERY_ROUTING=true
+export QUERY_ROUTING_CONFIDENCE_THRESHOLD=0.7
+
+# Restart backend to apply
+docker compose up -d backend
+```
+
+**Features:**
+- **Automatic classification:** LLM-based routing classifies queries into 1-3 relevant categories
+- **Multi-category support:** Handles queries spanning multiple documentation areas
+- **Semantic caching:** Embeds routing decisions and caches similar queries (92% similarity threshold)
+- **Fallback validation:** Expands search when insufficient results found (min 3 chunks)
+- **Metrics tracking:** Monitor routing accuracy, cache hit rates, and latency via `/api/database/routing-metrics`
+
+**Configuration:**
+- `ENABLE_QUERY_ROUTING` - Master toggle (default: false for backward compatibility)
+- `QUERY_ROUTING_CONFIDENCE_THRESHOLD` - Min confidence to apply filtering (default: 0.7)
+- `ENABLE_ROUTING_CACHE` - Enable semantic cache (default: true)
+- `FALLBACK_ENABLED` - Auto-expand on insufficient results (default: true)
+
+See `config/settings.py` for all routing configuration options.
 
 ### Docker Compose: internal vs host networking
 
@@ -142,6 +200,35 @@ Notes:
 - Prefer the default internal networking (`bolt://neo4j:7687`) unless you explicitly need containers to reach a host service.
 - The pytest fixture (`tests/conftest.py`) supplies container-internal values when it starts Compose so accidental host `NEO4J_URI` exports will not be injected into containers.
 - Do not commit secrets. Use `.env` or CI secret stores for credentials and keep `.env.example` as a template.
+
+## Neo4j Setup Flags
+
+Use the setup script to initialize indexes and constraints in Neo4j. These commands are idempotent and safe to re-run.
+
+```bash
+# Test connection, create indexes + constraints + casefold, then show stats
+docker compose exec backend python scripts/setup_neo4j.py
+
+# Indexes (alias supported)
+docker compose exec backend python scripts/setup_neo4j.py --setup
+docker compose exec backend python scripts/setup_neo4j.py --setup-indexes
+
+# Constraints
+docker compose exec backend python scripts/setup_neo4j.py --setup-constraints
+
+# Case-insensitive uniqueness (name_lower)
+docker compose exec backend python scripts/setup_neo4j.py --setup-casefold
+
+# Dedupe categories (dry-run then apply)
+docker compose exec backend python scripts/dedupe_categories.py --list
+docker compose exec backend python scripts/dedupe_categories.py --apply --strategy merge-keep-first
+```
+
+Behavior:
+- `--setup` and `--setup-indexes`: ensure GDS/fulltext indexes.
+- `--setup-constraints`: ensure unique `Category.name` (case-sensitive).
+- `--setup-casefold`: ensure unique `Category.name_lower` and populate from `name`.
+- Default run (no flags): test → indexes → constraints → casefold → stats.
 
 ## Local Development
 
@@ -582,7 +669,7 @@ make e2e-local
 # Or run step-by-step:
 make start-neo4j
 export NEO4J_URI=bolt://localhost:7687
-export NEO4J_USER=neo4j
+export NEO4J_USERNAME=neo4j
 export NEO4J_PASSWORD=test
 pytest -q tests/e2e/
 make stop-neo4j
@@ -590,7 +677,7 @@ make stop-neo4j
 
 Notes:
 - The Makefile uses the official `neo4j:5.21` image and exposes ports `7474` (HTTP) and `7687` (Bolt).
-- The test suite expects `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` environment variables to be set when running E2E tests.
+- The test suite expects `NEO4J_URI`, `NEO4J_USERNAME`, and `NEO4J_PASSWORD` environment variables to be set when running E2E tests.
 - If Neo4j needs more startup time on your machine, increase the `sleep` delay in the `Makefile` `e2e-local` target.
 
 Docker Compose option
