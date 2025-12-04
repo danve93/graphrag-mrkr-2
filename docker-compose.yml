@@ -72,7 +72,8 @@ services:
       - CLASSIFICATION_MODEL=${CLASSIFICATION_MODEL:-gpt-4o-mini}
       - CLASSIFICATION_CONFIDENCE_THRESHOLD=${CLASSIFICATION_CONFIDENCE_THRESHOLD:-0.7}
       # CORS Configuration - allow frontend origins
-      - CORS_ORIGINS=["http://localhost:3000","http://localhost:3001","http://cph-01.demo.zextras.io:3000"]
+      # Override with CORS_ORIGINS in .env or docker-compose.prod.yml for production
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001"]}
     ports:
       - "8000:8000"  # FastAPI port
     volumes:
@@ -95,14 +96,15 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        - NEXT_PUBLIC_API_URL=http://cph-01.demo.zextras.io:8000
+        # Default to localhost for local development
+        # Override with docker-compose.prod.yml for production
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     container_name: graphrag-frontend
     env_file:
       - ./.env
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL_SERVER=http://backend:8000
-      - NEXT_PUBLIC_API_URL=http://cph-01.demo.zextras.io:8000
     ports:
       - "3000:3000"  # Next.js port
     networks:

@@ -1,0 +1,17 @@
+# Production overrides for docker-compose.yml
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file overrides the default localhost configuration with production URLs.
+# Keep docker-compose.yml for local development defaults.
+
+services:
+  frontend:
+    build:
+      args:
+        # Production API URL
+        - NEXT_PUBLIC_API_URL=http://cph-01.demo.zextras.io:8000
+
+  backend:
+    environment:
+      # Production CORS origins
+      - CORS_ORIGINS=["http://localhost:3000","http://localhost:3001","http://cph-01.demo.zextras.io:3000"]
