@@ -1,18 +1,6 @@
-# Frontend Dockerfile - Next.js application
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-
-# Copy package files
-COPY frontend/package*.json ./
-# Install dependencies first (cacheable layer)
-RUN npm ci --silent --no-audit --no-fund
-
-# Copy source code and build
-COPY frontend/ .
-RUN npm run build
-
-# Production stage
+# Frontend Dockerfile - Next.js application  
+# This Dockerfile expects a pre-built .next directory at frontend/.next
+# If rebuilding is needed, use: NEXT_PUBLIC_API_URL=<url> npm run build in frontend/ first
 FROM node:20-alpine
 
 WORKDIR /app
@@ -20,15 +8,16 @@ WORKDIR /app
 RUN mkdir public
 RUN apk add --no-cache curl
 
-# Install only production dependencies
+# Copy package files and install production dependencies
 COPY frontend/package*.json ./
 RUN npm ci --only=production
 
-# Copy built application from builder stage
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.js ./
-COPY --from=builder /app/package.json ./
+# Copy pre-built Next.js application
+# Assumes .next directory was built locally before Docker build
+COPY frontend/.next ./.next
+COPY frontend/public ./public
+COPY frontend/next.config.js ./
+COPY frontend/package.json ./
 
 # Create a non-root user for security
 RUN addgroup -g 1001 -S nodejs && \

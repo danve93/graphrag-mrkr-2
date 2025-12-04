@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react'
 import { useChatStore } from '@/store/chatStore'
 import Loader from '@/components/Utils/Loader'
+import { API_URL } from '@/lib/api'
 
 export default function StatusIndicator() {
   const isConnected = useChatStore((s) => s.isConnected)
@@ -17,7 +18,7 @@ export default function StatusIndicator() {
 
     async function fetchHealth() {
       try {
-        const res = await fetch('/api/health')
+        const res = await fetch(`${API_URL}/api/health`)
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`)
         }

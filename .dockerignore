@@ -89,7 +89,8 @@ tmp/
 temp/
 
 # Frontend build artifacts and dependencies
-frontend/.next
+# Note: .next is needed for production deployments
+# frontend/node_modules is OK to exclude (only needed at build time)
 frontend/node_modules
 
 # Neo4j data (if local)

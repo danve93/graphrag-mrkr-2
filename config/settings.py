@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
+    # CORS Configuration
+    cors_origins: List[str] = Field(
+        default=["http://localhost:3000", "http://localhost:3001"],
+        description="Allowed origins for CORS"
+    )
+
     # LLM Provider Configuration
     llm_provider: str = Field(default="openai", description="LLM provider to use")
 

@@ -6,6 +6,7 @@ import { Button } from '@mui/material';
 import { Route as RouteIcon } from '@mui/icons-material';
 import ExpandablePanel from '@/components/Utils/ExpandablePanel';
 import { FeedbackMetricsDashboard } from '../Chat/FeedbackMetricsDashboard';
+import { API_URL } from '@/lib/api';
 
 interface RoutingMetrics {
   total_queries: number;
@@ -40,7 +41,7 @@ export default function RoutingView() {
 
   const fetchMetrics = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/database/routing-metrics');
+      const response = await fetch(`${API_URL}/api/database/routing-metrics`);
       if (!response.ok) throw new Error('Failed to fetch metrics');
       const data = await response.json();
       setMetrics(data);

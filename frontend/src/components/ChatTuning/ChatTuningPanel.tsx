@@ -7,6 +7,7 @@ import { Settings as SettingsIcon } from '@mui/icons-material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Tooltip from '@/components/Utils/Tooltip'
 import Loader from '@/components/Utils/Loader'
+import { API_URL } from '@/lib/api'
 
 interface ChatParameter {
   key: string
@@ -66,7 +67,7 @@ export default function ChatTuningPanel() {
     try {
       setIsLoading(true)
       setError(null)
-      const response = await fetch('/api/chat-tuning/config')
+      const response = await fetch(`${API_URL}/api/chat-tuning/config`)
       if (!response.ok) {
         throw new Error(`Failed to load config: ${response.statusText}`)
       }
@@ -87,7 +88,7 @@ export default function ChatTuningPanel() {
       setError(null)
       setSuccessMessage(null)
 
-      const response = await fetch('/api/chat-tuning/config', {
+      const response = await fetch(`${API_URL}/api/chat-tuning/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),

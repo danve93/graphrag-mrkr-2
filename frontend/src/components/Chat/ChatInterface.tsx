@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { flushSync } from 'react-dom'
 import { Message } from '@/types'
-import { api } from '@/lib/api'
+import { api, API_URL } from '@/lib/api'
 import { Button } from '@mui/material'
 import { Chat as ChatIconMui } from '@mui/icons-material'
 import MessageBubble from './MessageBubble'
@@ -65,7 +65,7 @@ export default function ChatInterface() {
     
     const fetchChatTuningConfig = async () => {
       try {
-        const response = await fetch('/api/chat-tuning/config/values')
+        const response = await fetch(`${API_URL}/api/chat-tuning/config/values`)
         if (response.ok) {
           const values = await response.json()
           setChatTuningParams((prev) => ({

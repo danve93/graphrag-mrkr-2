@@ -71,6 +71,8 @@ services:
       - ENABLE_DOCUMENT_CLASSIFICATION=${ENABLE_DOCUMENT_CLASSIFICATION:-1}
       - CLASSIFICATION_MODEL=${CLASSIFICATION_MODEL:-gpt-4o-mini}
       - CLASSIFICATION_CONFIDENCE_THRESHOLD=${CLASSIFICATION_CONFIDENCE_THRESHOLD:-0.7}
+      # CORS Configuration - allow frontend origins
+      - CORS_ORIGINS=["http://localhost:3000","http://localhost:3001","http://cph-01.demo.zextras.io:3000"]
     ports:
       - "8000:8000"  # FastAPI port
     volumes:
@@ -92,12 +94,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        - NEXT_PUBLIC_API_URL=http://cph-01.demo.zextras.io:8000
     container_name: graphrag-frontend
     env_file:
       - ./.env
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - NEXT_PUBLIC_API_URL_SERVER=http://backend:8000
+      - NEXT_PUBLIC_API_URL=http://cph-01.demo.zextras.io:8000
     ports:
       - "3000:3000"  # Next.js port
     networks:
