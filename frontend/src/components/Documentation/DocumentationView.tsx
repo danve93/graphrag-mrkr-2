@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { API_URL } from '@/lib/api'
 import { BookOpen, ExternalLink } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -28,7 +29,7 @@ export default function DocumentationView() {
     // Broadcast the selected file to the sidebar
     window.dispatchEvent(new CustomEvent('documentation-file-changed', { detail: path }));
     try {
-      const response = await fetch(`/api/documentation/${path}`);
+      const response = await fetch(`${API_URL}/api/documentation/${path}`);
       if (response.ok) {
         const content = await response.text();
         setFileContent(content);
