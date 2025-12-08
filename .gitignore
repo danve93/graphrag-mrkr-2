@@ -42,12 +42,13 @@ env/
 /frontend/.next
 
 # Ignore detailed docs subfolders (generated or large docs)
-# Ignore entire docs folder (project documentation) to avoid committing large/generated docs
-docs/
+# Ignore most of the docs folder (project documentation) to avoid committing large/generated docs
+docs/*
 docs/UI/
 docs/cache_system/
 docs/marker/
 docs/msoft_iteration/
+!docs/endpoint-audit.md
 
 # Local backups created by developer assistants
 /backup/
