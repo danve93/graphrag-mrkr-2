@@ -1,12 +1,5 @@
 # Amber
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![CI](https://github.com/danve93/graphrag-mrkr-2/actions/workflows/ci.yml/badge.svg)](https://github.com/danve93/graphrag-mrkr-2/actions)
-[![GitHub release](https://img.shields.io/github/v/release/danve93/graphrag-mrkr-2?label=release)](https://github.com/danve93/graphrag-mrkr-2/releases)
-[![Dependabot Status](https://img.shields.io/github/dependabot/danve93/graphrag-mrkr-2?logo=dependabot)](https://github.com/danve93/graphrag-mrkr-2/network/updates)
-[![Languages](https://img.shields.io/github/languages/top/danve93/graphrag-mrkr-2)](https://github.com/danve93/graphrag-mrkr-2/search?l=)
-
 Tested on Python 3.10–3.11. Frontend built with Next.js; recommended local setup uses Docker Compose.
 
 Amber is a document intelligence platform implementing graph-enhanced Retrieval-Augmented Generation (RAG). It combines vector search, graph expansion, entity reasoning, and LLMs to provide contextual, sourced, and high-quality answers over ingested document collections.
