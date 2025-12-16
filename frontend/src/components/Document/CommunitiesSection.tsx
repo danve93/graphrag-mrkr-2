@@ -51,10 +51,6 @@ export default function CommunitiesSection({
         setCommunities(communitiesArray)
         performance.mark('communities-load-end')
         performance.measure('communities-load', 'communities-load-start', 'communities-load-end')
-        const measure = performance.getEntriesByName('communities-load')[0]
-        if (measure) {
-          console.log(`[Performance] Communities aggregated (${communitiesArray.length} communities from ${pageCount} entity pages) in ${measure.duration.toFixed(2)}ms`)
-        }
       } catch (err) {
         console.error('Failed to load communities:', err)
         setCommunities([])
@@ -67,14 +63,21 @@ export default function CommunitiesSection({
 
   if (loading) {
     return (
-      <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+      <div
+        className="rounded-lg overflow-hidden"
+        style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+      >
         <button
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center gap-2 px-4 py-3 font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
+          className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
+          style={{ color: 'var(--text-primary)' }}
         >
           <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Communities</span>
-          <span className="ml-auto text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-400">
+          <span
+            className="ml-auto text-xs px-2 py-1 rounded"
+            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+          >
             Loading...
           </span>
         </button>
@@ -98,19 +101,26 @@ export default function CommunitiesSection({
 
   if (communities.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+      <div
+        className="rounded-lg overflow-hidden"
+        style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+      >
         <button
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center gap-2 px-4 py-3 font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
+          className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
+          style={{ color: 'var(--text-primary)' }}
         >
           <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Communities</span>
-          <span className="ml-auto text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-400">
+          <span
+            className="ml-auto text-xs px-2 py-1 rounded"
+            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+          >
             None
           </span>
         </button>
-        <div className="p-4 border-t border-slate-200 dark:border-slate-700">
-          <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">No communities found for this document.</p>
+        <div className="p-4" style={{ borderTop: '1px solid var(--border)' }}>
+          <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>No communities found for this document.</p>
           <div className="flex items-center gap-2">
             <button
               onClick={handleProcess}
@@ -133,38 +143,47 @@ export default function CommunitiesSection({
 
 
   return (
-    <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+    <div
+      className="rounded-lg overflow-hidden"
+      style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+    >
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-4 py-3 font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
+        className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
+        style={{ color: 'var(--text-primary)' }}
       >
         <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
         <span>Communities</span>
-        <span className="ml-auto text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-400">
+        <span
+          className="ml-auto text-xs px-2 py-1 rounded"
+          style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+        >
           {communities.length}
         </span>
       </button>
 
       {expanded && (
-        <div className="border-t border-slate-200 dark:border-slate-700 p-4">
+        <div className="p-4" style={{ borderTop: '1px solid var(--border)' }}>
           <div className="space-y-2">
             {communities.map((community) => (
               <div
                 key={`${community.community_id}-${community.level}`}
-                className="flex items-center justify-between p-3 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-900 transition"
+                className="flex items-center justify-between p-3 rounded transition"
+                style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
               >
                 <div className="flex-1">
-                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                  <p className="font-medium" style={{ color: 'var(--text-primary)' }}>
                     Community {community.community_id}
                   </p>
-                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {community.count} entities
                     {community.level !== undefined && ` · Level ${community.level}`}
                   </p>
                 </div>
                 <Link
                   href={`/graph?community=${community.community_id}`}
-                  className="text-xs px-3 py-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800 transition"
+                  className="text-xs px-3 py-1 rounded transition"
+                  style={{ backgroundColor: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}
                 >
                   View
                 </Link>

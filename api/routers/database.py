@@ -10,7 +10,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
 
 from api.models import (
     DatabaseStats,
@@ -26,6 +26,7 @@ from core.graph_db import graph_db
 from neo4j.exceptions import ServiceUnavailable
 from ingestion.document_processor import EntityExtractionState, document_processor
 from core.singletons import get_response_cache, get_blocking_executor, SHUTTING_DOWN
+from api.auth import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -556,6 +557,23 @@ async def get_routing_metrics():
         return routing_metrics.get_stats()
     except Exception as e:
         logger.error(f"Failed to get routing metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/routing-metrics")
+async def clear_routing_metrics(
+    current_user=Depends(require_admin),
+):
+    """
+    Clear all routing metrics data.
+    Requires admin privileges.
+    """
+    try:
+        from core.routing_metrics import routing_metrics
+        routing_metrics.clear_metrics()
+        return {"status": "success", "message": "Routing metrics cleared"}
+    except Exception as e:
+        logger.error(f"Failed to clear routing metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

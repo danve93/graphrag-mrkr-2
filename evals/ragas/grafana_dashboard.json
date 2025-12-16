@@ -1,0 +1,254 @@
+{
+  "dashboard": {
+    "title": "RAGAS Benchmark Quality Tracking",
+    "tags": ["ragas", "benchmarks", "evaluation"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "1m",
+    "panels": [
+      {
+        "id": 1,
+        "title": "RAGAS Metrics Comparison (All Variants)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "ragas_context_precision",
+            "legendFormat": "Context Precision - {{variant}}"
+          },
+          {
+            "expr": "ragas_context_recall",
+            "legendFormat": "Context Recall - {{variant}}"
+          },
+          {
+            "expr": "ragas_faithfulness",
+            "legendFormat": "Faithfulness - {{variant}}"
+          },
+          {
+            "expr": "ragas_answer_relevancy",
+            "legendFormat": "Answer Relevancy - {{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit"
+          }
+        },
+        "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Faithfulness Score (Critical Metric)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ragas_faithfulness",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.8, "color": "yellow"},
+                {"value": 0.85, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 6, "w": 6, "x": 0, "y": 10}
+      },
+      {
+        "id": 3,
+        "title": "Context Precision",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ragas_context_precision",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.6, "color": "yellow"},
+                {"value": 0.65, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 6, "w": 6, "x": 6, "y": 10}
+      },
+      {
+        "id": 4,
+        "title": "Context Recall",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ragas_context_recall",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.55, "color": "yellow"},
+                {"value": 0.60, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 6, "w": 6, "x": 12, "y": 10}
+      },
+      {
+        "id": 5,
+        "title": "Answer Relevancy",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ragas_answer_relevancy",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.75, "color": "yellow"},
+                {"value": 0.80, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 6, "w": 6, "x": 18, "y": 10}
+      },
+      {
+        "id": 6,
+        "title": "Variant Performance Comparison",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "(ragas_context_precision + ragas_context_recall + ragas_faithfulness + ragas_answer_relevancy) / 4",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.7, "color": "yellow"},
+                {"value": 0.75, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        }
+      },
+      {
+        "id": 7,
+        "title": "Last Evaluation Timestamp",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ragas_last_evaluation_timestamp * 1000",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "dateTimeAsIso"
+          }
+        },
+        "gridPos": {"h": 4, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 8,
+        "title": "Total Evaluations",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "ragas_evaluations_total",
+            "legendFormat": "{{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        },
+        "gridPos": {"h": 4, "w": 12, "x": 12, "y": 20}
+      },
+      {
+        "id": 9,
+        "title": "Regression Detection (% Change from Baseline)",
+        "type": "timeseries",
+        "description": "Shows % change in metrics compared to baseline. Values >-5% are acceptable.",
+        "targets": [
+          {
+            "expr": "((ragas_faithfulness - ragas_faithfulness{variant=\"baseline\"}) / ragas_faithfulness{variant=\"baseline\"}) * 100",
+            "legendFormat": "Faithfulness Change - {{variant}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": -20, "color": "red"},
+                {"value": -5, "color": "yellow"},
+                {"value": 0, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+      }
+    ],
+    "annotations": {
+      "list": [
+        {
+          "datasource": "-- Grafana --",
+          "enable": true,
+          "hide": false,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Benchmark Runs",
+          "type": "dashboard"
+        }
+      ]
+    }
+  }
+}

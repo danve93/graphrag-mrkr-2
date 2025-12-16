@@ -119,13 +119,12 @@ export default function DatabaseTab() {
     const interval = setInterval(async () => {
       try {
         const response = await api.getProcessingProgress()
-        
+
         // Check if ALL processing finished (no pending documents and is_processing is false)
         const hasPendingDocs = response.global.pending_documents && response.global.pending_documents.length > 0
         const isStillProcessing = response.global.is_processing || hasPendingDocs
-        
+
         if (!isStillProcessing) {
-          console.log('Processing completed detected in polling - clearing state')
           // Clear processing state immediately
           setProcessingState(null)
           setIsStuck(false)
@@ -134,16 +133,16 @@ export default function DatabaseTab() {
           await loadStats()
           return
         }
-        
+
         setProcessingState(response.global)
-        
+
         // Update timestamp on successful response with active progress
         lastUpdateTimestampRef.current = Date.now()
         setIsStuck(false)
-        
+
         // Also fetch updated stats to get real-time counts AND document_type updates
         const updatedStats = await api.getStats()
-        
+
         // Update document progress in stats if we have them
         if (stats && response.global.pending_documents) {
           const updatedDocs = stats.documents.map(doc => {
@@ -163,12 +162,12 @@ export default function DatabaseTab() {
             }
             return freshDoc || doc
           })
-          
+
           // Merge updated documents with their progress AND update global stats
-          setStats({ 
+          setStats({
             ...updatedStats,
             documents: updatedDocs,
-            processing: response.global 
+            processing: response.global
           })
         } else {
           // Just update with fresh stats if no processing documents
@@ -190,7 +189,7 @@ export default function DatabaseTab() {
     const checkStuck = setInterval(() => {
       const timeSinceUpdate = Date.now() - lastUpdateTimestampRef.current
       const STUCK_THRESHOLD = 30000 // 30 seconds
-      
+
       if (timeSinceUpdate > STUCK_THRESHOLD) {
         console.warn('Processing appears stuck - no updates for 30s')
         setIsStuck(true)
@@ -203,10 +202,9 @@ export default function DatabaseTab() {
   // Detect when processing completes and do a final refresh
   useEffect(() => {
     const isProcessing = processingState?.is_processing || stats?.processing?.is_processing || false
-    
+
     // If we were processing before but not anymore, refresh everything and clear state
     if (wasProcessingRef.current && !isProcessing) {
-      console.log('Processing completed, refreshing stats...')
       loadStats()
       // Clear processing state to hide progress indicators
       setTimeout(() => {
@@ -214,7 +212,7 @@ export default function DatabaseTab() {
         setIsStuck(false)
       }, 1000) // Small delay to ensure final stats are loaded
     }
-    
+
     // Update the ref for next check
     wasProcessingRef.current = isProcessing
   }, [processingState?.is_processing, stats?.processing?.is_processing])
@@ -223,7 +221,6 @@ export default function DatabaseTab() {
     try {
       setLoading(true)
       const data = await api.getStats()
-      console.log('Loaded stats, is_processing:', data.processing?.is_processing, 'pending docs:', data.processing?.pending_documents?.length || 0)
       setStats(data)
       setProcessingState(data.processing || null)
       setEnableDeleteOps(data.enable_delete_operations ?? true)
@@ -285,7 +282,6 @@ export default function DatabaseTab() {
   }
 
   const handleClearStuckState = async () => {
-    console.log('Clearing stuck state and refreshing...')
     setIsStuck(false)
     setProcessingState(null)
     lastUpdateTimestampRef.current = Date.now()
@@ -352,12 +348,22 @@ export default function DatabaseTab() {
       )}
 
       <div className="space-y-4">
-        {/* Upload Button */}
+        {/* Dashboard & Upload Buttons */}
         <div className="flex gap-2">
+          {selectedDocumentId && (
+            <button
+              onClick={() => {
+                // Clear document selection but stay on document view (dashboard)
+                useChatStore.setState({ selectedDocumentId: null, selectedChunkId: null });
+              }}
+              className="button-secondary py-2 px-3 text-center text-sm flex items-center justify-center gap-2"
+            >
+              Dashboard
+            </button>
+          )}
           <label className="flex-1 cursor-pointer">
-            <div className={`button-primary py-2 px-3 text-center text-sm flex items-center justify-center gap-2 ${
-              uploadingFile ? 'opacity-50 pointer-events-none' : ''
-            }`}>
+            <div className={`button-primary py-2 px-3 text-center text-sm flex items-center justify-center gap-2 ${uploadingFile ? 'opacity-50 pointer-events-none' : ''
+              }`}>
               {uploadingFile ? (
                 <Loader size={14} label="Uploading..." />
               ) : (
@@ -377,221 +383,192 @@ export default function DatabaseTab() {
             />
           </label>
         </div>
-      {/* Stats Cards */}
-        <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
-          <div className="text-2xl font-bold" style={{ color: 'var(--primary-700)' }}>
-            {stats?.total_documents || 0}
-          </div>
-          <div className="text-xs mt-1" style={{ color: 'var(--primary-600)' }}>Documents</div>
-        </div>
-        <div className="bg-secondary-100 dark:bg-secondary-700 rounded-lg p-4">
-          <div className="text-2xl font-bold text-secondary-700 dark:text-secondary-200">
-            {stats?.total_chunks || 0}
-          </div>
-          <div className="text-xs text-secondary-600 dark:text-secondary-400 mt-1">Chunks</div>
-        </div>
-        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4">
-          <div className="text-2xl font-bold text-green-700 dark:text-green-400">
-            {stats?.total_entities || 0}
-          </div>
-          <div className="text-xs text-green-600 dark:text-green-400 mt-1">Entities</div>
-        </div>
-        <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4">
-          <div className="text-2xl font-bold text-purple-700 dark:text-purple-400">
-            {stats?.total_relationships || 0}
-          </div>
-          <div className="text-xs text-purple-600 dark:text-purple-400 mt-1">Relationships</div>
-        </div>
-      </div>
 
-      {processingSummary?.is_processing && (
-        <div className={`flex items-center gap-3 rounded-lg border dark:border-secondary-700 px-4 py-3 text-sm shadow-sm ${
-          isStuck 
-            ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400' 
+        {processingSummary?.is_processing && (
+          <div className={`flex items-center gap-3 rounded-lg border dark:border-secondary-700 px-4 py-3 text-sm shadow-sm ${isStuck
+            ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400'
             : 'border-secondary-200 bg-white dark:bg-secondary-800 text-secondary-700 dark:text-secondary-300'
-        }`}>
-          <span className={`inline-flex h-2 w-2 rounded-full ${isStuck ? 'bg-red-500' : 'animate-pulse'}`} style={!isStuck ? { backgroundColor: 'var(--primary-500)' } : undefined} />
-          <div className="flex-1">
-            {isStuck ? (
-              <>
-                <p className="font-medium">Processing appears stuck</p>
-                <p className="text-xs mt-1">No updates for 30+ seconds. Server may have crashed.</p>
-              </>
-            ) : (
-              <p className="font-medium">Processing in progress…</p>
-            )}
-          </div>
-          {isStuck && (
-            <button
-              onClick={handleClearStuckState}
-              className="px-3 py-1 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Documents List */}
-      {stats && stats.documents.length > 0 && (
-        <>
-          {!searchMode ? (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-medium text-secondary-900 dark:text-secondary-50">Documents</h3>
-                <button
-                  onClick={() => setSearchMode(true)}
-                  className="text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200 p-1"
-                  title="Search documents"
-                >
-                  <MagnifyingGlassIcon className="w-4 h-4" />
-                </button>
-              </div>
-              {enableDeleteOps && (
-                <button
-                  onClick={handleClearDatabase}
-                  className="text-xs text-red-600 hover:text-red-700"
-                >
-                  Clear All
-                </button>
+            }`}>
+            <span className={`inline-flex h-2 w-2 rounded-full ${isStuck ? 'bg-red-500' : 'animate-pulse'}`} style={!isStuck ? { backgroundColor: 'var(--primary-500)' } : undefined} />
+            <div className="flex-1">
+              {isStuck ? (
+                <>
+                  <p className="font-medium">Processing appears stuck</p>
+                  <p className="text-xs mt-1">No updates for 30+ seconds. Server may have crashed.</p>
+                </>
+              ) : (
+                <p className="font-medium">Processing in progress…</p>
               )}
             </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div className="flex-1 relative">
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  placeholder="Search documents..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      setSearchMode(false)
-                      setSearchQuery('')
-                    }
-                  }}
-                  className="w-full px-3 py-2 text-sm border border-secondary-300 rounded-md focus:outline-none focus-primary"
-                />
-              </div>
+            {isStuck && (
               <button
-                onClick={() => {
-                  setSearchMode(false)
-                  setSearchQuery('')
-                }}
-                className="text-secondary-600 hover:text-secondary-900 dark:text-secondary-400 dark:hover:text-secondary-200 p-1"
-                title="Close search"
+                onClick={handleClearStuckState}
+                className="px-3 py-1 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700"
               >
-                <XMarkIcon className="w-4 h-4" />
+                Clear
               </button>
-            </div>
-          )}
-
-
-          <div className="space-y-2">
-            {getFilteredDocuments().map((doc, index) => {
-              const isActive = doc.document_id === selectedDocumentId
-              const statusLabel = formatStatus(doc)
-              const status = doc.processing_status
-              const progress =
-                typeof doc.processing_progress === 'number'
-                  ? Math.max(0, Math.min(100, doc.processing_progress))
-                  : null
-
-              return (
-                <div
-                  key={index}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.effectAllowed = 'copy'
-                    e.dataTransfer.setData('application/json', JSON.stringify({
-                      type: 'document',
-                      document_id: doc.document_id,
-                      filename: doc.original_filename || doc.filename,
-                    }))
-                  }}
-                  onClick={() => handleSelectDocument(doc.document_id)}
-                  className={`card p-3 flex flex-col gap-2 transition-all cursor-move group ${
-                    isActive
-                      ? ''
-                      : 'hover:shadow-md hover:cursor-grab active:cursor-grabbing'
-                  }`}
-                  style={isActive ? { borderColor: 'rgba(36,198,230,0.18)', boxShadow: '0 6px 18px rgba(36,198,230,0.12)' } : undefined}
-                >
-                  <div className="flex w-full items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="relative flex items-center gap-2">
-                        {status === 'processing' && (
-                          <Loader size={14} />
-                        )}
-                        <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50 truncate">
-                          {doc.original_filename || doc.filename}
-                        </p>
-                      </div>
-                      <p className={`text-xs mt-1 ${isStuck && (status === 'queued' || status === 'staged') ? 'text-red-600 dark:text-red-400' : 'text-secondary-600 dark:text-secondary-400'}`}>
-                        {status === 'queued' || status === 'staged' 
-                          ? (isStuck ? 'Queue stuck - processing may have crashed' : 'Processing queued')
-                          : (doc as any).document_type 
-                          ? (doc as any).document_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
-                          : 'Unknown type'}
-                      </p>
-                      {statusLabel && status !== 'queued' && status !== 'staged' && (
-                        <p className={`text-[11px] mt-1 ${status === 'error' ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}`} style={status === 'processing' ? { color: 'var(--primary-600)' } : undefined}>
-                          {statusLabel}
-                        </p>
-                      )}
-                    </div>
-                    {enableDeleteOps && (
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleDeleteDocument(doc.document_id)
-                        }}
-                        className="text-red-600 hover:text-red-700 p-1 flex-shrink-0"
-                        title={`Delete ${doc.original_filename || doc.filename}`}
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-
-                  {status === 'processing' && progress !== null && (
-                    <div className="w-full">
-                      <div className="flex justify-between text-[10px] mb-1">
-                        <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
-                          {isStuck ? 'Stuck - may need manual refresh' : (doc.processing_stage || 'Processing')}
-                        </span>
-                        <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
-                          {Math.round(progress)}%
-                        </span>
-                      </div>
-                      <div className="h-1.5 w-full rounded-full bg-secondary-200">
-                        <div
-                          className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : ''}`}
-                          style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--primary-500)' }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            {searchQuery.trim() && getFilteredDocuments().length === 0 && (
-              <div className="text-center text-secondary-600 dark:text-secondary-400 py-6">
-                <p className="text-sm">No documents match &quot;{searchQuery}&quot;</p>
-              </div>
             )}
           </div>
-        </>
-      )}
+        )}
 
-      {stats && stats.documents.length === 0 && (
-        <div className="text-center text-secondary-600 dark:text-secondary-400 py-8">
-          <p>No documents in database</p>
-          <p className="text-xs mt-1">Upload documents to get started</p>
-        </div>
-      )}
+        {/* Documents List */}
+        {stats && stats.documents.length > 0 && (
+          <>
+            {!searchMode ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-secondary-900 dark:text-secondary-50">Documents</h3>
+                  <button
+                    onClick={() => setSearchMode(true)}
+                    className="text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200 p-1"
+                    title="Search documents"
+                  >
+                    <MagnifyingGlassIcon className="w-4 h-4" />
+                  </button>
+                </div>
+                {enableDeleteOps && (
+                  <button
+                    onClick={handleClearDatabase}
+                    className="text-xs text-red-600 hover:text-red-700"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative">
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    placeholder="Search documents..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setSearchMode(false)
+                        setSearchQuery('')
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-secondary-300 rounded-md focus:outline-none focus-primary"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    setSearchMode(false)
+                    setSearchQuery('')
+                  }}
+                  className="text-secondary-600 hover:text-secondary-900 dark:text-secondary-400 dark:hover:text-secondary-200 p-1"
+                  title="Close search"
+                >
+                  <XMarkIcon className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+
+            <div className="space-y-2">
+              {getFilteredDocuments().map((doc, index) => {
+                const isActive = doc.document_id === selectedDocumentId
+                const statusLabel = formatStatus(doc)
+                const status = doc.processing_status
+                const progress =
+                  typeof doc.processing_progress === 'number'
+                    ? Math.max(0, Math.min(100, doc.processing_progress))
+                    : null
+
+                return (
+                  <div
+                    key={index}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'copy'
+                      e.dataTransfer.setData('application/json', JSON.stringify({
+                        type: 'document',
+                        document_id: doc.document_id,
+                        filename: doc.original_filename || doc.filename,
+                      }))
+                    }}
+                    onClick={() => handleSelectDocument(doc.document_id)}
+                    className={`card p-3 flex flex-col gap-2 transition-all cursor-move group ${isActive
+                      ? ''
+                      : 'hover:shadow-md hover:cursor-grab active:cursor-grabbing'
+                      }`}
+                    style={isActive ? { borderColor: 'rgba(36,198,230,0.18)', boxShadow: '0 6px 18px rgba(36,198,230,0.12)' } : undefined}
+                  >
+                    <div className="flex w-full items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="relative flex items-center gap-2">
+                          {status === 'processing' && (
+                            <Loader size={14} />
+                          )}
+                          <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50 truncate">
+                            {doc.original_filename || doc.filename}
+                          </p>
+                        </div>
+                        <p className={`text-xs mt-1 ${isStuck && (status === 'queued' || status === 'staged') ? 'text-red-600 dark:text-red-400' : 'text-secondary-600 dark:text-secondary-400'}`}>
+                          {status === 'queued' || status === 'staged'
+                            ? (isStuck ? 'Queue stuck - processing may have crashed' : 'Processing queued')
+                            : (doc as any).document_type
+                              ? (doc as any).document_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+                              : 'Unknown type'}
+                        </p>
+                        {statusLabel && status !== 'queued' && status !== 'staged' && (
+                          <p className={`text-[11px] mt-1 ${status === 'error' ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}`} style={status === 'processing' ? { color: 'var(--primary-600)' } : undefined}>
+                            {statusLabel}
+                          </p>
+                        )}
+                      </div>
+                      {enableDeleteOps && (
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            handleDeleteDocument(doc.document_id)
+                          }}
+                          className="text-red-600 hover:text-red-700 p-1 flex-shrink-0"
+                          title={`Delete ${doc.original_filename || doc.filename}`}
+                        >
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {status === 'processing' && progress !== null && (
+                      <div className="w-full">
+                        <div className="flex justify-between text-[10px] mb-1">
+                          <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
+                            {isStuck ? 'Stuck - may need manual refresh' : (doc.processing_stage || 'Processing')}
+                          </span>
+                          <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
+                            {Math.round(progress)}%
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-secondary-200">
+                          <div
+                            className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : ''}`}
+                            style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--primary-500)' }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {searchQuery.trim() && getFilteredDocuments().length === 0 && (
+                <div className="text-center text-secondary-600 dark:text-secondary-400 py-6">
+                  <p className="text-sm">No documents match &quot;{searchQuery}&quot;</p>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {stats && stats.documents.length === 0 && (
+          <div className="text-center text-secondary-600 dark:text-secondary-400 py-8">
+            <p>No documents in database</p>
+            <p className="text-xs mt-1">Upload documents to get started</p>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -7,6 +7,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline'
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
+import SidebarUser from './SidebarUser'
 import SidebarHeader from './SidebarHeader'
 import ChatSidebarContent from './ChatSidebarContent'
 import DatabaseSidebarContent from './DatabaseSidebarContent'
@@ -14,6 +15,8 @@ import GenericSidebarContent from './GenericSidebarContent'
 import DocumentationSidebarContent from './DocumentationSidebarContent'
 import ChatTuningSidebarContent from './ChatTuningSidebarContent'
 import RAGTuningSidebarContent from './RAGTuningSidebarContent'
+import MetricsSidebarContent from './MetricsSidebarContent'
+import CategoriesSidebarContent from './CategoriesSidebarContent'
 import StatusIndicator from '@/components/Theme/StatusIndicator'
 import { useChatStore } from '@/store/chatStore'
 import Tooltip from '@/components/Utils/Tooltip'
@@ -37,7 +40,7 @@ export default function Sidebar({
   minWidth = 240,
   maxWidth = 400,
   collapsed = false,
-  onCollapseToggle = () => {},
+  onCollapseToggle = () => { },
 }: SidebarProps) {
   const [isResizing, setIsResizing] = useState(false)
   const activeView = useChatStore((state) => state.activeView)
@@ -129,10 +132,9 @@ export default function Sidebar({
 
       {/* Sidebar (fixed to left edge and separate from content grid) */}
       <aside
-        className={`fixed left-0 top-0 z-40 h-screen border-r transition-transform duration-300 ${
-          isResizing ? 'no-transition' : ''
-        } ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} overflow-hidden`}
-        style={{ 
+        className={`fixed left-0 top-0 z-40 h-screen border-r transition-transform duration-300 ${isResizing ? 'no-transition' : ''
+          } ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} overflow-hidden`}
+        style={{
           width: `${collapsed ? 72 : width}px`,
           background: 'var(--bg-secondary)',
           borderColor: 'var(--border)'
@@ -175,15 +177,10 @@ export default function Sidebar({
                   />
                 )}
                 {activeView === 'categories' && (
-                  <GenericSidebarContent
-                    title="Categories"
-                    description="Manage document categories and LLM-generated taxonomy"
-                  />
-                )}
-                {activeView === 'routing' && (
-                  <GenericSidebarContent
-                    title="Routing Metrics"
-                    description="Monitor query routing performance and cache statistics"
+                  <CategoriesSidebarContent
+                    onSectionClick={(sectionId) => {
+                      window.dispatchEvent(new CustomEvent('categories-section-select', { detail: sectionId }));
+                    }}
                   />
                 )}
                 {activeView === 'structuredKg' && (
@@ -215,12 +212,22 @@ export default function Sidebar({
                     selectedFile={null}
                   />
                 )}
+                {activeView === 'metrics' && (
+                  <MetricsSidebarContent
+                    onSectionClick={(sectionId) => {
+                      window.dispatchEvent(new CustomEvent('metrics-section-select', { detail: sectionId }));
+                    }}
+                  />
+                )}
               </div>
 
+              {/* User Identity Section */}
+              <SidebarUser />
+
               {/* Status Indicator at bottom */}
-              <div 
-                className="border-t p-3" 
-                style={{ 
+              <div
+                className="border-t p-3"
+                style={{
                   borderColor: 'var(--border)',
                   background: 'var(--bg-secondary)',
                   boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)',
@@ -237,11 +244,11 @@ export default function Sidebar({
         {/* Resize handle (hidden when collapsed or when sidebar closed) */}
         {open && !collapsed && (
           <div
-                className="hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize"
-                style={{ zIndex: 60, backgroundColor: isResizing ? 'var(--accent-subtle)' : 'transparent' }}
-              onMouseDown={onMouseDown}
-              onTouchStart={onTouchStart}
-            >
+            className="hidden lg:flex absolute top-0 -right-2 h-full w-4 items-center justify-center cursor-col-resize"
+            style={{ zIndex: 60, backgroundColor: isResizing ? 'var(--accent-subtle)' : 'transparent' }}
+            onMouseDown={onMouseDown}
+            onTouchStart={onTouchStart}
+          >
             <div style={{ height: '64px', width: '4px', borderRadius: 'var(--radius-full)', background: 'var(--gray-400)' }} />
           </div>
         )}

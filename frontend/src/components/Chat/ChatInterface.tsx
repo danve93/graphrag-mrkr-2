@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom'
 import { Message } from '@/types'
 import { api, API_URL } from '@/lib/api'
 import { Button } from '@mui/material'
-import { Chat as ChatIconMui } from '@mui/icons-material'
+import { MessageSquare } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
 import FollowUpQuestions from './FollowUpQuestions'
@@ -62,7 +62,7 @@ export default function ChatInterface() {
         console.error('Failed to fetch settings:', error)
       }
     }
-    
+
     const fetchChatTuningConfig = async () => {
       try {
         const response = await fetch(`${API_URL}/api/chat-tuning/config/values`)
@@ -76,15 +76,15 @@ export default function ChatInterface() {
             beam_size: values.beam_size ?? prev.beam_size,
             graph_expansion_depth: values.graph_expansion_depth ?? prev.graph_expansion_depth,
             restrict_to_context: values.restrict_to_context ?? prev.restrict_to_context,
-                llm_model: values.llm_model ?? prev.llm_model,
-                embedding_model: values.embedding_model ?? prev.embedding_model,
+            llm_model: values.llm_model ?? prev.llm_model,
+            embedding_model: values.embedding_model ?? prev.embedding_model,
           }))
         }
       } catch (error) {
         console.error('Failed to fetch chat tuning config:', error)
       }
     }
-    
+
     fetchSettings()
     fetchChatTuningConfig()
   }, [])
@@ -107,15 +107,15 @@ export default function ChatInterface() {
 
     const runHealthCheck = async () => {
       if (isUnmounted) return;
-      
+
       // Skip health check if actively loading (query in progress)
       if (isLoading) {
         scheduleNextCheck(HEALTHY_INTERVAL); // Check again later
         return;
       }
-      
+
       const isHealthy = await api.checkHealth()
-      
+
       if (isHealthy) {
         consecutiveFailures = 0;
         setIsConnected(true)
@@ -132,7 +132,7 @@ export default function ChatInterface() {
 
     // Initial optimistic connection state
     setIsConnected(true)
-    
+
     // Start health check loop after a delay (let app load first)
     const initialDelay = setTimeout(() => {
       if (!isUnmounted) runHealthCheck()
@@ -176,10 +176,10 @@ export default function ChatInterface() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       // Only trigger if 'n' is pressed and not in an input/textarea
-      if (event.key === 'n' && 
-          !(document.activeElement instanceof HTMLInputElement) && 
-          !(document.activeElement instanceof HTMLTextAreaElement) &&
-          !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key === 'n' &&
+        !(document.activeElement instanceof HTMLInputElement) &&
+        !(document.activeElement instanceof HTMLTextAreaElement) &&
+        !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault()
         handleNewChat()
       }
@@ -243,7 +243,7 @@ export default function ChatInterface() {
         const chunkSize = Math.ceil(contentBuffer.length / 3) || 1
         const nextChunk = contentBuffer.splice(0, chunkSize).join('')
         displayedContent += nextChunk
-        
+
         updateLastMessage((prev) => ({
           ...prev,
           content: displayedContent,
@@ -322,19 +322,17 @@ export default function ChatInterface() {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
-              console.log('Received SSE data:', data)
 
               if (data.type === 'token') {
                 accumulatedContent += data.content
                 // Add to buffer instead of updating immediately
                 contentBuffer.push(data.content)
               } else if (data.type === 'stage') {
-                console.log('Received stage:', data.content, data)
                 flushSync(() => {
                   // Handle both legacy string format and new dict format
                   const stageName = typeof data.content === 'string' ? data.content : data.content
                   setCurrentStage(stageName)
-                  
+
                   // Store stage update with timing metadata
                   const stageUpdate: any = {
                     name: stageName,
@@ -343,7 +341,7 @@ export default function ChatInterface() {
                     metadata: data.metadata || {}
                   }
                   setStageUpdates((prev) => [...prev, stageUpdate])
-                  
+
                   // Track completed stages
                   setCompletedStages((prev) => {
                     if (!prev.includes(stageName)) {
@@ -362,10 +360,6 @@ export default function ChatInterface() {
               } else if (data.type === 'follow_ups') {
                 followUpQuestions = data.content
               } else if (data.type === 'metadata') {
-                console.log('📋 Metadata event received:', {
-                  session_id: data.content.session_id,
-                  message_id: data.content.message_id
-                })
                 newSessionId = data.content.session_id
                 messageId = data.content.message_id
                 if (Array.isArray(data.content.context_documents)) {
@@ -407,14 +401,7 @@ export default function ChatInterface() {
 
       // Calculate total duration from stages
       const totalDuration = stageUpdates.reduce((sum, stage) => sum + (stage.duration_ms || 0), 0)
-      
-      console.log('✅ Final message update:', {
-        message_id: messageId,
-        session_id: newSessionId,
-        has_sources: sources.length > 0,
-        sources_count: sources.length
-      })
-      
+
       // Final update with all metadata
       updateLastMessage((prev) => ({
         ...prev,
@@ -442,12 +429,12 @@ export default function ChatInterface() {
       if (animationFrameId !== null) {
         cancelAnimationFrame(animationFrameId)
       }
-      
+
       if (error instanceof DOMException && error.name === 'AbortError') {
         streamCompleted = true
         // Let buffer finish rendering
         await new Promise((resolve) => setTimeout(resolve, 100))
-        
+
         updateLastMessage((prev) => ({
           ...prev,
           content: accumulatedContent || displayedContent || prev.content || '',
@@ -494,7 +481,7 @@ export default function ChatInterface() {
   // Get user messages for history navigation
   const userMessages = messages
     .filter((msg) => msg.role === 'user')
-    .map((msg) => msg.content)
+    .map((msg) => (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)))
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
@@ -504,27 +491,31 @@ export default function ChatInterface() {
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <ChatIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+            <MessageSquare size={24} color="#f27a03" />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              {messages.length > 0 && messages[0].role === 'user' 
-                ? messages[0].content.slice(0, 100) + (messages[0].content.length > 100 ? '...' : '')
+              {messages.length > 0 && messages[0].role === 'user'
+                ? (() => {
+                  const c = messages[0].content
+                  const s = typeof c === 'string' ? c : JSON.stringify(c)
+                  return s.slice(0, 100) + (s.length > 100 ? '...' : '')
+                })()
                 : 'Chat Interface'
               }
             </h1>
             <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-              {messages.length > 0 
+              {messages.length > 0
                 ? `${messages.length} message${messages.length !== 1 ? 's' : ''} in this conversation`
                 : 'Graph-enhanced RAG with streaming responses and provenance'
               }
@@ -537,14 +528,14 @@ export default function ChatInterface() {
       <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-6 pt-6 pb-32">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
-                  <svg
-                    className="w-8 h-8"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    style={{ color: 'var(--primary-500)' }}
-                  >
+            <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
+              <svg
+                className="w-8 h-8"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                style={{ color: 'var(--primary-500)' }}
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -582,8 +573,8 @@ export default function ChatInterface() {
                   index === messages.length - 1 &&
                   completedStages.length > 0 && (
                     <div className="mt-4">
-                      <LoadingIndicator 
-                        currentStage={completedStages[completedStages.length - 1]} 
+                      <LoadingIndicator
+                        currentStage={completedStages[completedStages.length - 1]}
                         completedStages={completedStages}
                         stageUpdates={stageUpdates}
                         isLoading={false}

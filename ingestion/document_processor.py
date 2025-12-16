@@ -21,6 +21,7 @@ from core.singletons import get_response_cache, get_blocking_executor, SHUTTING_
 from core.entity_graph import EntityGraph
 from core.graph_db import graph_db
 from ingestion.converters import document_converter
+from ingestion.content_filters import get_content_filter
 # (get_response_cache imported above)
 
 logger = logging.getLogger(__name__)
@@ -933,6 +934,9 @@ class DocumentProcessor:
                 "processing_stage": "conversion",
                 "processing_progress": 5.0,
                 "processing_error": None,
+                # Store chunking parameters for incremental update validation
+                "chunk_size_used": settings.chunk_size,
+                "chunk_overlap_used": settings.chunk_overlap,
             }
 
             # Create document node
@@ -1024,6 +1028,58 @@ class DocumentProcessor:
                 f"Summary extracted for {doc_id}: type={summary_data.get('document_type')}, "
                 f"hashtags={len(summary_data.get('hashtags', []))}"
             )
+
+            # Apply content quality filtering before embedding (if enabled)
+            if getattr(settings, "enable_content_filtering", False):
+                logger.info(f"Applying content quality filtering to {len(chunks)} chunks")
+                content_filter = get_content_filter()
+
+                # Prepare chunks for filtering with enhanced metadata
+                chunks_to_filter = []
+                for chunk in chunks:
+                    chunk_metadata = chunk.get("metadata", {})
+
+                    # Add file type information for filter logic
+                    chunk_metadata["file_type"] = metadata.get("file_extension", "")
+
+                    # Mark conversation threads (if detected)
+                    chunk_metadata["is_conversation"] = False  # Can be enhanced with detection logic
+
+                    # Mark structured data
+                    file_ext = metadata.get("file_extension", "").lower()
+                    chunk_metadata["is_structured_data"] = file_ext in [".csv", ".xlsx", ".xls"]
+
+                    # Mark code files
+                    chunk_metadata["is_code"] = file_ext in [".py", ".js", ".java", ".cpp", ".html", ".css"]
+
+                    chunks_to_filter.append({
+                        "content": chunk.get("content", ""),
+                        "metadata": chunk_metadata,
+                        "original": chunk  # Keep reference to original
+                    })
+
+                # Filter chunks
+                filtered_chunks_data, filter_metrics = content_filter.filter_chunks(chunks_to_filter)
+
+                # Extract original chunks that passed filtering
+                chunks = [item["original"] for item in filtered_chunks_data]
+
+                # Log filtering metrics
+                metrics_summary = filter_metrics.get_summary()
+                logger.info(
+                    f"Content filtering complete for {doc_id}: "
+                    f"{metrics_summary['passed_chunks']}/{metrics_summary['total_chunks']} chunks passed "
+                    f"({metrics_summary['pass_rate']:.1f}% pass rate, "
+                    f"{metrics_summary['filter_rate']:.1f}% filtered)"
+                )
+
+                if metrics_summary['filter_reasons']:
+                    logger.info(f"Filter reasons: {metrics_summary['filter_reasons']}")
+
+                # Reset metrics for next document
+                content_filter.reset_metrics()
+            else:
+                logger.debug("Content filtering disabled, processing all chunks")
 
             # Process chunks asynchronously with configurable concurrency (embeddings + storing)
             graph_db.create_document_node(
@@ -1478,6 +1534,14 @@ class DocumentProcessor:
                 },
             )
 
+            # Create temporal nodes for time-based retrieval
+            if settings.enable_temporal_filtering:
+                try:
+                    graph_db.create_temporal_nodes_for_document(doc_id)
+                    logger.debug(f"Created temporal nodes for document {doc_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to create temporal nodes for {doc_id}: {e}")
+
             logger.info(
                 f"Successfully processed {file_path}: {len(processed_chunks)} chunks created"
             )
@@ -1528,6 +1592,198 @@ class DocumentProcessor:
                 "error": str(e),
                 "processing_status": "error",
                 "processing_stage": "error",
+            }
+
+    async def update_document(
+        self,
+        doc_id: str,
+        file_path: Path,
+        original_filename: Optional[str] = None,
+        progress_callback=None,
+    ) -> Dict[str, Any]:
+        """
+        Update a document incrementally, preserving unchanged chunks.
+        
+        This method enables efficient document updates by:
+        1. Validating that chunking parameters haven't changed
+        2. Computing content hashes for new chunks
+        3. Comparing with existing chunk hashes
+        4. Only processing new/modified chunks (avoiding re-embedding unchanged content)
+        5. Properly cleaning up removed chunks and their entities
+        
+        Args:
+            doc_id: ID of the existing document to update
+            file_path: Path to the new version of the file
+            original_filename: Optional original filename
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Dict with update statistics:
+                - status: "success" or "error"
+                - unchanged_chunks: Number of chunks that were kept
+                - added_chunks: Number of new chunks added
+                - removed_chunks: Number of old chunks removed
+                - entities_removed: Number of orphaned entities cleaned up
+                
+        Raises:
+            ValueError: If chunking parameters have changed since initial ingestion
+            FileNotFoundError: If the file doesn't exist
+        """
+        try:
+            start_time = time.time()
+            
+            if not file_path.exists():
+                return {
+                    "status": "error",
+                    "error": f"File not found: {file_path}",
+                    "document_id": doc_id,
+                }
+            
+            # 1. Validate chunking parameters
+            stored_params = graph_db.get_document_chunking_params(doc_id)
+            if stored_params is None:
+                # Document exists but was ingested before we stored chunking params
+                # Allow update but warn about potential issues
+                logger.warning(
+                    f"Document {doc_id} has no stored chunking params - "
+                    "this may be a legacy document. Proceeding with update."
+                )
+            elif (
+                stored_params["chunk_size_used"] != settings.chunk_size or
+                stored_params["chunk_overlap_used"] != settings.chunk_overlap
+            ):
+                error_msg = (
+                    f"Chunking parameters have changed since document was ingested. "
+                    f"Stored: chunk_size={stored_params['chunk_size_used']}, "
+                    f"chunk_overlap={stored_params['chunk_overlap_used']}. "
+                    f"Current: chunk_size={settings.chunk_size}, "
+                    f"chunk_overlap={settings.chunk_overlap}. "
+                    f"Options: (1) Delete and re-upload the document, or "
+                    f"(2) Reindex the entire corpus with new parameters first."
+                )
+                logger.error(error_msg)
+                return {
+                    "status": "error",
+                    "error": "chunking_params_changed",
+                    "message": error_msg,
+                    "stored_params": stored_params,
+                    "current_params": {
+                        "chunk_size": settings.chunk_size,
+                        "chunk_overlap": settings.chunk_overlap,
+                    },
+                    "document_id": doc_id,
+                }
+            
+            # 2. Convert and chunk the new document
+            conversion_result = self.converter.convert(file_path, original_filename)
+            if not conversion_result or not conversion_result.get("content"):
+                return {
+                    "status": "error",
+                    "error": "No content extracted from file",
+                    "document_id": doc_id,
+                }
+            
+            content = conversion_result.get("content", "")
+            new_chunks = document_chunker.chunk_text(content, doc_id)
+            
+            # 3. Get existing chunk hashes
+            existing_hashes = graph_db.get_chunk_hashes_for_document(doc_id)
+            existing_hash_set = set(existing_hashes.keys())
+            
+            # 4. Compute new chunk hashes and diff
+            new_hash_map = {}
+            for chunk in new_chunks:
+                chunk_hash = chunk.get("metadata", {}).get("content_hash", "")
+                if chunk_hash:
+                    new_hash_map[chunk_hash] = chunk
+            new_hash_set = set(new_hash_map.keys())
+            
+            unchanged_hashes = existing_hash_set & new_hash_set
+            removed_hashes = existing_hash_set - new_hash_set
+            added_hashes = new_hash_set - existing_hash_set
+            
+            logger.info(
+                f"Document {doc_id} update diff: "
+                f"{len(unchanged_hashes)} unchanged, "
+                f"{len(added_hashes)} added, "
+                f"{len(removed_hashes)} removed"
+            )
+            
+            # 5. Delete removed chunks with entity cleanup
+            cleanup_stats = {"entities_deleted": 0, "relationships_cleaned": 0}
+            if removed_hashes:
+                chunk_ids_to_delete = [existing_hashes[h] for h in removed_hashes]
+                cleanup_stats = graph_db.delete_chunks_with_entity_cleanup(chunk_ids_to_delete)
+                logger.info(
+                    f"Removed {cleanup_stats['chunks_deleted']} chunks, "
+                    f"{cleanup_stats['entities_deleted']} orphaned entities"
+                )
+            
+            # 6. Add new chunks (embed and store)
+            chunks_to_add = [new_hash_map[h] for h in added_hashes]
+            added_chunk_count = 0
+            
+            if chunks_to_add:
+                # Annotate chunk metadata
+                for idx, chunk in enumerate(chunks_to_add, start=1):
+                    chunk_metadata = chunk.get("metadata", {}) or {}
+                    chunk_metadata.update({
+                        "document_id": doc_id,
+                        "chunk_number": idx,
+                    })
+                    chunk["metadata"] = chunk_metadata
+                
+                # Process chunks asynchronously
+                processed = await self.process_file_async(chunks_to_add, doc_id, progress_callback)
+                added_chunk_count = len(processed)
+                
+                logger.info(f"Added {added_chunk_count} new chunks for document {doc_id}")
+            
+            # 7. Update document metadata
+            metadata = self._extract_metadata(file_path, original_filename)
+            metadata.update(conversion_result.get("metadata", {}))
+            metadata["modified_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            metadata["processing_status"] = "completed"
+            metadata["processing_stage"] = "completed"
+            metadata["processing_progress"] = 100.0
+            
+            graph_db.create_document_node(doc_id, metadata)
+            
+            # 8. Rebuild chunk similarities for added chunks if enabled
+            if added_chunk_count > 0 and getattr(settings, 'create_chunk_similarities', True):
+                try:
+                    graph_db.create_chunk_similarities(doc_id)
+                except Exception as e:
+                    logger.warning(f"Failed to rebuild chunk similarities: {e}")
+            
+            elapsed_time = time.time() - start_time
+            
+            result = {
+                "status": "success",
+                "document_id": doc_id,
+                "file_path": str(file_path),
+                "unchanged_chunks": len(unchanged_hashes),
+                "added_chunks": added_chunk_count,
+                "removed_chunks": cleanup_stats.get("chunks_deleted", len(removed_hashes)),
+                "entities_removed": cleanup_stats.get("entities_deleted", 0),
+                "relationships_cleaned": cleanup_stats.get("relationships_cleaned", 0),
+                "processing_time": round(elapsed_time, 2),
+            }
+            
+            logger.info(
+                f"Document {doc_id} updated successfully in {elapsed_time:.2f}s: "
+                f"{result['unchanged_chunks']} kept, {result['added_chunks']} added, "
+                f"{result['removed_chunks']} removed"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to update document {doc_id}: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e),
+                "document_id": doc_id,
             }
 
     def is_entity_extraction_running(self) -> bool:
@@ -1901,6 +2157,14 @@ class DocumentProcessor:
                     "processing_error": None,
                 },
             )
+
+            # Create temporal nodes for time-based retrieval
+            if settings.enable_temporal_filtering:
+                try:
+                    graph_db.create_temporal_nodes_for_document(doc_id)
+                    logger.debug(f"Created temporal nodes for document {doc_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to create temporal nodes for {doc_id}: {e}")
 
             logger.info(
                 f"Successfully processed {file_path} (chunks only): {len(processed_chunks)} chunks created"

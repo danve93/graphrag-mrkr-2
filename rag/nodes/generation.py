@@ -19,6 +19,7 @@ def generate_response(
     chat_history: List[Dict[str, str]] = None,
     llm_model: str | None = None,
     custom_prompt: str | None = None,
+    memory_context: Any = None,
 ) -> Dict[str, Any]:
     """
     Generate response using retrieved context and query analysis.
@@ -72,6 +73,38 @@ def generate_response(
             for chunk in deduped_chunks.values()
             if chunk.get("similarity", chunk.get("hybrid_score", 0.0)) > 0.0
         ]
+
+        # Build memory context prompt if available
+        memory_prompt = None
+        if memory_context:
+            try:
+                from core.conversation_memory import memory_manager
+                session_id = getattr(memory_context, 'session_id', None)
+                if session_id:
+                    memory_prompt = memory_manager.build_context_prompt(
+                        session_id=session_id,
+                        include_facts=True,
+                        include_conversation_summaries=True,
+                        max_message_history=5,
+                    )
+                    if memory_prompt:
+                        logger.info(f"Including memory context in generation (length: {len(memory_prompt)})")
+            except Exception as e:
+                logger.warning(f"Failed to build memory context prompt: {e}")
+
+        # Prepend memory context to custom_prompt if both exist
+        if memory_prompt and custom_prompt:
+            custom_prompt = f"{memory_prompt}\n\n---\n\n{custom_prompt}"
+        elif memory_prompt and not custom_prompt:
+            # If we have memory but no custom prompt, we'll need to inject it differently
+            # Add a special chunk at the beginning with memory context
+            memory_chunk = {
+                "chunk_id": "memory_context",
+                "content": f"**User Context & History:**\n{memory_prompt}",
+                "similarity": 1.0,
+                "document_name": "User Memory",
+            }
+            relevant_chunks = [memory_chunk] + relevant_chunks
 
         # Generate response using LLM with only relevant chunks
         # Include chat history if this is a follow-up question

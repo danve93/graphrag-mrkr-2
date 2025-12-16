@@ -1,0 +1,39 @@
+{
+  "run_id": "graph_hybrid-20251212T182116Z",
+  "variant": "graph_hybrid",
+  "config_path": "evals/ragas/config.example.yaml",
+  "dataset_path": "evals/ragas/testsets/amber_carbonio_ragas_gold_testset.csv",
+  "dataset_sha256": "796fe70a414a0327371684f45175d027ce491ecc130468b1307dc1fdd66243d3",
+  "git_commit": "3073bf74b52f9a881f546ab27de3f689d05a8434",
+  "timestamp_utc": "2025-12-12T18:21:16.737573+00:00",
+  "variant_flags": {
+    "retrieval_mode": "hybrid",
+    "enable_query_routing": true,
+    "enable_structured_kg": true,
+    "enable_rrf": true,
+    "enable_routing_cache": true,
+    "flashrank_enabled": true,
+    "enable_graph_clustering": true
+  },
+  "defaults": {
+    "llm_model": "gpt-4o-mini",
+    "embedding_model": "text-embedding-3-small",
+    "max_concurrency": 2,
+    "max_examples": null,
+    "retry_attempts": 1,
+    "enable_cache_metrics": true
+  },
+  "counts": {
+    "total": 59,
+    "evaluated": 59,
+    "missing_answer": 0,
+    "missing_contexts": 0,
+    "errors": 0
+  },
+  "sample_errors": [],
+  "metrics": null,
+  "status": "metrics_failed",
+  "notes": [
+    "Metric computation skipped or failed (install optional deps or fix errors)."
+  ]
+}

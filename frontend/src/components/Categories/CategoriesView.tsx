@@ -54,6 +54,23 @@ export default function CategoriesView() {
     specificity_level: 'detailed'
   });
 
+  // Listen for section selection from sidebar
+  useEffect(() => {
+    const handleSectionSelect = (event: CustomEvent<string>) => {
+      setActiveTab(event.detail as TabType);
+    };
+
+    window.addEventListener('categories-section-select', handleSectionSelect as EventListener);
+    return () => {
+      window.removeEventListener('categories-section-select', handleSectionSelect as EventListener);
+    };
+  }, []);
+
+  // Broadcast active section changes to sidebar
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('categories-active-section-changed', { detail: activeTab }));
+  }, [activeTab]);
+
   useEffect(() => {
     loadCategories();
     loadPrompts();
@@ -220,14 +237,14 @@ export default function CategoriesView() {
   const savePrompt = async () => {
     try {
       if (!editingPromptCategory) return;
-      
+
       const payload = {
         retrieval_strategy: promptEditForm.retrieval_strategy,
         generation_template: promptEditForm.generation_template,
         format_instructions: promptEditForm.format_instructions,
         specificity_level: promptEditForm.specificity_level
       };
-      
+
       await api.updatePrompt(editingPromptCategory, payload);
       setEditingPromptCategory(null);
       await loadPrompts();
@@ -261,10 +278,10 @@ export default function CategoriesView() {
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
@@ -282,7 +299,7 @@ export default function CategoriesView() {
               {activeTab === 'categories' ? 'Document Categories' : 'Category Prompts'}
             </h1>
             <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-              {activeTab === 'categories' 
+              {activeTab === 'categories'
                 ? 'LLM-generated taxonomy for query routing and document organization'
                 : 'Category-specific prompt templates for improved answer quality'
               }
@@ -322,34 +339,6 @@ export default function CategoriesView() {
             )}
           </div>
         </div>
-
-        {/* Tabs */}
-        <div className="flex gap-2 border-b" style={{ borderColor: 'var(--border)' }}>
-          <button
-            onClick={() => setActiveTab('categories')}
-            className={`px-4 py-2 font-medium transition-colors relative ${
-              activeTab === 'categories' ? 'text-[var(--accent-primary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <FolderTree className="w-4 h-4 inline mr-2" />
-            Categories
-            {activeTab === 'categories' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5" style={{ background: 'var(--accent-primary)' }} />
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('prompts')}
-            className={`px-4 py-2 font-medium transition-colors relative ${
-              activeTab === 'prompts' ? 'text-[var(--accent-primary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4 inline mr-2" />
-            Prompts
-            {activeTab === 'prompts' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5" style={{ background: 'var(--accent-primary)' }} />
-            )}
-          </button>
-        </div>
       </div>
 
       {/* Error Display */}
@@ -375,7 +364,7 @@ export default function CategoriesView() {
             <h2 className="text-lg font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
               Approval Queue
             </h2>
-            
+
             {/* Proposed by LLM */}
             {proposedCategories.length > 0 && (
               <div className="mb-4">
@@ -465,29 +454,34 @@ export default function CategoriesView() {
                 <p>No categories yet. Generate some to get started!</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {approvedCategories.map((category) => (
-                  <div key={category.id} className="p-4 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-                    <div className="flex items-start justify-between mb-2">
+                  <div
+                    key={category.id}
+                    className="p-4 rounded-lg flex flex-col min-w-0"
+                    style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  >
+                    {/* Header with title and actions */}
+                    <div className="flex flex-col gap-2 mb-2">
                       {editingId === category.id ? (
                         <div className="flex-1 space-y-2">
-                          <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
-                          <textarea className="textarea" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+                          <input className="input w-full" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+                          <textarea className="textarea w-full" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
                         </div>
                       ) : (
-                        <h3 className="font-semibold text-lg" style={{ color: 'var(--text-primary)' }}>
+                        <h3 className="font-semibold text-lg truncate" style={{ color: 'var(--text-primary)' }} title={category.name}>
                           {category.name}
                         </h3>
                       )}
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         {editingId === category.id ? (
                           <>
-                            <button onClick={() => saveEdit(category.id)} className="button-secondary">Save</button>
-                            <button onClick={cancelEdit} className="button-secondary">Cancel</button>
+                            <button onClick={() => saveEdit(category.id)} className="button-secondary text-xs">Save</button>
+                            <button onClick={cancelEdit} className="button-secondary text-xs">Cancel</button>
                           </>
                         ) : (
                           <>
-                            <button onClick={() => startEdit(category)} className="button-secondary">Edit</button>
+                            <button onClick={() => startEdit(category)} className="button-secondary text-xs">Edit</button>
                             <button onClick={() => deleteCategory(category.id)} className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/20 transition-colors" title="Delete">
                               <Trash2 className="w-4 h-4 text-red-600" />
                             </button>
@@ -495,31 +489,37 @@ export default function CategoriesView() {
                         )}
                       </div>
                     </div>
+
+                    {/* Edit form or description */}
                     {editingId === category.id ? (
                       <div className="space-y-2 mb-3">
                         <label className="text-xs" style={{ color: 'var(--text-secondary)' }}>Keywords (comma-separated)</label>
-                        <input className="input" value={editForm.keywords} onChange={(e) => setEditForm({ ...editForm, keywords: e.target.value })} />
+                        <input className="input w-full" value={editForm.keywords} onChange={(e) => setEditForm({ ...editForm, keywords: e.target.value })} />
                         <label className="text-xs" style={{ color: 'var(--text-secondary)' }}>Patterns (comma-separated)</label>
-                        <input className="input" value={editForm.patterns} onChange={(e) => setEditForm({ ...editForm, patterns: e.target.value })} />
+                        <input className="input w-full" value={editForm.patterns} onChange={(e) => setEditForm({ ...editForm, patterns: e.target.value })} />
                       </div>
                     ) : (
-                      <p className="text-sm mb-3 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                      <p className="text-sm mb-3 line-clamp-2 flex-grow" style={{ color: 'var(--text-secondary)' }}>
                         {category.description}
                       </p>
                     )}
+
+                    {/* Keywords */}
                     <div className="flex flex-wrap gap-2 mb-3">
                       {category.keywords.slice(0, 3).map((keyword, i) => (
-                        <span key={i} className="px-2 py-1 text-xs rounded" style={{ background: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}>
+                        <span key={i} className="px-2 py-1 text-xs rounded truncate max-w-full" style={{ background: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}>
                           {keyword}
                         </span>
                       ))}
                       {category.keywords.length > 3 && (
-                        <span className="px-2 py-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        <span className="px-2 py-1 text-xs flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
                           +{category.keywords.length - 3} more
                         </span>
                       )}
                     </div>
-                    <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+
+                    {/* Document count */}
+                    <div className="text-xs mt-auto" style={{ color: 'var(--text-secondary)' }}>
                       {category.document_count} document{category.document_count !== 1 ? 's' : ''}
                     </div>
                   </div>
@@ -594,7 +594,7 @@ export default function CategoriesView() {
                   <div className="space-y-3">
                     <div>
                       <label className="text-sm font-medium mb-1 block" style={{ color: 'var(--text-primary)' }}>Retrieval Strategy</label>
-                      <select 
+                      <select
                         className="input"
                         value={promptEditForm.retrieval_strategy}
                         onChange={(e) => setPromptEditForm({ ...promptEditForm, retrieval_strategy: e.target.value })}
@@ -606,7 +606,7 @@ export default function CategoriesView() {
                     </div>
                     <div>
                       <label className="text-sm font-medium mb-1 block" style={{ color: 'var(--text-primary)' }}>Specificity Level</label>
-                      <select 
+                      <select
                         className="input"
                         value={promptEditForm.specificity_level}
                         onChange={(e) => setPromptEditForm({ ...promptEditForm, specificity_level: e.target.value })}
@@ -623,7 +623,7 @@ export default function CategoriesView() {
                     </div>
                     <div>
                       <label className="text-sm font-medium mb-1 block" style={{ color: 'var(--text-primary)' }}>Generation Template</label>
-                      <textarea 
+                      <textarea
                         className="textarea font-mono text-xs"
                         rows={6}
                         value={promptEditForm.generation_template}
@@ -633,7 +633,7 @@ export default function CategoriesView() {
                     </div>
                     <div>
                       <label className="text-sm font-medium mb-1 block" style={{ color: 'var(--text-primary)' }}>Format Instructions</label>
-                      <textarea 
+                      <textarea
                         className="textarea text-sm"
                         rows={3}
                         value={promptEditForm.format_instructions}

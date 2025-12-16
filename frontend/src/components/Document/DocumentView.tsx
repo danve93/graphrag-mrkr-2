@@ -81,6 +81,8 @@ export default function DocumentView() {
   const prevProcessingRef = useRef(false)
   const [isEditingHashtags, setIsEditingHashtags] = useState(false)
   const [newHashtagInput, setNewHashtagInput] = useState('')
+  const [isEditingMetadata, setIsEditingMetadata] = useState(false)
+  const [editedMetadata, setEditedMetadata] = useState('')
   const [settings, setSettings] = useState<{ enable_entity_extraction?: boolean } | null>(null)
   const [isChunksExpanded, setIsChunksExpanded] = useState(false)
   const [isEntitiesExpanded, setIsEntitiesExpanded] = useState(false)
@@ -160,10 +162,6 @@ export default function DocumentView() {
         const summary = await api.getDocumentSummary(documentId)
         performance.mark('document-summary-fetch-end')
         performance.measure('document-summary-fetch', 'document-summary-fetch-start', 'document-summary-fetch-end')
-        const measure = performance.getEntriesByName('document-summary-fetch')[0]
-        if (measure) {
-          console.log(`[Performance] Document summary loaded in ${measure.duration.toFixed(2)}ms`)
-        }
         if (isSubscribed) {
           setSummaryData({ id: summary.id, filename: summary.filename, stats: summary.stats })
           setHasPreview(null)
@@ -229,6 +227,26 @@ export default function DocumentView() {
       // own data via paginated endpoints to avoid fetching large payloads.
     }
   }, [isChunksExpanded, isEntitiesExpanded, isMetadataExpanded, documentData, selectedDocumentId, summaryData?.id])
+
+  // Load document metadata when Metadata section is expanded
+  useEffect(() => {
+    if (!isMetadataExpanded || !selectedDocumentId) return
+    let isActive = true
+    const loadMetadata = async () => {
+      // If we already have metadata populated (more than just empty object), maybe skip?
+      // But user might want fresh data. Let's fetch the full doc details if we don't have them or to ensure freshness.
+      // However, api.getDocument is the main way to get metadata.
+      try {
+        const doc = await api.getDocument(selectedDocumentId)
+        if (!isActive) return
+        setDocumentData(prev => doc)
+      } catch (err) {
+        console.error('Failed to reload document metadata', err)
+      }
+    }
+    void loadMetadata()
+    return () => { isActive = false }
+  }, [isMetadataExpanded, selectedDocumentId])
 
   // Load chunks when the Chunks section is expanded. Use dedicated endpoint so
   // we don't rely on `documentData.chunks` which may be empty for lightweight metadata responses.
@@ -586,18 +604,18 @@ export default function DocumentView() {
   const handleAddHashtag = useCallback(async () => {
     let trimmed = newHashtagInput.trim()
     if (!trimmed) return
-    
+
     // Automatically add # prefix if not present
     if (!trimmed.startsWith('#')) {
       trimmed = '#' + trimmed
     }
-    
+
     const currentHashtags = documentData?.hashtags || []
     if (currentHashtags.includes(trimmed)) {
       setNewHashtagInput('')
       return
     }
-    
+
     const newHashtags = [...currentHashtags, trimmed]
     await saveHashtags(newHashtags)
     setNewHashtagInput('')
@@ -609,6 +627,50 @@ export default function DocumentView() {
       handleAddHashtag()
     }
   }, [handleAddHashtag])
+
+  const handleStartEditMetadata = useCallback(() => {
+    if (documentData?.metadata) {
+      setEditedMetadata(JSON.stringify(documentData.metadata, null, 2))
+    } else {
+      setEditedMetadata('{}')
+    }
+    setIsEditingMetadata(true)
+  }, [documentData?.metadata])
+
+  const handleCancelEditMetadata = useCallback(() => {
+    setIsEditingMetadata(false)
+    setEditedMetadata('')
+    setActionError(null)
+  }, [])
+
+  const handleSaveMetadata = useCallback(async () => {
+    if (!documentData?.id) return
+    setActionError(null)
+
+    try {
+      let parsedMetadata = {}
+      try {
+        parsedMetadata = JSON.parse(editedMetadata)
+      } catch (e) {
+        setActionError('Invalid JSON format')
+        return
+      }
+
+      await api.updateDocumentMetadata(documentData.id, parsedMetadata)
+
+      // Refresh document data
+      const data = await api.getDocument(documentData.id)
+      setDocumentData(data)
+      setIsEditingMetadata(false)
+      setActionMessage('Metadata updated successfully')
+    } catch (saveError) {
+      setActionError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to update metadata'
+      )
+    }
+  }, [documentData?.id, editedMetadata])
 
   useEffect(() => {
     if (!actionMessage) return
@@ -688,16 +750,39 @@ export default function DocumentView() {
     setIsMetadataExpanded((prev) => !prev)
   }, [])
 
+  // Fetch global stats for empty state
+  const [globalStats, setGlobalStats] = useState<{
+    total_documents: number;
+    total_chunks: number;
+    total_entities: number;
+    total_relationships: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!selectedDocumentId) {
+      api.getStats().then(data => {
+        setGlobalStats({
+          total_documents: data.total_documents || 0,
+          total_chunks: data.total_chunks || 0,
+          total_entities: data.total_entities || 0,
+          total_relationships: data.total_relationships || 0,
+        });
+      }).catch(() => {
+        // Silently fail
+      });
+    }
+  }, [selectedDocumentId]);
+
   if (!selectedDocumentId) {
     return (
       <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
         {/* Header */}
         <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ 
-              width: '40px', 
-              height: '40px', 
-              borderRadius: '8px', 
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '8px',
               backgroundColor: '#f27a0320',
               border: '1px solid #f27a03',
               display: 'flex',
@@ -716,10 +801,73 @@ export default function DocumentView() {
             </div>
           </div>
         </div>
-        {/* Empty State */}
-        <div className="flex-1 flex flex-col items-center justify-center text-secondary-600 dark:text-secondary-400">
-          <DocumentTextIcon className="w-16 h-16 text-secondary-300 mb-4" />
-          <p className="text-base font-medium">Select a document to view its details.</p>
+
+        {/* Stats Cards */}
+        <div className="flex-1 p-6">
+          <h2 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
+            Knowledge Base Overview
+          </h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div
+              className="rounded-lg p-5 border"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                borderColor: 'var(--border)'
+              }}
+            >
+              <div className="text-3xl font-bold mb-1" style={{ color: 'var(--accent-primary)' }}>
+                {globalStats?.total_documents || 0}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Documents</div>
+            </div>
+            <div
+              className="rounded-lg p-5 border"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                borderColor: 'var(--border)'
+              }}
+            >
+              <div className="text-3xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
+                {globalStats?.total_chunks || 0}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Chunks</div>
+            </div>
+            <div
+              className="rounded-lg p-5 border"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                borderColor: 'var(--border)'
+              }}
+            >
+              <div className="text-3xl font-bold mb-1" style={{ color: '#32D74B' }}>
+                {globalStats?.total_entities || 0}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Entities</div>
+            </div>
+            <div
+              className="rounded-lg p-5 border"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                borderColor: 'var(--border)'
+              }}
+            >
+              <div className="text-3xl font-bold mb-1" style={{ color: '#BF5AF2' }}>
+                {globalStats?.total_relationships || 0}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Relationships</div>
+            </div>
+          </div>
+
+          {/* Empty State */}
+          <div className="flex flex-col items-center justify-center py-16 mt-8 rounded-lg border" style={{ borderColor: 'var(--border)', borderStyle: 'dashed' }}>
+            <DocumentTextIcon className="w-12 h-12 mb-3" style={{ color: 'var(--text-tertiary)' }} />
+            <p className="text-base font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Select a document from the sidebar to view its details
+            </p>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-tertiary)' }}>
+              Or upload a new document to get started
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -735,10 +883,10 @@ export default function DocumentView() {
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
@@ -774,20 +922,6 @@ export default function DocumentView() {
                 {previewState.isLoading ? 'Loading...' : 'Preview'}
               </Button>
             )}
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={clearSelectedDocument}
-              startIcon={<ArrowLeftIcon className="w-4 h-4" />}
-              style={{
-                textTransform: 'none',
-                borderColor: 'var(--border)',
-                color: 'var(--text-primary)',
-                fontSize: '0.75rem'
-              }}
-            >
-              Back
-            </Button>
           </div>
         </div>
         {previewState.error && (
@@ -797,7 +931,7 @@ export default function DocumentView() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6 bg-secondary-50 dark:bg-secondary-900">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6" style={{ backgroundColor: 'var(--bg-primary)' }}>
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 text-secondary-500 dark:text-secondary-400">
             <Loader size={40} label="Loading document metadata…" />
@@ -817,31 +951,43 @@ export default function DocumentView() {
         {/* Summary will be rendered inside the main wrapper below so there's a single consistent container */}
 
         {!isLoading && !error && (documentData || summaryData) && (
-          <div className="mt-3 bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700 p-5 space-y-4">
+          <div className="mt-3 space-y-4">
             {/* Inline summary area placed inside the main wrapper so layout is unified */}
             {summaryData && (
               <div>
-                <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-50 mb-1">{summaryData.filename}</h2>
-                <p className="text-xs text-secondary-500 dark:text-secondary-400 mb-3">ID: {summaryData.id}</p>
+                <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>{summaryData.filename}</h2>
+                <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>ID: {summaryData.id}</p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-2">
-                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                    <p className="font-semibold">Chunks</p>
-                    <p>{summaryData.stats.chunks}</p>
+                  <div
+                    className="p-3 rounded"
+                    style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  >
+                    <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Chunks</p>
+                    <p className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{summaryData.stats.chunks}</p>
                   </div>
-                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                    <p className="font-semibold">Entities</p>
-                    <p>{summaryData.stats.entities}</p>
+                  <div
+                    className="p-3 rounded"
+                    style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  >
+                    <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Entities</p>
+                    <p className="text-lg font-bold" style={{ color: '#32D74B' }}>{summaryData.stats.entities}</p>
                   </div>
-                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                    <p className="font-semibold">Communities</p>
-                    <p>{summaryData.stats.communities}</p>
+                  <div
+                    className="p-3 rounded"
+                    style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  >
+                    <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Communities</p>
+                    <p className="text-lg font-bold" style={{ color: '#BF5AF2' }}>{summaryData.stats.communities}</p>
                   </div>
-                  <div className="p-2 rounded bg-secondary-50 dark:bg-secondary-900/40 border border-secondary-200 dark:border-secondary-700">
-                    <p className="font-semibold">Similarities</p>
-                    <p>{summaryData.stats.similarities}</p>
+                  <div
+                    className="p-3 rounded"
+                    style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  >
+                    <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Similarities</p>
+                    <p className="text-lg font-bold" style={{ color: 'var(--accent-primary)' }}>{summaryData.stats.similarities}</p>
                   </div>
                 </div>
-                <p className="text-xs text-secondary-500 dark:text-secondary-400">Expand a section (Chunks, Entities, Metadata) to load full details.</p>
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Expand a section (Chunks, Entities, Metadata) to load full details.</p>
               </div>
             )}
             {actionMessage && (
@@ -864,7 +1010,10 @@ export default function DocumentView() {
 
             {/* Summary section removed: stats panel above provides the necessary overview. */}
 
-          <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+            <section
+              className="rounded-lg"
+              style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            >
               <header className={`flex items-center justify-between px-5 py-4 ${isChunksExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
                 <button
                   type="button"
@@ -1025,7 +1174,7 @@ export default function DocumentView() {
                   )}
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Entities</h3>
                 </button>
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   {(documentData && ((documentData.entities?.length ?? 0) === 0) && ((documentData.chunks?.length ?? 0) > 0) && documentData.metadata?.processing_status !== 'staged' && !processingState?.is_processing) && (
                     <button
                       type="button"
@@ -1160,17 +1309,17 @@ export default function DocumentView() {
                         </p>
                         {doc.link && (
                           <a
-                              href={doc.link}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs hover:underline inline-flex items-center gap-1 mt-1"
-                              style={{ color: 'var(--primary-500)' }}
-                            >
-                              <span>Open external link</span>
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                              </svg>
-                            </a>
+                            href={doc.link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs hover:underline inline-flex items-center gap-1 mt-1"
+                            style={{ color: 'var(--primary-500)' }}
+                          >
+                            <span>Open external link</span>
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
                         )}
                       </div>
                       <button
@@ -1186,61 +1335,102 @@ export default function DocumentView() {
               </section>
             )}
 
-              {documentData?.metadata && (
-                <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
-                  <header className={`flex items-center justify-between px-5 py-4 ${isMetadataExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
-                    <button
-                      type="button"
-                      onClick={toggleMetadataExpanded}
-                      className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
-                    >
-                      {isMetadataExpanded ? (
-                        <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
-                      ) : (
-                        <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
-                      )}
-                      <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Metadata</h3>
-                    </button>
-                  </header>
-                  <AnimatePresence>
-                    {isMetadataExpanded && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.3, ease: 'easeInOut' }}
-                        className="overflow-hidden"
-                      >
-                        <pre className="bg-secondary-900 text-secondary-50 text-xs rounded-b-lg p-4 overflow-auto">
-                          {JSON.stringify(documentData?.metadata ?? {}, null, 2)}
-                        </pre>
-                      </motion.div>
+            {/* Always render metadata section to allow editing, even if empty initially */}
+            <section className="bg-white dark:bg-secondary-800 dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+              <header className={`flex items-center justify-between px-5 py-4 ${isMetadataExpanded ? 'border-b border-secondary-200 dark:border-secondary-700' : ''}`}>
+                <button
+                  type="button"
+                  onClick={toggleMetadataExpanded}
+                  className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
+                >
+                  {isMetadataExpanded ? (
+                    <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                  ) : (
+                    <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                  )}
+                  <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Metadata</h3>
+                </button>
+                {isMetadataExpanded && !isEditingMetadata && (
+                  <button
+                    type="button"
+                    onClick={handleStartEditMetadata}
+                    className="button-secondary text-xs"
+                  >
+                    Edit
+                  </button>
+                )}
+              </header>
+              <AnimatePresence>
+                {isMetadataExpanded && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3, ease: 'easeInOut' }}
+                    className="overflow-hidden"
+                  >
+                    {isEditingMetadata ? (
+                      <div className="p-4 bg-secondary-50 dark:bg-secondary-900">
+                        <div className="mb-2">
+                          <label htmlFor="metadata-editor" className="block text-xs font-medium text-secondary-700 dark:text-secondary-300 mb-1">
+                            Edit Metadata (JSON)
+                          </label>
+                          <textarea
+                            id="metadata-editor"
+                            value={editedMetadata}
+                            onChange={(e) => setEditedMetadata(e.target.value)}
+                            className="w-full text-xs font-mono p-3 rounded border border-secondary-300 dark:border-secondary-600 bg-white dark:bg-secondary-800 focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                            rows={10}
+                          />
+                        </div>
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCancelEditMetadata}
+                            className="button-ghost text-xs"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSaveMetadata}
+                            className="button-primary text-xs"
+                          >
+                            Save Changes
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <pre className="bg-secondary-900 text-secondary-50 text-xs rounded-b-lg p-4 overflow-auto">
+                        {JSON.stringify(documentData?.metadata ?? {}, null, 2)}
+                      </pre>
                     )}
-                  </AnimatePresence>
-                </section>
-              )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </section>
 
-              {/* Document-level graph and community info */}
-              <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
-                <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
-                  <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
-                  <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
-                </header>
-                  <div className="p-5">
-                    <DocumentGraph documentId={documentData?.id ?? selectedDocumentId} height={480} />
-                  </div>
-              </section>
+            {/* Document-level graph and community info */}
+            <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
+              <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
+                <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
+                <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
+              </header>
+              <div className="p-5">
+                <DocumentGraph documentId={documentData?.id ?? selectedDocumentId} height={480} />
+              </div>
+            </section>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div>
-                    <CommunitiesSection documentId={documentData?.id ?? selectedDocumentId} />
-                </div>
-                <div>
-                    <ChunkSimilaritiesSection documentId={documentData?.id ?? selectedDocumentId} />
-                </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <CommunitiesSection documentId={documentData?.id ?? selectedDocumentId} />
+              </div>
+              <div>
+                <ChunkSimilaritiesSection documentId={documentData?.id ?? selectedDocumentId} />
               </div>
             </div>
-          )}
+          </div>
+        )}
       </div>
 
       {(previewState.url || previewState.content) && (

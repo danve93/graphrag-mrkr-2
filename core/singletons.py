@@ -8,11 +8,16 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 import hashlib
 import time
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from cachetools import TTLCache, LRUCache
-from neo4j import Driver, GraphDatabase
-from neo4j.exceptions import AuthError
+from neo4j import GraphDatabase, Driver
+from neo4j.exceptions import ServiceUnavailable, AuthError
 from config.settings import settings
+# Import CacheService for type hinting and usage
+from core.cache_service import CacheService
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +26,13 @@ _graph_db_driver: Optional[Driver] = None
 _graph_db_lock = threading.Lock()
 
 # Global caches
-_entity_label_cache: Optional[TTLCache] = None
+_entity_label_cache: Optional['CacheService'] = None
 _entity_label_lock = threading.Lock()
-_embedding_cache: Optional[LRUCache] = None
+_embedding_cache: Optional['CacheService'] = None
 _embedding_lock = threading.Lock()
-_retrieval_cache: Optional[TTLCache] = None
+_retrieval_cache: Optional['CacheService'] = None
 _retrieval_lock = threading.Lock()
-_response_cache: Optional[TTLCache] = None
+_response_cache: Optional['CacheService'] = None
 _response_lock = threading.Lock()
 _response_key_locks: dict = {}
 _response_key_locks_lock = threading.Lock()
@@ -214,76 +219,77 @@ def get_graph_db_driver() -> Driver:
         raise RuntimeError(f"Failed to initialize Neo4j driver: {last_exc}") from last_exc
 
 
-def get_entity_label_cache() -> TTLCache:
+def get_entity_label_cache() -> CacheService:
     """
-    Get or create singleton entity label cache.
-    TTL: 300 seconds (5 minutes)
+    Get or create singleton entity label cache service.
     """
     global _entity_label_cache
-    
+
     if _entity_label_cache is not None:
         return _entity_label_cache
-    
+
     with _entity_label_lock:
         if _entity_label_cache is not None:
             return _entity_label_cache
-        
-        maxsize = settings.entity_label_cache_size
-        ttl = settings.entity_label_cache_ttl
-        
-        _entity_label_cache = TTLCache(maxsize=maxsize, ttl=ttl)
-        logger.info(f"Initialized entity label cache (size={maxsize}, ttl={ttl}s)")
-        
+
+        _entity_label_cache = CacheService(
+            name="entity_labels",
+            ttl=settings.entity_label_cache_ttl,
+            max_size=settings.entity_label_cache_size,
+            use_disk=False
+        )
         return _entity_label_cache
 
 
-def get_embedding_cache() -> LRUCache:
+def get_embedding_cache() -> CacheService:
     """
-    Get or create singleton embedding cache.
-    No TTL - embeddings are deterministic.
+    Get or create singleton embedding cache service.
+    TTL: configurable via settings.embedding_cache_ttl
     """
     global _embedding_cache
-    
+
     if _embedding_cache is not None:
         return _embedding_cache
-    
+
     with _embedding_lock:
         if _embedding_cache is not None:
             return _embedding_cache
-        
-        maxsize = settings.embedding_cache_size
-        _embedding_cache = LRUCache(maxsize=maxsize)
-        logger.info(f"Initialized embedding cache (size={maxsize})")
-        
+
+        _embedding_cache = CacheService(
+            name="embeddings",
+            ttl=settings.embedding_cache_ttl,
+            max_size=settings.embedding_cache_size,
+            use_disk=True  # Always preferred for embeddings
+        )
         return _embedding_cache
 
 
-def get_retrieval_cache() -> TTLCache:
+def get_retrieval_cache() -> CacheService:
     """
-    Get or create singleton retrieval cache.
-    TTL: 60 seconds (short TTL for consistency)
+    Get or create singleton retrieval cache service.
     """
     global _retrieval_cache
-    
+
     if _retrieval_cache is not None:
         return _retrieval_cache
-    
+
     with _retrieval_lock:
         if _retrieval_cache is not None:
             return _retrieval_cache
-        
-        maxsize = settings.retrieval_cache_size
-        ttl = settings.retrieval_cache_ttl
-        
-        _retrieval_cache = TTLCache(maxsize=maxsize, ttl=ttl)
-        logger.info(f"Initialized retrieval cache (size={maxsize}, ttl={ttl}s)")
-        
+
+        # Retrieval cache is short-lived, often fine in memory, but we use settings preference
+        _retrieval_cache = CacheService(
+            name="retrieval",
+            ttl=settings.retrieval_cache_ttl,
+            max_size=settings.retrieval_cache_size,
+            use_disk=False  # Typically faster in memory for short TTL
+        )
         return _retrieval_cache
 
 
-def get_response_cache() -> TTLCache:
+def get_response_cache() -> CacheService:
     """
-    Get or create singleton response-level cache.
+    Get or create singleton response-level cache service.
     TTL: configurable via settings.response_cache_ttl
     """
     global _response_cache
@@ -295,12 +301,12 @@ def get_response_cache() -> TTLCache:
         if _response_cache is not None:
             return _response_cache
 
-        maxsize = settings.response_cache_size
-        ttl = settings.response_cache_ttl
-
-        _response_cache = TTLCache(maxsize=maxsize, ttl=ttl)
-        logger.info(f"Initialized response cache (size={maxsize}, ttl={ttl}s)")
-
+        _response_cache = CacheService(
+            name="responses",
+            ttl=settings.response_cache_ttl,
+            max_size=settings.response_cache_size,
+            use_disk=True
+        )
         return _response_cache
 
 
@@ -342,7 +348,12 @@ def clear_response_cache() -> None:
         maxsize = settings.response_cache_size
         ttl = settings.response_cache_ttl
 
-        _response_cache = TTLCache(maxsize=maxsize, ttl=ttl)
+        _response_cache = CacheService(
+            name="responses",
+            ttl=ttl,
+            max_size=maxsize,
+            use_disk=True
+        )
         logger.info(f"Initialized response cache (size={maxsize}, ttl={ttl}s)")
 
         return _response_cache

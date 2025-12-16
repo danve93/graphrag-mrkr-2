@@ -263,6 +263,11 @@ def cleanup_test_data():
     yield
     # Cleanup runs after the test
     try:
+        # Check if driver is available and not None
+        if graph_db.driver is None:
+            logger.warning("Cleanup skipped: graph_db.driver is None")
+            return
+
         query = """
         MATCH (d:Document)
         WHERE d.document_id STARTS WITH 'test_' OR d.title CONTAINS 'carbonio'

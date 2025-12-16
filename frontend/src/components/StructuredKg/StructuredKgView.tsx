@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Database, Play, CheckCircle, XCircle, RefreshCw, Code, Link2 } from 'lucide-react';
+import { Database, Play, CheckCircle, XCircle, RefreshCw, Code, Link2, Network } from 'lucide-react';
 import { Button } from '@mui/material';
-import { AccountTree as GraphIcon } from '@mui/icons-material';
 import ExpandablePanel from '@/components/Utils/ExpandablePanel';
 import { api } from '@/lib/api';
 
@@ -126,17 +125,17 @@ export default function StructuredKgView() {
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <GraphIcon style={{ fontSize: '24px', color: '#f27a03' }} />
+            <Network size={24} color="#f27a03" />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -151,7 +150,7 @@ export default function StructuredKgView() {
 
       {/* Main Content */}
       <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        
+
         {/* Configuration Panel */}
         {config && (
           <ExpandablePanel

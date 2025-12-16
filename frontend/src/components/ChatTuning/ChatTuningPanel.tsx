@@ -1,13 +1,13 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import { Info, Settings } from 'lucide-react'
 import { Button } from '@mui/material'
-import { Settings as SettingsIcon } from '@mui/icons-material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Tooltip from '@/components/Utils/Tooltip'
 import Loader from '@/components/Utils/Loader'
 import { API_URL } from '@/lib/api'
+import AdminApiKeys from '@/components/Admin/AdminApiKeys'
 
 interface ChatParameter {
   key: string
@@ -32,7 +32,8 @@ const CATEGORY_ORDER = [
   'Multi-Hop Reasoning',
   'Graph Expansion',
   'Reranking',
-  'Context Filtering'
+  'Context Filtering',
+  'Performance & Caching'
 ]
 
 export default function ChatTuningPanel() {
@@ -41,7 +42,7 @@ export default function ChatTuningPanel() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(CATEGORY_ORDER))
+  const [activeCategory, setActiveCategory] = useState<string>('model-selection')
 
   useEffect(() => {
     loadConfig()
@@ -50,11 +51,7 @@ export default function ChatTuningPanel() {
   // Listen for section selection from sidebar
   useEffect(() => {
     const handleSectionSelect = (event: CustomEvent<string>) => {
-      const sectionId = event.detail;
-      const element = document.getElementById(sectionId);
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
+      setActiveCategory(event.detail);
     };
 
     window.addEventListener('chat-tuning-section-select', handleSectionSelect as EventListener);
@@ -62,6 +59,11 @@ export default function ChatTuningPanel() {
       window.removeEventListener('chat-tuning-section-select', handleSectionSelect as EventListener);
     };
   }, [])
+
+  // Broadcast active category changes to sidebar
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('chat-tuning-active-section-changed', { detail: activeCategory }));
+  }, [activeCategory])
 
   const loadConfig = async () => {
     try {
@@ -124,16 +126,17 @@ export default function ChatTuningPanel() {
     setError(null)
   }
 
-  const toggleCategory = (category: string) => {
-    setExpandedCategories((prev) => {
-      const next = new Set(prev)
-      if (next.has(category)) {
-        next.delete(category)
-      } else {
-        next.add(category)
-      }
-      return next
-    })
+  // Map section IDs to category names
+  const getCategoryFromId = (id: string): string => {
+    const categoryMap: Record<string, string> = {
+      'model-selection': 'Model Selection',
+      'retrieval-basics': 'Retrieval Basics',
+      'multi-hop-reasoning': 'Multi-Hop Reasoning',
+      'graph-expansion': 'Graph Expansion',
+      'reranking': 'Reranking',
+      'context-filtering': 'Context Filtering',
+    }
+    return categoryMap[id] || id
   }
 
   if (isLoading) {
@@ -178,20 +181,20 @@ export default function ChatTuningPanel() {
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-        {/* Header */}
-          <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+      {/* Header */}
+      <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <SettingsIcon style={{ fontSize: '24px', color: '#f27a03' }} />
+            <Settings size={24} color="#f27a03" />
           </div>
           <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
             Chat Tuning
@@ -242,102 +245,100 @@ export default function ChatTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {sortedCategories.map((category) => {
-          const params = groupedParams[category]
-          const isExpanded = expandedCategories.has(category)
-          const sectionId = category.toLowerCase().replace(/\s+/g, '-');
-          
-          return (
-            <div key={category} id={sectionId} style={{ scrollMarginTop: '24px' }}>
-            <ExpandablePanel
-              title={category}
-              expanded={isExpanded}
-              onToggle={() => toggleCategory(category)}
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {params.map((param) => (
-                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div className="flex items-center" style={{ gap: '8px' }}>
-                      <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                        {param.label}
-                      </label>
-                      <Tooltip content={param.tooltip}>
-                        <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
-                          <InformationCircleIcon style={{ width: '16px', height: '16px' }} />
-                        </button>
-                      </Tooltip>
-                    </div>
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)' }}>
+        {activeCategory === 'api-keys' ? (
+          <AdminApiKeys />
+        ) : (
+          sortedCategories
+            .filter((category) => category.toLowerCase().replace(/\s+/g, '-') === activeCategory)
+            .map((category) => {
+              const params = groupedParams[category]
 
-                    {param.type === 'slider' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
-                          {param.value}
-                        </span>
-                        <input
-                          type="range"
-                          min={param.min}
-                          max={param.max}
-                          step={param.step}
-                          value={param.value as number}
-                          onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
-                          className="slider"
-                          style={{ flex: 1 }}
-                          title={String(param.value)}
-                        />
+              return (
+                <div key={category}>
+                  <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-6)' }}>
+                    {category}
+                  </h2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {params.map((param) => (
+                      <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div className="flex items-center" style={{ gap: '8px' }}>
+                          <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                            {param.label}
+                          </label>
+                          <Tooltip content={param.tooltip}>
+                            <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
+                              <Info size={16} />
+                            </button>
+                          </Tooltip>
+                        </div>
+
+                        {param.type === 'slider' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
+                              {param.value}
+                            </span>
+                            <input
+                              type="range"
+                              min={param.min}
+                              max={param.max}
+                              step={param.step}
+                              value={param.value as number}
+                              onChange={(e) => handleValueChange(param.key, parseFloat(e.target.value))}
+                              className="slider"
+                              style={{ flex: 1 }}
+                              title={String(param.value)}
+                            />
+                          </div>
+                        )}
+
+                        {param.type === 'select' && param.options && (
+                          <select
+                            value={String(param.value)}
+                            onChange={(e) => handleValueChange(param.key, e.target.value)}
+                            className="input-field"
+                            style={{ width: '100%' }}
+                          >
+                            {param.options.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+
+                        {param.type === 'toggle' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <button
+                              onClick={() => handleValueChange(param.key, !param.value)}
+                              className={`relative inline-flex h-6 w-11 items-center transition-colors ${param.value ? 'toggle-on' : 'toggle-off'
+                                }`}
+                              style={{ borderRadius: 'var(--radius-full)' }}
+                              aria-label={`Toggle ${param.label}`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform transition-transform ${param.value ? 'translate-x-6' : 'translate-x-1'
+                                  }`}
+                                style={{
+                                  borderRadius: 'var(--radius-full)',
+                                  background: 'var(--bg-primary)'
+                                }}
+                              />
+                            </button>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                              {param.value ? 'Enabled' : 'Disabled'}
+                            </span>
+                          </div>
+                        )}
                       </div>
-                    )}
-
-                    {param.type === 'select' && param.options && (
-                      <select
-                        value={String(param.value)}
-                        onChange={(e) => handleValueChange(param.key, e.target.value)}
-                        className="input-field"
-                        style={{ width: '100%' }}
-                      >
-                        {param.options.map((opt) => (
-                          <option key={opt} value={opt}>
-                            {opt}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-
-                    {param.type === 'toggle' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button
-                          onClick={() => handleValueChange(param.key, !param.value)}
-                          className={`relative inline-flex h-6 w-11 items-center transition-colors ${
-                            param.value ? 'toggle-on' : 'toggle-off'
-                          }`}
-                          style={{ borderRadius: 'var(--radius-full)' }}
-                          aria-label={`Toggle ${param.label}`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform transition-transform ${
-                              param.value ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                            style={{ 
-                              borderRadius: 'var(--radius-full)', 
-                              background: 'var(--bg-primary)' 
-                            }}
-                          />
-                        </button>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          {param.value ? 'Enabled' : 'Disabled'}
-                        </span>
-                      </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
-            </ExpandablePanel>
-            </div>
-          )
-        })}
+                </div>
+              )
+            })
+        )}
       </div>
-
     </div>
   )
 }
- 
+

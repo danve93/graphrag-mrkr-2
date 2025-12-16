@@ -1,6 +1,7 @@
 
 import React, { useEffect, useState } from "react";
 import axios from "axios";
+import { API_URL } from "../../lib/api";
 
 export const FeedbackMetricsDashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<any>(null);
@@ -9,7 +10,7 @@ export const FeedbackMetricsDashboard: React.FC = () => {
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
-        const res = await axios.get("/api/feedback/metrics");
+        const res = await axios.get(`${API_URL || ''}/api/feedback/metrics`, { withCredentials: true });
         setMetrics(res.data);
       } catch (err) {
         setMetrics(null);

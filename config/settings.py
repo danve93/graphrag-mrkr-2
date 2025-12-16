@@ -144,6 +144,118 @@ class Settings(BaseSettings):
         default=0.6, description="Quality threshold for OCR processing"
     )
 
+    # Content Filtering Configuration (Heuristic-based)
+    enable_content_filtering: bool = Field(
+        default=False, description="Enable heuristic content filtering before embedding"
+    )
+    content_filter_min_length: int = Field(
+        default=50, description="Minimum chunk length in characters"
+    )
+    content_filter_max_length: int = Field(
+        default=100000, description="Maximum chunk length in characters"
+    )
+    content_filter_unique_ratio: float = Field(
+        default=0.3, description="Minimum ratio of unique words (0.0-1.0)"
+    )
+    content_filter_max_special_char_ratio: float = Field(
+        default=0.5, description="Maximum ratio of special characters"
+    )
+    content_filter_min_alphanumeric_ratio: float = Field(
+        default=0.3, description="Minimum ratio of alphanumeric characters"
+    )
+    content_filter_enable_conversation: bool = Field(
+        default=True, description="Enable conversation thread quality filtering"
+    )
+    content_filter_enable_structured: bool = Field(
+        default=True, description="Enable structured data quality filtering"
+    )
+    content_filter_enable_code: bool = Field(
+        default=True, description="Enable code quality filtering"
+    )
+
+    # Temporal Graph Configuration
+    enable_temporal_filtering: bool = Field(
+        default=True, description="Enable temporal node creation and time-based retrieval"
+    )
+    default_time_decay_weight: float = Field(
+        default=0.2, description="Default weight for time-decay scoring (0.0-1.0)"
+    )
+    temporal_window_days: int = Field(
+        default=30, description="Default time window in days for temporal correlation queries"
+    )
+
+    # Multi-Stage Retrieval Configuration
+    enable_two_stage_retrieval: bool = Field(
+        default=True, description="Enable two-stage retrieval (BM25 pre-filter + vector search on candidates)"
+    )
+    two_stage_threshold_docs: int = Field(
+        default=5000, description="Minimum corpus size to activate two-stage retrieval"
+    )
+    two_stage_multiplier: int = Field(
+        default=10, description="Multiplier for BM25 candidate count (top_k * multiplier)"
+    )
+
+    # Fuzzy Matching Configuration
+    enable_fuzzy_matching: bool = Field(
+        default=True, description="Enable fuzzy matching for technical terms and typo correction"
+    )
+    max_fuzzy_distance: int = Field(
+        default=2, description="Maximum edit distance for fuzzy matching (1-2 recommended)"
+    )
+    fuzzy_confidence_threshold: float = Field(
+        default=0.5, description="Minimum confidence (0.0-1.0) to enable fuzzy matching for a query"
+    )
+
+    # Quality Monitoring Configuration
+    enable_quality_monitoring: bool = Field(
+        default=True, description="Enable continuous retrieval quality monitoring and alerting"
+    )
+    quality_monitor_window_size: int = Field(
+        default=1000, description="Number of queries to track in the sliding window"
+    )
+    quality_alert_threshold: float = Field(
+        default=0.7, description="Quality drop threshold (0.0-1.0) for triggering alerts"
+    )
+
+    # Query Expansion Configuration
+    enable_query_expansion: bool = Field(
+        default=True, description="Enable query expansion for abbreviations and synonyms to improve recall"
+    )
+    query_expansion_threshold: int = Field(
+        default=3, description="Trigger expansion when initial retrieval returns fewer than this many results"
+    )
+    max_expansions: int = Field(
+        default=5, description="Maximum number of expansion terms to generate per query"
+    )
+    expansion_penalty: float = Field(
+        default=0.7, description="Score penalty (0.0-1.0) applied to chunks retrieved from expanded terms"
+    )
+    use_llm_expansion: bool = Field(
+        default=False, description="Use LLM for synonym generation (slower but broader coverage)"
+    )
+
+    # Client-Side Vector Search for Static Entities Configuration
+    enable_static_entity_matching: bool = Field(
+        default=True, description="Enable client-side vector matching for static entities (categories) using precomputed embeddings"
+    )
+    static_matching_min_similarity: float = Field(
+        default=0.6, description="Minimum cosine similarity (0.0-1.0) for static entity matches (lower = more permissive)"
+    )
+
+    # Layered Memory System Configuration
+    enable_memory_system: bool = Field(
+        default=False, description="Enable layered memory system for user context and conversation history"
+    )
+    memory_max_facts: int = Field(
+        default=20, description="Maximum number of user facts to load per session"
+    )
+    memory_max_conversations: int = Field(
+        default=5, description="Maximum number of past conversation summaries to load"
+    )
+    memory_min_fact_importance: float = Field(
+        default=0.3, description="Minimum importance threshold (0.0-1.0) for facts to be loaded"
+    )
+
     # Document Classification During Ingestion
     enable_document_classification: bool = Field(
         default=False,
@@ -290,18 +402,26 @@ class Settings(BaseSettings):
     )
 
     # Caching Configuration
-    entity_label_cache_size: int = Field(
-        default=5000,
-        description="Maximum entries in entity label cache"
+    cache_type: str = Field(
+        default="disk",
+        description="Cache backend type: 'disk' (persistent) or 'memory' (ephemeral)"
     )
-    entity_label_cache_ttl: int = Field(
-        default=300,
-        description="TTL for entity label cache (seconds)"
+    cache_dir: str = Field(
+        default="data/cache",
+        description="Directory for disk-based cache storage"
     )
+    
+    # Embedding Cache (7 days default)
     embedding_cache_size: int = Field(
         default=10000,
-        description="Maximum entries in embedding cache"
+        description="Maximum entries in embedding cache (for memory backend)"
     )
+    embedding_cache_ttl: int = Field(
+        default=604800,  # 7 days
+        description="TTL for embedding cache in seconds"
+    )
+
+    # Retrieval Cache (1 minute default)
     retrieval_cache_size: int = Field(
         default=1000,
         description="Maximum entries in retrieval cache"
@@ -310,14 +430,25 @@ class Settings(BaseSettings):
         default=60,
         description="TTL for retrieval cache (seconds)"
     )
-    # Response-level caching (semantic response cache)
+    
+    # Response/Conversation Cache (2 hours default)
     response_cache_size: int = Field(
         default=2000,
         description="Maximum entries in response cache"
     )
     response_cache_ttl: int = Field(
+        default=7200,  # 2 hours
+        description="TTL for response cache in seconds"
+    )
+    
+    # Entity Label Cache (5 minutes default)
+    entity_label_cache_size: int = Field(
+        default=5000,
+        description="Maximum entries in entity label cache"
+    )
+    entity_label_cache_ttl: int = Field(
         default=300,
-        description="TTL for response cache (seconds)"
+        description="TTL for entity label cache (seconds)"
     )
     # Provider-level LLM streaming (experimental)
     enable_llm_streaming: bool = Field(

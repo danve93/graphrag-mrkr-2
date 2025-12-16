@@ -142,6 +142,10 @@ The following implementation highlights summarize factual, developer-facing feat
 
 - Structured knowledge graph queries: Amber supports direct graph database queries via natural language through Text-to-Cypher translation. The structured KG executor (`rag/nodes/structured_kg_executor.py`) detects suitable queries (aggregation, path, comparison, hierarchical, relationship types), links entities via embedding similarity (0.85 threshold), generates Cypher using LLM with graph schema context, and executes with iterative correction (max 2 attempts). Integrated into the RAG pipeline as a routing node between query analysis and retrieval: suitable queries execute via Cypher and skip standard retrieval, unsuitable queries fall back to hybrid retrieval. The `/api/structured-kg` router exposes execute, config, schema, and validate endpoints for direct API access. Feature-flagged (`enable_structured_kg`) with configurable entity threshold, correction limits, and timeout settings.
 
+- User feedback and adaptive routing: The system collects user ratings (thumbs up/down) on responses and learns optimal retrieval weights over time. The `FeedbackLearner` class (`rag/nodes/adaptive_router.py`) tracks feedback events with routing metadata and adjusts `hybrid_chunk_weight`, `hybrid_entity_weight`, and other parameters using exponential moving average with configurable learning rates and minimum sample requirements. The feedback API (`api/routers/feedback.py`) exposes endpoints for submitting ratings, viewing metrics and current weights, resetting to defaults, and monitoring recent feedback. Weights are persisted across sessions and enable continuous quality improvement without manual retuning. Feature-flagged (`enable_adaptive_routing`) with configurable learning rate and minimum sample thresholds.
+
+- Smart consolidation: Multi-category chunk consolidation ensures diverse representation when queries match multiple document categories. The `SmartConsolidator` class (`rag/nodes/smart_consolidation.py`) enforces per-category minimum chunk requirements (configurable, default 1 per category), removes semantic duplicates using embedding similarity (0.95 threshold), respects token budgets (8K max context default), and reorders results to maximize diversity while maintaining relevance. Integrated into the retrieval pipeline when query routing is enabled, improving result diversity and preventing redundant context.
+
 These highlights are factual summaries of implemented behavior and do not reference external documentation paths.
 
 ## Architecture
@@ -192,10 +196,13 @@ State Management: the pipeline uses plain dict-based `state` objects; each node 
 The `DocumentProcessor` exposes synchronous and asynchronous entry points, supports chunk-only ingestion, and tracks background entity extraction operations so the UI can display progress and status.
 
 ### API Layer (FastAPI)
-- **Routers**: `api/routers/` contains `chat.py`, `documents.py`, `database.py`, `history.py`, `classification.py`, `chat_tuning.py`, `prompts.py`, `structured_kg.py`, and `jobs.py`.
+- **Routers**: `api/routers/` contains `chat.py`, `documents.py`, `database.py`, `history.py`, `classification.py`, `chat_tuning.py`, `rag_tuning.py`, `prompts.py`, `structured_kg.py`, `feedback.py`, `documentation.py`, `admin_user_management.py`, and `jobs.py`.
 - **Models**: `api/models.py` defines Pydantic request/response models. The `ChatRequest` model exposes `llm_model` and `embedding_model` fields so the UI can select models at runtime.
 - **Services**: `api/services/` contains business logic like chat history and follow-up question generation.
 - **Streaming**: SSE streams emit structured payloads (`stage`, `token`, `sources`, `quality_score`, `follow_ups`, `metadata`) consumed by the frontend.
+- **Feedback API** (`api/routers/feedback.py`): Exposes endpoints for user feedback submission, metric tracking, weight viewing, and reset functionality for adaptive routing.
+- **Admin Management** (`api/routers/admin_user_management.py`): Provides admin authentication and endpoints for user activity tracking, shared conversation management, and system metrics.
+- **Documentation Serving** (`api/routers/documentation.py`): Serves markdown documentation files from the `documentation/` folder via HTTP, supporting dynamic documentation access.
 
 The lifecycle hook (`api.main.lifespan`) performs startup tasks (user token ensure, optional FlashRank prewarm) and logs provider resolution for debugging.
 
@@ -250,6 +257,7 @@ Settings live in `config/settings.py` and can be set through environment variabl
 - **Query Analysis & Routing**: `enable_query_expansion`, `query_expansion_threshold` (default: 3 results).
 - **Query Routing (M2.3)**: `enable_query_routing`, `query_routing_confidence_threshold`, `query_routing_strict`, `enable_routing_cache`, `routing_cache_similarity_threshold`, `routing_cache_size`, `routing_cache_ttl`, `fallback_enabled`, `fallback_min_results`.
 - **Structured KG (M3.3)**: `enable_structured_kg`, `structured_kg_entity_threshold`, `structured_kg_max_corrections`, `structured_kg_timeout`, `structured_kg_query_types`.
+- **Adaptive Routing**: `enable_adaptive_routing`, `adaptive_routing_learning_rate` (default: 0.1), `adaptive_routing_min_samples` (default: 5) — controls exponential moving average learning and feedback event tracking.
 - **RRF Fusion**: `enable_rrf`, `rrf_k` (rank discount constant; higher is flatter influence).
 - **Reranking**: `flashrank_enabled`, `flashrank_model_name`, `flashrank_max_candidates`, `flashrank_blend_weight`, `flashrank_batch_size`.
 - **Caching**: `enable_caching`, `entity_label_cache_size`, `entity_label_cache_ttl`, `embedding_cache_size`, `retrieval_cache_size`, `retrieval_cache_ttl`, `neo4j_max_connection_pool_size`.

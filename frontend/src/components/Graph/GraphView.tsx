@@ -2,9 +2,8 @@
 
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import { Info, Network } from 'lucide-react'
 import { Button } from '@mui/material'
-import { AccountTree as GraphIconMui } from '@mui/icons-material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Loader from '@/components/Utils/Loader'
 
@@ -220,12 +219,12 @@ export default function GraphView() {
                     </span>
                     {doc.document_id && (
                       <a
-                          className="hover:underline"
-                          href={`/?doc=${doc.document_id}`}
-                          style={{ color: 'var(--primary-500)' }}
-                        >
-                          Open
-                        </a>
+                        className="hover:underline"
+                        href={`/?doc=${doc.document_id}`}
+                        style={{ color: 'var(--primary-500)' }}
+                      >
+                        Open
+                      </a>
                     )}
                   </li>
                 ))}
@@ -255,12 +254,12 @@ export default function GraphView() {
                     </span>
                     {unit.document_id && (
                       <a
-                          className="hover:underline"
-                          href={`/?doc=${unit.document_id}`}
-                          style={{ color: 'var(--primary-500)' }}
-                        >
-                          {unit.document_name || 'Open document'}
-                        </a>
+                        className="hover:underline"
+                        href={`/?doc=${unit.document_id}`}
+                        style={{ color: 'var(--primary-500)' }}
+                      >
+                        {unit.document_name || 'Open document'}
+                      </a>
                     )}
                   </li>
                 ))}
@@ -279,17 +278,17 @@ export default function GraphView() {
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <GraphIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+            <Network size={24} color="#f27a03" />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -300,7 +299,7 @@ export default function GraphView() {
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--text-secondary)', padding: '6px 12px', borderRadius: '6px', backgroundColor: 'var(--bg-secondary)' }}>
-            <InformationCircleIcon className="h-4 w-4" />
+            <Info className="h-4 w-4" />
             <span>Hover nodes/edges for details</span>
           </div>
         </div>
@@ -380,43 +379,43 @@ export default function GraphView() {
           className="flex-1 relative overflow-hidden"
           style={{ minHeight: '400px', borderRadius: '8px', border: '1px solid var(--border)', background: backgroundColorResolved }}
         >
-        {isLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70 text-secondary-50">
-            <Loader size={28} label="Loading graph…" />
-          </div>
-        )}
-        {error && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70">
-            <div className="rounded bg-white/90 p-4 text-sm text-red-700 shadow dark:bg-secondary-800/90 dark:text-red-200">
-              {error}
+          {isLoading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70 text-secondary-50">
+              <Loader size={28} label="Loading graph…" />
             </div>
-          </div>
-        )}
-        <ForceGraph3D
-          width={dimensions.width}
-          height={dimensions.height}
-          graphData={graphPayload as any}
-          // Use property accessors where possible to avoid TS generic mismatch
-          nodeColor={(node: any) => getCommunityColor(node.community_id || undefined)}
-          linkColor={() => '#94a3b8'}
-          nodeVal={(node: any) => node.val ?? Math.max(node.degree ?? 1, 1)}
-          linkWidth={(link: any) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
-          nodeLabel={(node: any) => nodeLabel(node as GraphNode)}
-          linkLabel={(link: any) => linkLabel(link as GraphEdge)}
-          backgroundColor={backgroundColorResolved}
-          onNodeHover={(node: any) => {
-            setHoverNode((node as GraphNode) || null)
-            setHoverEdge(null)
-          }}
-          onLinkHover={(link: any) => {
-            setHoverEdge((link as GraphEdge) || null)
-            setHoverNode(null)
-          }}
-        />
+          )}
+          {error && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-secondary-900/70">
+              <div className="rounded bg-white/90 p-4 text-sm text-red-700 shadow dark:bg-secondary-800/90 dark:text-red-200">
+                {error}
+              </div>
+            </div>
+          )}
+          <ForceGraph3D
+            width={dimensions.width}
+            height={dimensions.height}
+            graphData={graphPayload as any}
+            // Use property accessors where possible to avoid TS generic mismatch
+            nodeColor={(node: any) => getCommunityColor(node.community_id || undefined)}
+            linkColor={() => '#94a3b8'}
+            nodeVal={(node: any) => node.val ?? Math.max(node.degree ?? 1, 1)}
+            linkWidth={(link: any) => (link.value ?? Math.max(link.weight ?? 0.5, 0.2)) * 2}
+            nodeLabel={(node: any) => nodeLabel(node as GraphNode)}
+            linkLabel={(link: any) => linkLabel(link as GraphEdge)}
+            backgroundColor={backgroundColorResolved}
+            onNodeHover={(node: any) => {
+              setHoverNode((node as GraphNode) || null)
+              setHoverEdge(null)
+            }}
+            onLinkHover={(link: any) => {
+              setHoverEdge((link as GraphEdge) || null)
+              setHoverNode(null)
+            }}
+          />
 
-        {hoveredPanel && (
-          <div className="pointer-events-none absolute right-4 top-12 z-20 w-80">{hoveredPanel}</div>
-        )}
+          {hoveredPanel && (
+            <div className="pointer-events-none absolute right-4 top-12 z-20 w-80">{hoveredPanel}</div>
+          )}
 
           {/* Expand button */}
           <button

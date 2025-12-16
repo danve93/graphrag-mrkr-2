@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from core.llm import llm_manager
+from rag.nodes.query_expansion import expand_query, should_expand_query
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,19 @@ def analyze_query(
         if len(query.split()) > 10 or "and" in query_lower or "or" in query_lower:
             analysis["complexity"] = "complex"
             analysis["requires_multiple_sources"] = True
+
+        # Detect temporal queries
+        temporal_info = _detect_temporal_query(query_lower)
+        analysis["is_temporal"] = temporal_info["is_temporal"]
+        analysis["temporal_intent"] = temporal_info["intent"]
+        analysis["temporal_window"] = temporal_info.get("window")
+        analysis["time_decay_weight"] = temporal_info.get("decay_weight", 0.0)
+
+        # Detect technical queries (for fuzzy matching)
+        technical_info = _detect_technical_query(query_lower)
+        analysis["is_technical"] = technical_info["is_technical"]
+        analysis["fuzzy_distance"] = technical_info["fuzzy_distance"]
+        analysis["technical_confidence"] = technical_info["confidence"]
 
         # Extract potential key concepts (simple keyword extraction)
         # Skip common words
@@ -234,9 +248,26 @@ def analyze_query(
         analysis["suggested_strategy"] = strategy
         analysis["confidence"] = confidence
 
+        # Query expansion (populate expanded_terms if beneficial)
+        from config.settings import settings
+
+        if should_expand_query(analysis):
+            max_expansions = getattr(settings, "max_expansions", 5)
+            use_llm_expansion = getattr(settings, "use_llm_expansion", False)
+            expanded_terms = expand_query(
+                query=context_query,
+                query_analysis=analysis,
+                max_expansions=max_expansions,
+                use_llm=use_llm_expansion,
+            )
+            analysis["expanded_terms"] = expanded_terms
+        else:
+            analysis["expanded_terms"] = []
+
         logger.info(
             f"Query analysis completed: {analysis['query_type']}, {len(key_concepts)} concepts, "
-            f"multi-hop recommended: {multi_hop_beneficial}, strategy: {strategy}, is_follow_up: {is_follow_up}"
+            f"multi-hop recommended: {multi_hop_beneficial}, strategy: {strategy}, is_follow_up: {is_follow_up}, "
+            f"expanded_terms: {len(analysis['expanded_terms'])}"
         )
         return analysis
 
@@ -508,3 +539,204 @@ Rewritten question:"""
         logger.error(f"Query contextualization failed: {e}")
         # Return original query as fallback
         return query
+
+
+def _detect_temporal_query(query_lower: str) -> Dict[str, Any]:
+    """Detect if query has temporal intent and extract temporal parameters.
+
+    Args:
+        query_lower: Lowercase query string
+
+    Returns:
+        Dictionary with temporal information:
+        - is_temporal: bool
+        - intent: str (recent, specific_period, trending, etc.)
+        - window: Optional[int] (time window in days)
+        - decay_weight: float (0.0-1.0)
+    """
+    import re
+    from datetime import datetime, timedelta
+
+    temporal_info = {
+        "is_temporal": False,
+        "intent": "none",
+        "window": None,
+        "decay_weight": 0.0,
+    }
+
+    # Recent/latest indicators (high time decay weight)
+    recent_patterns = [
+        "recent", "latest", "new", "current", "up to date",
+        "today", "yesterday", "past", "since"
+    ]
+
+    # Specific time periods
+    time_period_patterns = {
+        "last week": 7,
+        "last month": 30,
+        "last year": 365,
+        "past week": 7,
+        "past month": 30,
+        "past year": 365,
+        "this week": 7,
+        "this month": 30,
+        "this year": 365,
+    }
+
+    # Check for recent/latest queries
+    for pattern in recent_patterns:
+        if pattern in query_lower:
+            temporal_info["is_temporal"] = True
+            temporal_info["intent"] = "recent"
+            temporal_info["decay_weight"] = 0.3
+            break
+
+    # Check for specific time periods (only if not already matched as recent)
+    if temporal_info["intent"] == "none":
+        for pattern, days in time_period_patterns.items():
+            if pattern in query_lower:
+                temporal_info["is_temporal"] = True
+                temporal_info["intent"] = "specific_period"
+                temporal_info["window"] = days
+                temporal_info["decay_weight"] = 0.2
+                break
+
+    # Check for "in the last N days/weeks/months"
+    days_match = re.search(r"(?:in the |last |past )(\d+) day", query_lower)
+    weeks_match = re.search(r"(?:in the |last |past )(\d+) week", query_lower)
+    months_match = re.search(r"(?:in the |last |past )(\d+) month", query_lower)
+
+    if days_match:
+        temporal_info["is_temporal"] = True
+        temporal_info["intent"] = "specific_period"
+        temporal_info["window"] = int(days_match.group(1))
+        temporal_info["decay_weight"] = 0.2
+    elif weeks_match:
+        temporal_info["is_temporal"] = True
+        temporal_info["intent"] = "specific_period"
+        temporal_info["window"] = int(weeks_match.group(1)) * 7
+        temporal_info["decay_weight"] = 0.2
+    elif months_match:
+        temporal_info["is_temporal"] = True
+        temporal_info["intent"] = "specific_period"
+        temporal_info["window"] = int(months_match.group(1)) * 30
+        temporal_info["decay_weight"] = 0.2
+
+    # Check for trending/evolution queries (moderate decay)
+    # Only set to trending if no earlier temporal intent was detected
+    if temporal_info["intent"] == "none" and any(word in query_lower for word in ["trend", "trending", "evolve", "evolution", "over time", "historically"]):
+        temporal_info["is_temporal"] = True
+        temporal_info["intent"] = "trending"
+        temporal_info["decay_weight"] = 0.1  # Lower weight, we want broader time range
+
+    # Check for "when" questions - these need temporal context but not necessarily recent
+    if query_lower.startswith("when "):
+        temporal_info["is_temporal"] = True
+        if temporal_info["intent"] == "none":
+            temporal_info["intent"] = "when_question"
+        # Don't apply decay for "when" questions unless other temporal indicators present
+
+    logger.debug(f"Temporal detection: is_temporal={temporal_info['is_temporal']}, "
+                 f"intent={temporal_info['intent']}, window={temporal_info['window']}, "
+                 f"decay_weight={temporal_info['decay_weight']}")
+
+    return temporal_info
+
+
+def _detect_technical_query(query_lower: str) -> Dict[str, Any]:
+    """Detect if query contains technical terms that benefit from fuzzy matching.
+
+    Technical queries include:
+    - Database table/column names (snake_case, camelCase)
+    - Technical IDs (PROJ-123, TICKET-456)
+    - Configuration keys (MAX_CONNECTIONS, api_key)
+    - Error codes (ERROR_404, ECONNREFUSED)
+    - File paths/names (config.yml, /etc/nginx.conf)
+
+    Args:
+        query_lower: Lowercased query string
+
+    Returns:
+        Dict with technical query detection info
+    """
+    import re
+    from config.settings import settings
+
+    technical_info = {
+        "is_technical": False,
+        "fuzzy_distance": 0,
+        "confidence": 0.0,
+    }
+
+    # Check if fuzzy matching is enabled
+    if not settings.enable_fuzzy_matching:
+        return technical_info
+
+    # Pattern 1: Database-style identifiers (snake_case with underscores)
+    # Examples: user_accounts, order_items, customer_data
+    snake_case_pattern = r'\b[a-z]+_[a-z_]+\b'
+    snake_case_matches = re.findall(snake_case_pattern, query_lower)
+
+    # Pattern 2: Technical IDs (PREFIX-NUMBER format)
+    # Examples: PROJ-123, TICKET-456, AUTH-789
+    tech_id_pattern = r'\b[A-Z]{2,}-\d+\b'
+    tech_id_matches = re.findall(tech_id_pattern, query_lower.upper())
+
+    # Pattern 3: Configuration keys (SCREAMING_SNAKE_CASE or camelCase)
+    # Examples: MAX_CONNECTIONS, apiKey, DATABASE_URL
+    config_pattern = r'\b[A-Z][A-Z_]{2,}\b|\b[a-z]+[A-Z][a-zA-Z]+\b'
+    config_matches = re.findall(config_pattern, query_lower.upper())
+
+    # Pattern 4: Error codes
+    # Examples: ERROR_404, ECONNREFUSED, ERR_CONNECTION_REFUSED
+    error_pattern = r'\b(error|err)[_\-]?[a-z0-9_]+\b'
+    error_matches = re.findall(error_pattern, query_lower)
+
+    # Pattern 5: File paths/extensions
+    # Examples: config.yml, nginx.conf, /etc/hosts
+    # File extensions
+    file_ext_pattern = r'\b\w+\.(yml|yaml|json|conf|config|ini|xml|properties)\b'
+    # Absolute paths (must have at least 2 segments: /etc/hosts, /var/log/app.log)
+    file_path_pattern = r'/\w+/[\w/\.]+'
+    file_ext_matches = re.findall(file_ext_pattern, query_lower)
+    file_path_matches = re.findall(file_path_pattern, query_lower)
+    file_matches = file_ext_matches + file_path_matches
+
+    # Calculate confidence based on number of technical patterns found
+    total_matches = (
+        len(snake_case_matches) +
+        len(tech_id_matches) +
+        len(config_matches) +
+        len(error_matches) +
+        len(file_matches)
+    )
+
+    if total_matches > 0:
+        # Calculate confidence based on number of matches
+        if total_matches >= 3:
+            confidence = 1.0
+            fuzzy_distance = 2
+        elif total_matches >= 2:
+            confidence = 0.8
+            fuzzy_distance = 2
+        else:
+            confidence = 0.5
+            fuzzy_distance = 1
+
+        # Only enable fuzzy matching if confidence meets threshold
+        if confidence >= settings.fuzzy_confidence_threshold:
+            technical_info["is_technical"] = True
+            # Respect max_fuzzy_distance setting
+            technical_info["fuzzy_distance"] = min(fuzzy_distance, settings.max_fuzzy_distance)
+            technical_info["confidence"] = confidence
+
+            logger.debug(
+                f"Technical query detected: matches={total_matches}, "
+                f"fuzzy_distance={technical_info['fuzzy_distance']}, "
+                f"confidence={confidence:.2f}, "
+                f"patterns=(snake_case:{len(snake_case_matches)}, "
+                f"tech_id:{len(tech_id_matches)}, config:{len(config_matches)}, "
+                f"error:{len(error_matches)}, file:{len(file_matches)})"
+            )
+
+    return technical_info

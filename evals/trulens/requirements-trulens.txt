@@ -1,0 +1,20 @@
+# TruLens Continuous Monitoring Dependencies
+# Install with: uv pip install -r evals/trulens/requirements-trulens.txt
+
+# TruLens core - evaluation and monitoring framework
+trulens-eval>=0.20.0,<1.0.0
+
+# Database drivers
+sqlalchemy>=2.0.0,<3.0.0      # ORM for database abstraction
+psycopg2-binary>=2.9.0,<3.0.0  # PostgreSQL driver
+
+# Prometheus metrics
+prometheus-client>=0.19.0,<1.0.0
+
+# Configuration
+pyyaml>=6.0.0,<7.0.0
+
+# Note: The following are already in main requirements.txt and will be reused:
+# - pandas (for data export)
+# - openai (for feedback LLM calls)
+# - httpx (for API requests)

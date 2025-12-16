@@ -20,6 +20,10 @@ export default function MessageBubble({ message, onRetryWithCategories }: Messag
   const contextDocDisplay = message.context_document_labels && message.context_document_labels.length > 0
     ? message.context_document_labels
     : message.context_documents
+  // Safely stringify message content when it's not a string to avoid rendering objects
+  const contentStr = typeof message.content === 'string'
+    ? message.content
+    : JSON.stringify(message.content, null, 2)
 
   return (
     <div className={`flex message-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -31,10 +35,10 @@ export default function MessageBubble({ message, onRetryWithCategories }: Messag
 
         <div className={isUser ? '' : 'prose prose-sm prose-slate dark:prose-invert max-w-none dark:text-secondary-100'}>
           {isUser ? (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p className="whitespace-pre-wrap">{contentStr}</p>
           ) : (
             <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-              {message.content}
+              {contentStr}
             </ReactMarkdown>
           )}
         </div>
@@ -63,7 +67,7 @@ export default function MessageBubble({ message, onRetryWithCategories }: Messag
             <RoutingBadge routingInfo={message.routing_info} />
             {onRetryWithCategories && (
               <CategoryRetry
-                query={message.content}
+                query={contentStr}
                 currentCategories={message.routing_info.categories}
                 onRetry={onRetryWithCategories}
               />
@@ -90,7 +94,7 @@ export default function MessageBubble({ message, onRetryWithCategories }: Messag
                 <FeedbackButtons
                   messageId={message.message_id}
                   sessionId={message.session_id}
-                  query={message.content}
+                  query={contentStr}
                   routingInfo={message.stages?.find(s => s.name === 'routing')?.metadata || {}}
                 />
               )}

@@ -2,9 +2,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { InformationCircleIcon } from '@heroicons/react/24/outline'
+import { SlidersHorizontal, Info } from 'lucide-react'
 import { Button } from '@mui/material'
-import { Tune as TuneIcon } from '@mui/icons-material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Tooltip from '@/components/Utils/Tooltip'
 import Loader from '@/components/Utils/Loader'
@@ -50,7 +49,7 @@ export default function RAGTuningPanel() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
+  const [activeSection, setActiveSection] = useState<string>('default')
   const [hasChanges, setHasChanges] = useState(false)
 
   useEffect(() => {
@@ -60,22 +59,19 @@ export default function RAGTuningPanel() {
   // Listen for section selection from sidebar
   useEffect(() => {
     const handleSectionSelect = (event: CustomEvent<string>) => {
-      const sectionId = event.detail;
-      const element = document.getElementById(sectionId);
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        // Expand the section if it's not already expanded
-        if (!expandedSections.has(sectionId)) {
-          setExpandedSections((prev) => new Set([...prev, sectionId]));
-        }
-      }
+      setActiveSection(event.detail);
     };
 
     window.addEventListener('rag-tuning-section-select', handleSectionSelect as EventListener);
     return () => {
       window.removeEventListener('rag-tuning-section-select', handleSectionSelect as EventListener);
     };
-  }, [expandedSections])
+  }, [])
+
+  // Broadcast active section changes to sidebar
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('rag-tuning-active-section-changed', { detail: activeSection }));
+  }, [activeSection])
 
   const loadConfig = async () => {
     try {
@@ -87,12 +83,6 @@ export default function RAGTuningPanel() {
       }
       const data = await response.json()
       setConfig(data)
-      // Expand default and first section by default
-      const defaultSections = ['default']
-      if (data.sections && data.sections.length > 0) {
-        defaultSections.push(data.sections[0].key)
-      }
-      setExpandedSections(new Set(defaultSections))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load configuration')
     } finally {
@@ -167,11 +157,11 @@ export default function RAGTuningPanel() {
       sections: config.sections.map((section) =>
         section.key === sectionKey
           ? {
-              ...section,
-              parameters: section.parameters.map((param) =>
-                param.key === paramKey ? { ...param, value } : param
-              ),
-            }
+            ...section,
+            parameters: section.parameters.map((param) =>
+              param.key === paramKey ? { ...param, value } : param
+            ),
+          }
           : section
       ),
     })
@@ -193,18 +183,6 @@ export default function RAGTuningPanel() {
       8000,
       'top-center'
     )
-  }
-
-  const toggleSection = (sectionKey: string) => {
-    setExpandedSections((prev) => {
-      const newSet = new Set(prev)
-      if (newSet.has(sectionKey)) {
-        newSet.delete(sectionKey)
-      } else {
-        newSet.add(sectionKey)
-      }
-      return newSet
-    })
   }
 
   if (isLoading) {
@@ -234,20 +212,20 @@ export default function RAGTuningPanel() {
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-        {/* Header */}
-          <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
+      {/* Header */}
+      <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '8px',
             backgroundColor: '#f27a0320',
             border: '1px solid #f27a03',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <TuneIcon style={{ fontSize: '24px', color: '#f27a03' }} />
+            <SlidersHorizontal size={24} color="#f27a03" />
           </div>
           <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
             RAG Tuning
@@ -298,174 +276,170 @@ export default function RAGTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {/* Default LLM Model */}
-        <div id="default" style={{ scrollMarginTop: '24px' }}>
-        <ExpandablePanel
-          title="Default Configuration"
-          expanded={expandedSections.has('default')}
-          onToggle={() => toggleSection('default')}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                LLM Model
-              </label>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                Used for all ingestion operations unless overridden in specific stages below
-              </p>
-              <select
-                value={config.default_llm_model}
-                onChange={(e) => handleDefaultModelChange(e.target.value)}
-                className="input-field"
-                style={{ width: '100%' }}
-              >
-                {LLM_MODEL_OPTIONS.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)' }}>
+        {/* Default LLM Model Section */}
+        {activeSection === 'default' && (
+          <div>
+            <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
+              Default Configuration
+            </h2>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-6)' }}>
+              Default LLM model used for all ingestion operations unless overridden in specific stages below.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                  LLM Model
+                </label>
+                <select
+                  value={config.default_llm_model}
+                  onChange={(e) => handleDefaultModelChange(e.target.value)}
+                  className="input-field"
+                  style={{ width: '100%' }}
+                >
+                  {LLM_MODEL_OPTIONS.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
-        </ExpandablePanel>
-        </div>
+        )}
 
-        {/* Sections */}
-        {config.sections.map((section) => {
-          const effectiveModel = section.llm_override_value || config.default_llm_model
+        {/* Other Sections */}
+        {config.sections
+          .filter((section) => section.key === activeSection)
+          .map((section) => {
+            const effectiveModel = section.llm_override_value || config.default_llm_model
 
-          return (
-            <div key={section.key} id={section.key} style={{ scrollMarginTop: '24px' }}>
-            <ExpandablePanel
-              title={section.label}
-              expanded={expandedSections.has(section.key)}
-              onToggle={() => toggleSection(section.key)}
-            >
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                {section.description}
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* LLM Override */}
-                {section.llm_override_enabled && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                      LLM Model Override
-                    </label>
-                    <select
-                      value={section.llm_override_value || ''}
-                      onChange={(e) => handleSectionLLMOverride(section.key, e.target.value || null)}
-                      className="input-field"
-                      style={{ width: '100%' }}
-                    >
-                      <option value="">(use default) — {config.default_llm_model}</option>
-                      {LLM_MODEL_OPTIONS.map((model) => (
-                        <option key={model} value={model}>
+            return (
+              <div key={section.key}>
+                <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 'var(--space-2)' }}>
+                  {section.label}
+                </h2>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-6)' }}>
+                  {section.description}
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* LLM Override */}
+                  {section.llm_override_enabled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                        LLM Model Override
+                      </label>
+                      <select
+                        value={section.llm_override_value || ''}
+                        onChange={(e) => handleSectionLLMOverride(section.key, e.target.value || null)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      >
+                        <option value="">(use default) — {config.default_llm_model}</option>
+                        {LLM_MODEL_OPTIONS.map((model) => (
+                          <option key={model} value={model}>
                             {model}
                           </option>
                         ))}
                       </select>
-                    {section.llm_override_value && (
-                      <p style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>
-                        ✓ Override active: using {effectiveModel}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* Parameters */}
-                {section.parameters.map((param) => (
-                  <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div className="flex items-center" style={{ gap: '8px' }}>
-                      <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                        {param.label}
-                      </label>
-                      <Tooltip content={param.tooltip}>
-                        <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
-                          <InformationCircleIcon style={{ width: '16px', height: '16px' }} />
-                        </button>
-                      </Tooltip>
+                      {section.llm_override_value && (
+                        <p style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>
+                          ✓ Override active: using {effectiveModel}
+                        </p>
+                      )}
                     </div>
+                  )}
 
-                    {param.type === 'slider' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
-                          {param.value}
-                        </span>
+                  {/* Parameters */}
+                  {section.parameters.map((param) => (
+                    <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div className="flex items-center" style={{ gap: '8px' }}>
+                        <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                          {param.label}
+                        </label>
+                        <Tooltip content={param.tooltip}>
+                          <button style={{ color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center' }} type="button" aria-label="Information">
+                            <Info size={16} />
+                          </button>
+                        </Tooltip>
+                      </div>
+
+                      {param.type === 'slider' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontWeight: 600, minWidth: '3rem' }}>
+                            {param.value}
+                          </span>
+                          <input
+                            type="range"
+                            min={param.min}
+                            max={param.max}
+                            step={param.step}
+                            value={param.value as number}
+                            onChange={(e) => handleParameterChange(section.key, param.key, parseFloat(e.target.value))}
+                            className="slider"
+                            style={{ flex: 1 }}
+                            title={String(param.value)}
+                          />
+                        </div>
+                      )}
+
+                      {param.type === 'number' && (
                         <input
-                          type="range"
+                          type="number"
                           min={param.min}
                           max={param.max}
                           step={param.step}
                           value={param.value as number}
-                          onChange={(e) => handleParameterChange(section.key, param.key, parseFloat(e.target.value))}
-                          className="slider"
-                          style={{ flex: 1 }}
-                          title={String(param.value)}
+                          onChange={(e) => handleParameterChange(section.key, param.key, parseInt(e.target.value))}
+                          className="input-field"
+                          style={{ width: '100%' }}
                         />
-                      </div>
-                    )}
+                      )}
 
-                    {param.type === 'number' && (
-                      <input
-                        type="number"
-                        min={param.min}
-                        max={param.max}
-                        step={param.step}
-                        value={param.value as number}
-                        onChange={(e) => handleParameterChange(section.key, param.key, parseInt(e.target.value))}
-                        className="input-field"
-                        style={{ width: '100%' }}
-                      />
-                    )}
-
-                    {param.type === 'select' && param.options && (
-                      <select
-                        value={String(param.value)}
-                        onChange={(e) => handleParameterChange(section.key, param.key, e.target.value)}
-                        className="input-field"
-                        style={{ width: '100%' }}
-                      >
-                        {param.options.map((opt) => (
-                          <option key={opt} value={opt}>
-                            {opt}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-
-                    {param.type === 'toggle' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button
-                          onClick={() => handleParameterChange(section.key, param.key, !param.value)}
-                          className={`relative inline-flex h-6 w-11 items-center transition-colors ${
-                            param.value ? 'toggle-on' : 'toggle-off'
-                          }`}
-                          style={{ borderRadius: 'var(--radius-full)' }}
-                          aria-label={`Toggle ${param.label}`}
+                      {param.type === 'select' && param.options && (
+                        <select
+                          value={String(param.value)}
+                          onChange={(e) => handleParameterChange(section.key, param.key, e.target.value)}
+                          className="input-field"
+                          style={{ width: '100%' }}
                         >
-                          <span
-                            className={`inline-block h-4 w-4 transform transition-transform ${
-                              param.value ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                            style={{ 
-                              borderRadius: 'var(--radius-full)', 
-                              background: 'var(--bg-primary)' 
-                            }}
-                          />
-                        </button>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                          {param.value ? 'Enabled' : 'Disabled'}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                          {param.options.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {param.type === 'toggle' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <button
+                            onClick={() => handleParameterChange(section.key, param.key, !param.value)}
+                            className={`relative inline-flex h-6 w-11 items-center transition-colors ${param.value ? 'toggle-on' : 'toggle-off'
+                              }`}
+                            style={{ borderRadius: 'var(--radius-full)' }}
+                            aria-label={`Toggle ${param.label}`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform transition-transform ${param.value ? 'translate-x-6' : 'translate-x-1'
+                                }`}
+                              style={{
+                                borderRadius: 'var(--radius-full)',
+                                background: 'var(--bg-primary)'
+                              }}
+                            />
+                          </button>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            {param.value ? 'Enabled' : 'Disabled'}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </ExpandablePanel>
-            </div>
-          )
-        })}
+            )
+          })}
       </div>
     </div>
   )

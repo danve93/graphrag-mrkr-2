@@ -45,7 +45,8 @@ def test_get_document_metadata_success(client: TestClient, monkeypatch: pytest.M
     response = client.get("/api/documents/doc-123")
     assert response.status_code == 200
     assert response.json()["id"] == payload["id"]
-    assert response.json()["chunks"][0]["text"] == "Hello"
+    # Endpoint intentionally omits chunk/entity payloads; lazy-loaded elsewhere
+    assert response.json()["chunks"] == []
 
 
 def test_get_document_metadata_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

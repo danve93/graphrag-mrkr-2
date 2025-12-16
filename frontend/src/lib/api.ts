@@ -7,7 +7,60 @@ import type { GraphResponse } from '@/types/graph'
 // (e.g. remote API), set `NEXT_PUBLIC_API_URL` at build/runtime.
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
+let authToken: string | null = null;
+if (typeof window !== 'undefined') {
+  authToken = localStorage.getItem('authToken');
+}
+
+export const setAuthToken = (token: string | null) => {
+  authToken = token;
+  if (token) localStorage.setItem('authToken', token);
+  else localStorage.removeItem('authToken');
+}
+
+async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers);
+  if (authToken) {
+    headers.set('Authorization', `Bearer ${authToken}`);
+  }
+  // Ensure cookies (admin_session) are sent for same-origin admin endpoints.
+  // Default to `include` so the backend can validate `admin_session` cookie.
+  const fetchOptions: RequestInit = { ...options, headers };
+  if (!('credentials' in fetchOptions)) {
+    fetchOptions.credentials = 'include';
+  }
+  return fetch(url, fetchOptions);
+}
+
 export const api = {
+  setAuthToken,
+  // Identity
+  async identifyUser(username?: string): Promise<{ user_id: string; token: string; role: string; is_new: boolean }> {
+    const response = await fetchWithAuth(`${API_URL}/api/users/identify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username })
+    });
+
+    if (!response.ok) {
+      // If identify fails, we might want to clear token if it was invalid?
+      // But identify usually generates new one.
+      throw new Error(`Identity error: ${response.statusText}`)
+    }
+    return response.json();
+  },
+
+  async adminLogout() {
+    try {
+      await fetch(`${API_URL}/api/admin/user-management/logout`, {
+        method: 'POST',
+        credentials: 'include'
+      })
+    } catch (e) {
+      console.error("Admin logout failed", e)
+    }
+  },
+
   // Chat endpoints
   async sendMessage(
     data: {
@@ -41,7 +94,7 @@ export const api = {
     },
     options?: { signal?: AbortSignal }
   ) {
-    const response = await fetch(`${API_URL}/api/chat/query`, {
+    const response = await fetchWithAuth(`${API_URL}/api/chat/query`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -59,7 +112,7 @@ export const api = {
 
   // History endpoints
   async getHistory() {
-    const response = await fetch(`${API_URL}/api/history/sessions`)
+    const response = await fetchWithAuth(`${API_URL}/api/history/sessions`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -67,7 +120,7 @@ export const api = {
   },
 
   async getConversation(sessionId: string) {
-    const response = await fetch(`${API_URL}/api/history/${sessionId}`)
+    const response = await fetchWithAuth(`${API_URL}/api/history/${sessionId}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -75,7 +128,7 @@ export const api = {
   },
 
   async deleteConversation(sessionId: string) {
-    const response = await fetch(`${API_URL}/api/history/${sessionId}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/history/${sessionId}`, {
       method: 'DELETE',
     })
     if (!response.ok) {
@@ -85,7 +138,7 @@ export const api = {
   },
 
   async clearHistory() {
-    const response = await fetch(`${API_URL}/api/history/clear`, {
+    const response = await fetchWithAuth(`${API_URL}/api/history/clear`, {
       method: 'POST',
     })
     if (!response.ok) {
@@ -96,7 +149,7 @@ export const api = {
 
   // Database endpoints
   async getStats() {
-    const response = await fetch(`${API_URL}/api/database/stats`)
+    const response = await fetchWithAuth(`${API_URL}/api/database/stats`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -107,7 +160,7 @@ export const api = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_URL}/api/database/upload`, {
+    const response = await fetchWithAuth(`${API_URL}/api/database/upload`, {
       method: 'POST',
       body: formData,
     })
@@ -122,7 +175,7 @@ export const api = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_URL}/api/database/stage`, {
+    const response = await fetchWithAuth(`${API_URL}/api/database/stage`, {
       method: 'POST',
       body: formData,
     })
@@ -134,7 +187,7 @@ export const api = {
   },
 
   async getStagedDocuments() {
-    const response = await fetch(`${API_URL}/api/database/staged`)
+    const response = await fetchWithAuth(`${API_URL}/api/database/staged`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -142,7 +195,7 @@ export const api = {
   },
 
   async deleteStagedDocument(fileId: string) {
-    const response = await fetch(`${API_URL}/api/database/staged/${fileId}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/database/staged/${fileId}`, {
       method: 'DELETE',
     })
     if (!response.ok) {
@@ -152,7 +205,7 @@ export const api = {
   },
 
   async processDocuments(fileIds: string[]) {
-    const response = await fetch(`${API_URL}/api/database/process`, {
+    const response = await fetchWithAuth(`${API_URL}/api/database/process`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -169,7 +222,7 @@ export const api = {
     const url = fileId
       ? `${API_URL}/api/database/progress/${fileId}`
       : `${API_URL}/api/database/progress`
-    const response = await fetch(url)
+    const response = await fetchWithAuth(url)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -177,7 +230,7 @@ export const api = {
   },
 
   async deleteDocument(documentId: string) {
-    const response = await fetch(`${API_URL}/api/database/documents/${documentId}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/database/documents/${documentId}`, {
       method: 'DELETE',
     })
     if (!response.ok) {
@@ -187,7 +240,7 @@ export const api = {
   },
 
   async clearDatabase() {
-    const response = await fetch(`${API_URL}/api/database/clear`, {
+    const response = await fetchWithAuth(`${API_URL}/api/database/clear`, {
       method: 'POST',
     })
     if (!response.ok) {
@@ -197,7 +250,7 @@ export const api = {
   },
 
   async reprocessDocumentChunks(documentId: string) {
-    const response = await fetch(
+    const response = await fetchWithAuth(
       `${API_URL}/api/database/documents/${documentId}/process/chunks`,
       {
         method: 'POST',
@@ -210,7 +263,7 @@ export const api = {
   },
 
   async reprocessDocumentEntities(documentId: string) {
-    const response = await fetch(
+    const response = await fetchWithAuth(
       `${API_URL}/api/database/documents/${documentId}/process/entities`,
       {
         method: 'POST',
@@ -223,7 +276,7 @@ export const api = {
   },
 
   async getDocuments() {
-    const response = await fetch(`${API_URL}/api/database/documents`)
+    const response = await fetchWithAuth(`${API_URL}/api/database/documents`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -231,7 +284,7 @@ export const api = {
   },
 
   async getHashtags() {
-    const response = await fetch(`${API_URL}/api/database/hashtags`)
+    const response = await fetchWithAuth(`${API_URL}/api/database/hashtags`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -239,7 +292,7 @@ export const api = {
   },
 
   async getDocument(documentId: string): Promise<DocumentDetails> {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -262,7 +315,7 @@ export const api = {
       top_similarities?: Array<{ chunk1_id: string; chunk2_id: string; score: number } | null> | null
     }
   }> {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/summary`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/summary`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -296,7 +349,7 @@ export const api = {
     if (options?.limit) query.append('limit', String(options.limit))
     if (options?.offset) query.append('offset', String(options.offset))
     const qs = query.toString()
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/entities${qs ? `?${qs}` : ''}`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/entities${qs ? `?${qs}` : ''}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -309,7 +362,7 @@ export const api = {
     total: number
     groups: Array<{ type: string; count: number }>
   }> {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/entity-summary`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/entity-summary`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -337,7 +390,7 @@ export const api = {
     if (options?.minScore !== undefined) query.append('min_score', String(options.minScore))
     if (options?.exactCount) query.append('exact_count', String(options.exactCount))
     const qs = query.toString()
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/similarities${qs ? `?${qs}` : ''}`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/similarities${qs ? `?${qs}` : ''}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -357,7 +410,7 @@ export const api = {
     if (options?.limit) query.append('limit', String(options.limit))
     if (options?.offset) query.append('offset', String(options.offset))
     const qs = query.toString()
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/chunks${qs ? `?${qs}` : ''}`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/chunks${qs ? `?${qs}` : ''}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -366,7 +419,7 @@ export const api = {
 
   // New: chunk details on-demand
   async getChunkDetails(chunkId: string): Promise<{ id: string; content: string; index: number; offset: number; document_id: string; document_name?: string | null }> {
-    const response = await fetch(`${API_URL}/api/documents/chunks/${chunkId}`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/chunks/${chunkId}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -398,7 +451,7 @@ export const api = {
     }
 
     const queryString = query.toString()
-    const response = await fetch(
+    const response = await fetchWithAuth(
       `${API_URL}/api/graph/clustered${queryString ? `?${queryString}` : ''}`
     )
     if (!response.ok) {
@@ -427,7 +480,7 @@ export const api = {
   },
 
   async getDocumentText(documentId: string): Promise<DocumentTextPayload> {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/text`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/text`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -435,7 +488,7 @@ export const api = {
   },
 
   async getDocumentChunkSimilarities(documentId: string) {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/similarities`)
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/similarities`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -445,7 +498,7 @@ export const api = {
   async getDocumentPreview(
     documentId: string
   ): Promise<{ preview_url: string } | Response> {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/preview`, {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/preview`, {
       redirect: 'follow',
     })
 
@@ -463,7 +516,7 @@ export const api = {
   },
 
   async generateDocumentSummary(documentId: string) {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/generate-summary`, {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/generate-summary`, {
       method: 'POST',
     })
 
@@ -475,12 +528,28 @@ export const api = {
   },
 
   async updateDocumentHashtags(documentId: string, hashtags: string[]) {
-    const response = await fetch(`${API_URL}/api/documents/${documentId}/hashtags`, {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/hashtags`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ hashtags }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
+  async updateDocumentMetadata(documentId: string, metadata: Record<string, any>) {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/metadata`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ metadata }),
     })
 
     if (!response.ok) {
@@ -519,7 +588,7 @@ export const api = {
   },
 
   async getSettings() {
-    const response = await fetch(`${API_URL}/api/health`)
+    const response = await fetchWithAuth(`${API_URL}/api/health`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -530,12 +599,12 @@ export const api = {
     try {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout (more forgiving)
-      
-      const response = await fetch(`${API_URL}/api/health`, {
+
+      const response = await fetchWithAuth(`${API_URL}/api/health`, {
         method: 'GET',
         signal: controller.signal,
       })
-      
+
       clearTimeout(timeoutId)
       return response.ok
     } catch (error) {
@@ -545,7 +614,7 @@ export const api = {
 
   // Category Management
   async getCategories(approvedOnly: boolean = false) {
-    const response = await fetch(`${API_URL}/api/classification/categories?approved_only=${approvedOnly}`)
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories?approved_only=${approvedOnly}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -553,7 +622,7 @@ export const api = {
   },
 
   async generateCategories(maxCategories: number = 10, sampleSize: number = 100) {
-    const response = await fetch(`${API_URL}/api/classification/categories/generate`, {
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ max_categories: maxCategories, sample_size: sampleSize })
@@ -571,7 +640,7 @@ export const api = {
     patterns?: string[]
     parent_id?: string | null
   }) {
-    const response = await fetch(`${API_URL}/api/classification/categories`, {
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -583,7 +652,7 @@ export const api = {
   },
 
   async approveCategory(categoryId: string) {
-    const response = await fetch(`${API_URL}/api/classification/categories/${categoryId}/approve`, {
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories/${categoryId}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -594,7 +663,7 @@ export const api = {
   },
 
   async deleteCategory(categoryId: string) {
-    const response = await fetch(`${API_URL}/api/classification/categories/${categoryId}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories/${categoryId}`, {
       method: 'DELETE'
     })
     if (!response.ok) {
@@ -604,7 +673,7 @@ export const api = {
   },
 
   async updateCategory(categoryId: string, data: { name?: string; description?: string; keywords?: string[]; patterns?: string[]; parent_id?: string | null }) {
-    const response = await fetch(`${API_URL}/api/classification/categories/${categoryId}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories/${categoryId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -616,7 +685,7 @@ export const api = {
   },
 
   async autoCategorizeDocuments(batchSize: number = 10) {
-    const response = await fetch(`${API_URL}/api/classification/categories/auto-assign?batch_size=${batchSize}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/classification/categories/auto-assign?batch_size=${batchSize}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -628,7 +697,7 @@ export const api = {
 
   // Category Prompts Management
   async getPrompts() {
-    const response = await fetch(`${API_URL}/api/prompts/`)
+    const response = await fetchWithAuth(`${API_URL}/api/prompts/`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -636,7 +705,7 @@ export const api = {
   },
 
   async getPrompt(category: string) {
-    const response = await fetch(`${API_URL}/api/prompts/${category}`)
+    const response = await fetchWithAuth(`${API_URL}/api/prompts/${category}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -650,7 +719,7 @@ export const api = {
     format_instructions: string
     specificity_level: string
   }) {
-    const response = await fetch(`${API_URL}/api/prompts/`, {
+    const response = await fetchWithAuth(`${API_URL}/api/prompts/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -667,7 +736,7 @@ export const api = {
     format_instructions: string
     specificity_level: string
   }) {
-    const response = await fetch(`${API_URL}/api/prompts/${category}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/prompts/${category}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -679,7 +748,7 @@ export const api = {
   },
 
   async deletePrompt(category: string) {
-    const response = await fetch(`${API_URL}/api/prompts/${category}`, {
+    const response = await fetchWithAuth(`${API_URL}/api/prompts/${category}`, {
       method: 'DELETE'
     })
     if (!response.ok) {
@@ -689,7 +758,7 @@ export const api = {
   },
 
   async reloadPrompts() {
-    const response = await fetch(`${API_URL}/api/prompts/reload`, {
+    const response = await fetchWithAuth(`${API_URL}/api/prompts/reload`, {
       method: 'POST'
     })
     if (!response.ok) {
@@ -700,7 +769,7 @@ export const api = {
 
   // Structured KG endpoints
   async executeStructuredQuery(query: string, context?: Record<string, any>) {
-    const response = await fetch(`${API_URL}/api/structured-kg/execute`, {
+    const response = await fetchWithAuth(`${API_URL}/api/structured-kg/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, context })
@@ -732,6 +801,68 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cypher })
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // Admin / API Keys
+  async getApiKeys() {
+    const response = await fetchWithAuth(`${API_URL}/api/admin/api-keys`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async createApiKey(data: { name: string; role?: string; metadata?: any }) {
+    const response = await fetchWithAuth(`${API_URL}/api/admin/api-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async revokeApiKey(keyId: string) {
+    const response = await fetchWithAuth(`${API_URL}/api/admin/api-keys/${keyId}`, {
+      method: 'DELETE'
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+
+
+  // Admin / Shared Chats
+  async getSharedChats(limit: number = 50, offset: number = 0) {
+    const response = await fetchWithAuth(`${API_URL}/api/history/admin/shared?limit=${limit}&offset=${offset}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async shareSession(sessionId: string) {
+    const response = await fetchWithAuth(`${API_URL}/api/history/${sessionId}/share`, {
+      method: 'POST'
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async unshareSession(sessionId: string) {
+    const response = await fetchWithAuth(`${API_URL}/api/history/${sessionId}/share`, {
+      method: 'DELETE'
     })
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)

@@ -15,9 +15,11 @@ import {
   Cog,
   Menu,
   X,
+  Activity,
+  Users,
 } from 'lucide-react';
 
-type ActiveView = 'chat' | 'document' | 'graph' | 'chatTuning' | 'ragTuning' | 'categories' | 'routing' | 'structuredKg' | 'documentation';
+type ActiveView = 'chat' | 'document' | 'graph' | 'chatTuning' | 'ragTuning' | 'categories' | 'routing' | 'structuredKg' | 'documentation' | 'metrics' | 'adminSharedChats';
 
 export interface DockItemConfig {
   title: string;
@@ -30,10 +32,11 @@ const dockItems: DockItemConfig[] = [
   { title: 'Database', icon: Database, view: 'document' },
   { title: 'Graph', icon: Network, view: 'graph' },
   { title: 'Categories', icon: FolderTree, view: 'categories' },
-  { title: 'Routing', icon: Route, view: 'routing' },
   { title: 'Structured KG', icon: Code2, view: 'structuredKg' },
   { title: 'Chat Tuning', icon: Cog, view: 'chatTuning' },
   { title: 'RAG Tuning', icon: Sliders, view: 'ragTuning' },
+  { title: 'Metrics', icon: Activity, view: 'metrics' },
+  { title: 'Shared Chats', icon: Users, view: 'adminSharedChats' }, // Admin only, filtered below
   { title: 'Documentation', icon: BookOpen, view: 'documentation' },
 ];
 
@@ -47,7 +50,7 @@ export default function BottomDock() {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
     };
-    
+
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
@@ -80,6 +83,13 @@ export default function BottomDock() {
     }
   };
 
+  const user = useChatStore((state) => state.user);
+
+  const visibleDockItems = dockItems.filter(item => {
+    if (item.view === 'adminSharedChats' && user?.role !== 'admin') return false;
+    return true;
+  });
+
   // Mobile Bottom Sheet
   if (isMobile) {
     return (
@@ -108,29 +118,27 @@ export default function BottomDock() {
           id="mobile-navigation-menu"
           role="dialog"
           aria-label="Navigation menu"
-          className={`fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-neutral-900 rounded-t-2xl shadow-2xl transition-transform duration-300 ${
-            isMenuOpen ? 'translate-y-0' : 'translate-y-full'
-          }`}
+          className={`fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-neutral-900 rounded-t-2xl shadow-2xl transition-transform duration-300 ${isMenuOpen ? 'translate-y-0' : 'translate-y-full'
+            }`}
         >
           <div className="p-6 pb-8">
             {/* Handle bar */}
             <div className="w-12 h-1 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto mb-6" aria-hidden="true" />
-            
+
             {/* Grid of navigation items */}
             <div className="grid grid-cols-3 gap-4">
-              {dockItems.map((item) => {
+              {visibleDockItems.map((item) => {
                 const isActive = activeView === item.view;
                 const Icon = item.icon;
-                
+
                 return (
                   <button
                     key={item.view}
                     onClick={() => handleNavigation(item.view)}
-                    className={`flex flex-col items-center justify-center p-4 rounded-xl transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-[#f27a03] ${
-                      isActive
-                        ? 'bg-orange-50 dark:bg-orange-900/20 text-[#f27a03]'
-                        : 'bg-gray-50 dark:bg-neutral-800 text-gray-600 dark:text-gray-400'
-                    }`}
+                    className={`flex flex-col items-center justify-center p-4 rounded-xl transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-[#f27a03] ${isActive
+                      ? 'bg-orange-50 dark:bg-orange-900/20 text-[#f27a03]'
+                      : 'bg-gray-50 dark:bg-neutral-800 text-gray-600 dark:text-gray-400'
+                      }`}
                     style={{ minHeight: '88px', minWidth: '88px' }}
                     aria-label={`Navigate to ${item.title}`}
                     aria-current={isActive ? 'page' : undefined}
@@ -149,26 +157,25 @@ export default function BottomDock() {
 
   // Desktop Dock
   return (
-    <Dock 
+    <Dock
       className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 bg-white/80 backdrop-blur-md dark:bg-neutral-900/80 border border-gray-200 dark:border-neutral-800 shadow-lg"
       magnification={60}
       distance={120}
       panelHeight={56}
     >
-      {dockItems.map((item, index) => {
+      {visibleDockItems.map((item, index) => {
         const isActive = activeView === item.view;
         const Icon = item.icon;
         const shortcutKey = index + 1;
-        
+
         return (
           <DockItem
             key={item.view}
             onClick={() => handleNavigation(item.view)}
-            className={`cursor-pointer transition-all duration-200 relative ${
-              isActive 
-                ? 'text-[#f27a03] scale-110' 
-                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-            }`}
+            className={`cursor-pointer transition-all duration-200 relative ${isActive
+              ? 'text-[#f27a03] scale-110'
+              : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
           >
             <DockLabel className="text-xs">
               {item.title}
@@ -177,7 +184,7 @@ export default function BottomDock() {
             <DockIcon>
               <Icon className="w-full h-full" />
               {isActive && (
-                <div 
+                <div
                   className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 rounded-full bg-[#f27a03] animate-pulse"
                   style={{ boxShadow: '0 0 8px rgba(242, 122, 3, 0.6)' }}
                 />

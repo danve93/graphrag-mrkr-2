@@ -81,7 +81,7 @@ class ChatHistoryService:
 
         return datetime.now().astimezone().isoformat()
 
-    async def create_session(self, session_id: Optional[str] = None, title: Optional[str] = None) -> str:
+    async def create_session(self, session_id: Optional[str] = None, title: Optional[str] = None, user_id: Optional[str] = None) -> str:
         """Create a session node if it doesn't exist and return the id."""
 
         session_identifier = session_id or str(uuid.uuid4())
@@ -91,8 +91,15 @@ class ChatHistoryService:
             raise RuntimeError("Neo4j driver is not initialized")
 
         timestamp = self._generate_timestamp()
-        driver.execute_query(
-            """
+        
+        # Dual-write schema: Support both ChatHistory (:ConversationSession) and Memory (:Conversation)
+        # 1. :ConversationSession used by legacy Chat
+        # 2. :Conversation used by Memory Manager
+        # Relationships:
+        # - :HAS_CONVERSATION -> :Conversation (Memory System)
+        if user_id:
+            query = """
+            MERGE (u:User {id: $user_id})
             MERGE (s:ConversationSession {session_id: $session_id})
             ON CREATE SET s.created_at = $timestamp,
                           s.updated_at = $timestamp,
@@ -101,11 +108,39 @@ class ChatHistoryService:
             ON MATCH SET s.updated_at = $timestamp,
                           s.deleted_at = null,
                           s.title = coalesce($title, s.title)
-            """,
-            session_id=session_identifier,
-            timestamp=timestamp,
-            title=title,
-        )
+            SET s:Conversation,
+                s.id = $session_id,
+                s.user_id = $user_id
+            
+            MERGE (u)-[:HAS_CONVERSATION]->(s)
+            MERGE (u)-[:HAS_SESSION]->(s)
+            """
+            driver.execute_query(
+                query,
+                session_id=session_identifier,
+                user_id=user_id,
+                timestamp=timestamp,
+                title=title,
+            )
+        else:
+            # Anonymous session (legacy behavior)
+            driver.execute_query(
+                """
+                MERGE (s:ConversationSession {session_id: $session_id})
+                ON CREATE SET s.created_at = $timestamp,
+                              s.updated_at = $timestamp,
+                              s.deleted_at = null,
+                              s.title = $title
+                ON MATCH SET s.updated_at = $timestamp,
+                              s.deleted_at = null,
+                              s.title = coalesce($title, s.title)
+                SET s:Conversation,
+                    s.id = $session_id
+                """,
+                session_id=session_identifier,
+                timestamp=timestamp,
+                title=title,
+            )
 
         return session_identifier
 
@@ -189,12 +224,14 @@ class ChatHistoryService:
             logger.error(f"Failed to save message: {e}")
             raise
 
-    async def get_conversation(self, session_id: str) -> ConversationHistory:
+    async def get_conversation(self, session_id: str, user_id: Optional[str] = None, viewer_role: str = "user") -> ConversationHistory:
         """
         Retrieve conversation history for a session.
 
         Args:
             session_id: Conversation session ID
+            user_id: Optional User ID to enforce ownership
+            viewer_role: Role of the viewer (affects access control)
 
         Returns:
             Conversation history with all messages
@@ -205,14 +242,32 @@ class ChatHistoryService:
                 raise RuntimeError("Neo4j driver is not initialized")
 
             query = """
-            MATCH (s:ConversationSession {session_id: $session_id})-[:HAS_MESSAGE]->(m:Message)
+            MATCH (s:ConversationSession {session_id: $session_id})
+            """
+            
+            if user_id:
+                if viewer_role == "admin":
+                    # Admin can see:
+                    # 1. Their own sessions (s.user_id = $user_id)
+                    # 2. Sessions shared with admin (s.is_shared = true AND s.shared_with_role = 'admin')
+                    # 3. Orphaned/Anonymous sessions? (maybe not needed here, stick to strict)
+                    query += """
+                    WHERE s.user_id = $user_id 
+                       OR (s.is_shared = true AND s.shared_with_role = 'admin')
+                       OR (s.user_id IS NULL)
+                    """
+                else:
+                    query += "WHERE s.user_id = $user_id OR (s.user_id IS NULL) "
+            
+            query += """
+            MATCH (s)-[:HAS_MESSAGE]->(m:Message)
             WHERE (s.deleted_at IS NULL OR s.deleted_at = "")
               AND (m.deleted_at IS NULL OR m.deleted_at = "")
             RETURN s, m
             ORDER BY m.timestamp
             """
 
-            result = driver.execute_query(query, session_id=session_id)
+            result = driver.execute_query(query, session_id=session_id, user_id=user_id)
 
             if not result or not result.records:
                 raise ValueError(f"Session {session_id} not found")
@@ -345,6 +400,72 @@ class ChatHistoryService:
                         )
                     )
 
+            return sessions
+
+        except Exception as e:
+            logger.error(f"Failed to list sessions: {e}")
+            raise
+
+    async def list_user_sessions(self, user_id: str, limit: int = 20, offset: int = 0) -> List[ConversationSession]:
+        """
+        List conversations for a specific user.
+        """
+        try:
+            driver = graph_db.driver
+            if driver is None:
+                raise RuntimeError("Neo4j driver is not initialized")
+            
+            # Using the schema compatible with Memory Manager (:User)-[:HAS_CONVERSATION]->(:Conversation)
+            # but returning ConversationSession objects
+            query = (
+                "MATCH (u:User {id: $user_id})-[:HAS_CONVERSATION]->(s:Conversation)\n"
+                "WHERE (s.deleted_at IS NULL OR s.deleted_at = '')\n"
+                "OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:Message)\n"
+                "WHERE m.deleted_at IS NULL OR m.deleted_at = ''\n"
+                "WITH s, count(m) as msg_count, collect(m)[0] as first_msg\n"
+                "RETURN s.session_id as session_id,\n"
+                "       s.created_at as created_at,\n"
+                "       s.updated_at as updated_at,\n"
+                "       s.deleted_at as deleted_at,\n"
+                "       s.title as title,\n"
+                "       msg_count as message_count,\n"
+                "       CASE WHEN s.summary <> '' AND s.summary IS NOT NULL THEN s.summary ELSE first_msg.content END as preview\n"
+                "ORDER BY s.updated_at DESC\n"
+                "SKIP $offset LIMIT $limit"
+            )
+            
+            result = driver.execute_query(query, user_id=user_id, limit=limit, offset=offset)
+
+            sessions = []
+            if result and result.records:
+                for record in result.records:
+                    preview = record["preview"] or ""
+                    if preview:
+                        preview = strip_markdown(preview)
+                        if len(preview) > 100:
+                            preview = preview[:100] + "..."
+
+                    def _normalize_ts(value):
+                        try:
+                            if isinstance(value, (int, float)):
+                                return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).astimezone().isoformat()
+                            if isinstance(value, str) and value:
+                                return value
+                        except Exception:
+                            pass
+                        return ""
+
+                    sessions.append(
+                        ConversationSession(
+                            session_id=record["session_id"],
+                            created_at=_normalize_ts(record.get("created_at")),
+                            updated_at=_normalize_ts(record.get("updated_at")),
+                            message_count=record["message_count"],
+                            preview=preview,
+                            deleted_at=_normalize_ts(record.get("deleted_at")),
+                            title=record.get("title")
+                        )
+                    )
             return sessions
 
         except Exception as e:
@@ -502,5 +623,123 @@ class ChatHistoryService:
         return MessageSearchResponse(query=query, results=results)
 
 
+    async def share_session(self, session_id: str, target_role: str = "admin") -> bool:
+        """
+        Mark a session as shared with a specific role.
+        """
+        try:
+            timestamp = self._generate_timestamp()
+            query = """
+            MATCH (s:ConversationSession {session_id: $session_id})
+            SET s.is_shared = true,
+                s.shared_with_role = $target_role,
+                s.updated_at = $timestamp
+            RETURN s
+            """
+            result = graph_db.driver.execute_query(
+                query, 
+                session_id=session_id, 
+                target_role=target_role,
+                timestamp=timestamp
+            )
+            return bool(result and result.records)
+        except Exception as e:
+            logger.error(f"Failed to share session: {e}")
+            raise
+
+    async def unshare_session(self, session_id: str) -> bool:
+        """
+        Remove sharing from a session.
+        """
+        try:
+            timestamp = self._generate_timestamp()
+            query = """
+            MATCH (s:ConversationSession {session_id: $session_id})
+            SET s.is_shared = false,
+                s.shared_with_role = null,
+                s.updated_at = $timestamp
+            RETURN s
+            """
+            result = graph_db.driver.execute_query(
+                query, 
+                session_id=session_id, 
+                timestamp=timestamp
+            )
+            return bool(result and result.records)
+        except Exception as e:
+            logger.error(f"Failed to unshare session: {e}")
+            raise
+
+    async def list_shared_sessions(self, limit: int = 50, offset: int = 0) -> List[ConversationSession]:
+        """
+        List all sessions that have been shared (e.g. for admin review).
+        """
+        try:
+            driver = graph_db.driver
+            if driver is None:
+                raise RuntimeError("Neo4j driver is not initialized")
+            
+            # Find sessions marked as shared
+            # Ideally filter by shared_with_role = 'admin' if multiple roles exist
+            query = (
+                "MATCH (s:ConversationSession)\n"
+                "WHERE s.is_shared = true\n"
+                "  AND (s.deleted_at IS NULL OR s.deleted_at = '')\n"
+                "OPTIONAL MATCH (s)-[:HAS_MESSAGE]->(m:Message)\n"
+                "WHERE m.deleted_at IS NULL OR m.deleted_at = ''\n"
+                "WITH s, count(m) as msg_count, collect(m)[0] as first_msg\n"
+                "RETURN s.session_id as session_id,\n"
+                "       s.created_at as created_at,\n"
+                "       s.updated_at as updated_at,\n"
+                "       s.deleted_at as deleted_at,\n"
+                "       s.title as title,\n"
+                "       msg_count as message_count,\n"
+                "       CASE WHEN s.summary <> '' AND s.summary IS NOT NULL THEN s.summary ELSE first_msg.content END as preview,\n"
+                "       s.user_id as user_id\n"
+                "ORDER BY s.updated_at DESC\n"
+                "SKIP $offset LIMIT $limit"
+            )
+            
+            result = driver.execute_query(query, limit=limit, offset=offset)
+
+            sessions = []
+            if result and result.records:
+                for record in result.records:
+                    preview = record["preview"] or ""
+                    if preview:
+                        preview = strip_markdown(preview)
+                        if len(preview) > 100:
+                            preview = preview[:100] + "..."
+
+                    def _normalize_ts(value):
+                        try:
+                            if isinstance(value, (int, float)):
+                                return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).astimezone().isoformat()
+                            if isinstance(value, str) and value:
+                                return value
+                        except Exception:
+                            pass
+                        return ""
+
+                    # We could extend ConversationSession to include user_id info 
+                    # but for now we re-use the base model
+                    sessions.append(
+                        ConversationSession(
+                            session_id=record["session_id"],
+                            created_at=_normalize_ts(record.get("created_at")),
+                            updated_at=_normalize_ts(record.get("updated_at")),
+                            message_count=record["message_count"],
+                            preview=preview,
+                            deleted_at=_normalize_ts(record.get("deleted_at")),
+                            title=record.get("title") or f"Shared by {record.get('user_id', 'Unknown')}"
+                        )
+                    )
+            return sessions
+
+        except Exception as e:
+            logger.error(f"Failed to list shared sessions: {e}")
+            raise
+
 # Global service instance
 chat_history_service = ChatHistoryService()
+

@@ -13,12 +13,6 @@ module.exports = {
         sans: ['Noto Sans', 'sans-serif'],
       },
       colors: {
-    extend: {
-      fontFamily: {
-        display: ['Noto Sans Display', 'sans-serif'],
-        sans: ['Noto Sans', 'sans-serif'],
-      },
-      colors: {
         accent: {
           primary: '#f27a03',
           hover: '#d96a02',
@@ -38,10 +32,9 @@ module.exports = {
           900: '#121212',
           950: '#030712',
         },
-        // Legacy compatibility
         primary: {
-          500: '#0ea5e9',
-          600: '#0284c7',
+          500: '#f27a03',
+          600: '#d96a02',
         },
         secondary: {
           50: '#f9fafb',
@@ -61,7 +54,7 @@ module.exports = {
         systemPurple: '#BF5AF2',
         systemPink: '#FF375F',
         systemRed: '#FF453A',
-        systemOrange: '#f27a03',
+        systemOrange: '#FF9F0A',
         systemYellow: '#FFD60A',
         systemGreen: '#32D74B',
         systemTeal: '#64D2FF',
@@ -71,46 +64,9 @@ module.exports = {
         systemGray4: '#D1D1D6',
         systemGray5: '#E5E5EA',
         systemGray6: '#1C1C1E',
-        background: '#000000',
+        background: '#0a0a0a',
         surface: '#1C1C1E',
         elevated: '#2C2C2E',
-      },
-          primary: '#f27a03',
-          hover: '#d96a02',
-          active: '#b85902',
-          subtle: 'rgba(242, 122, 3, 0.12)',
-        },
-        gray: {
-          50: '#f9fafb',
-          100: '#f3f4f6',
-          200: '#e5e7eb',
-          300: '#d1d5db',
-          400: '#9ca3af',
-          500: '#6b7280',
-          600: '#4b5563',
-          700: '#374151',
-          800: '#121212',
-          900: '#121212',
-          950: '#030712',
-        },
-        // Legacy compatibility
-        primary: {
-          500: '#f27a03',
-          600: '#d96a02',
-        },
-        secondary: {
-          50: '#f9fafb',
-          100: '#f3f4f6',
-          200: '#e5e7eb',
-          300: '#d1d5db',
-          400: '#9ca3af',
-          500: '#6b7280',
-          600: '#4b5563',
-          700: '#374151',
-          800: '#121212',
-          900: '#121212',
-          950: '#030712',
-        },
       },
       spacing: {
         '1': '4px',
@@ -144,3 +100,4 @@ module.exports = {
     require('@tailwindcss/typography'),
   ],
 }
+

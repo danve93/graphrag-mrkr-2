@@ -7,7 +7,7 @@ import logging
 import random
 import threading
 import time
-from typing import List
+from typing import List, Optional
 
 import httpx
 import openai
@@ -179,7 +179,7 @@ class EmbeddingManager:
             
             self._last_request_time = time.time()
 
-    def get_embedding(self, text: str) -> List[float]:
+    def get_embedding(self, text: str, workspace_id: Optional[str] = None) -> List[float]:
         """
         Generate embedding for text with caching.
         
@@ -195,18 +195,19 @@ class EmbeddingManager:
         cache_key = hash_text(text, self.model)
         
         # Check cache (thread-safe read)
-        with self._cache_lock:
-            if cache_key in self._cache:
-                logger.debug(f"Embedding cache HIT for {cache_key[:8]}...")
-                return self._cache[cache_key]
+        # CacheService handles locking internally for diskcache, but we keep lock for overall safety 
+        # specifically if we were doing more complex logic, but CacheService.get is thread safe.
+        cached = self._cache.get(cache_key, workspace_id=workspace_id)
+        if cached is not None:
+            logger.debug(f"Embedding cache HIT for {cache_key[:8]}...")
+            return cached
         
         # Cache miss - generate embedding
         logger.debug(f"Embedding cache MISS for {cache_key[:8]}...")
         embedding = self._generate_embedding_direct(text)
         
         # Store in cache (thread-safe write)
-        with self._cache_lock:
-            self._cache[cache_key] = embedding
+        self._cache.set(cache_key, embedding, workspace_id=workspace_id)
         
         return embedding
 

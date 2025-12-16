@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { Activity, TrendingUp, Clock, Database, Split, RefreshCw, AlertCircle } from 'lucide-react';
 import { Button } from '@mui/material';
-import { Route as RouteIcon } from '@mui/icons-material';
 import ExpandablePanel from '@/components/Utils/ExpandablePanel';
 import { FeedbackMetricsDashboard } from '../Chat/FeedbackMetricsDashboard';
 import { API_URL } from '@/lib/api';
@@ -105,36 +104,40 @@ export default function RoutingView() {
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
-          <div style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '8px', 
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}>
-            <RouteIcon style={{ fontSize: '24px', color: '#f27a03' }} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Query Routing Dashboard
-            </h1>
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-              Real-time metrics and performance monitoring
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
+          <div>
+            <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
+              Routing Performance
+            </h2>
+            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+              Real-time query routing statistics and cache performance
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button
+              onClick={async () => {
+                if (!confirm('Are you sure you want to clear all routing metrics? This cannot be undone.')) return;
+                try {
+                  const res = await fetch(`${API_URL}/api/database/routing-metrics`, { method: 'DELETE' });
+                  if (!res.ok) throw new Error('Failed to clear metrics');
+                  fetchMetrics();
+                } catch (err: any) {
+                  alert(err.message);
+                }
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-800"
+            >
+              Clear Metrics
+            </button>
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
               <input
                 type="checkbox"
                 checked={autoRefresh}
                 onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="rounded"
+                className="rounded border-gray-300"
               />
-              Auto-refresh (3s)
+              Auto-refresh
             </label>
             <Button
               size="small"
@@ -216,8 +219,11 @@ export default function RoutingView() {
 
         {/* Top Categories Chart */}
         {hasQueries && metrics.top_categories.length > 0 && (
-          <div className="bg-white dark:bg-secondary-800 rounded-lg border border-secondary-200 dark:border-secondary-700 p-6">
-            <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-100 mb-4">
+          <div
+            className="rounded-lg p-6 border"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+          >
+            <h2 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
               Top Categories
             </h2>
             <div className="space-y-3">
@@ -226,17 +232,17 @@ export default function RoutingView() {
                 return (
                   <div key={category} className="space-y-1">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium text-secondary-700 dark:text-secondary-300">
+                      <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
                         {category}
                       </span>
-                      <span className="text-secondary-600 dark:text-secondary-400">
+                      <span style={{ color: 'var(--text-secondary)' }}>
                         {count} ({percentage.toFixed(1)}%)
                       </span>
                     </div>
-                    <div className="h-2 bg-secondary-100 dark:bg-secondary-700 rounded-full overflow-hidden">
+                    <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                       <div
-                        className="h-full bg-primary-600 rounded-full transition-all duration-300"
-                        style={{ width: `${percentage}%` }}
+                        className="h-full rounded-full transition-all duration-300"
+                        style={{ width: `${percentage}%`, backgroundColor: 'var(--accent-primary)' }}
                       />
                     </div>
                   </div>
@@ -248,24 +254,30 @@ export default function RoutingView() {
 
         {/* Empty State */}
         {!hasQueries && (
-          <div className="bg-white dark:bg-secondary-800 rounded-lg border border-secondary-200 dark:border-secondary-700 p-12 text-center">
-            <Activity className="w-16 h-16 mx-auto mb-4 text-secondary-300 dark:text-secondary-600" />
-            <h3 className="text-lg font-semibold text-secondary-900 dark:text-secondary-100 mb-2">
+          <div
+            className="rounded-lg p-12 text-center border"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)', borderStyle: 'dashed' }}
+          >
+            <Activity className="w-12 h-12 mx-auto mb-3" style={{ color: 'var(--text-tertiary)' }} />
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
               No Routing Data Yet
             </h3>
-            <p className="text-secondary-600 dark:text-secondary-400">
+            <p style={{ color: 'var(--text-secondary)' }}>
               Send some queries with routing enabled to see metrics here.
             </p>
-            <p className="text-sm text-secondary-500 dark:text-secondary-500 mt-2">
-              Set <code className="px-2 py-1 bg-secondary-100 dark:bg-secondary-700 rounded">ENABLE_QUERY_ROUTING=true</code> in your .env file
+            <p className="text-sm mt-2" style={{ color: 'var(--text-tertiary)' }}>
+              Set <code className="px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>ENABLE_QUERY_ROUTING=true</code> in your .env file
             </p>
           </div>
         )}
 
         {/* KPI Status Summary */}
         {hasQueries && (
-          <div className="bg-white dark:bg-secondary-800 rounded-lg border border-secondary-200 dark:border-secondary-700 p-6">
-            <h2 className="text-lg font-semibold text-secondary-900 dark:text-secondary-100 mb-4">
+          <div
+            className="rounded-lg p-6 border"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+          >
+            <h2 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
               Cache & Routing Stats
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -300,7 +312,9 @@ export default function RoutingView() {
         )}
 
         {/* Feedback Metrics Dashboard */}
-        <FeedbackMetricsDashboard />
+        <div style={{ marginTop: 'var(--space-6)' }}>
+          <FeedbackMetricsDashboard />
+        </div>
       </div>
     </div>
   );
@@ -318,27 +332,32 @@ interface MetricCardProps {
 
 function MetricCard({ icon, label, value, subtitle, iconColor, bgColor, status }: MetricCardProps) {
   return (
-    <div className="bg-white dark:bg-secondary-800 rounded-lg border border-secondary-200 dark:border-secondary-700 p-6 relative overflow-hidden">
-      <div className="flex items-start justify-between mb-2">
+    <div
+      className="rounded-lg p-5 border relative overflow-hidden"
+      style={{
+        backgroundColor: 'var(--bg-secondary)',
+        borderColor: 'var(--border)'
+      }}
+    >
+      <div className="flex items-start justify-between mb-3">
         <div className={`p-2 rounded-lg ${bgColor}`}>
           <div className={iconColor}>{icon}</div>
         </div>
         {status && (
-          <div className={`w-2 h-2 rounded-full ${
-            status === 'good' ? 'bg-green-500' :
+          <div className={`w-2 h-2 rounded-full ${status === 'good' ? 'bg-green-500' :
             status === 'warning' ? 'bg-yellow-500' :
-            'bg-red-500'
-          }`} />
+              'bg-red-500'
+            }`} />
         )}
       </div>
-      <div className="text-2xl font-bold text-secondary-900 dark:text-secondary-100 mb-1">
+      <div className="text-3xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
         {value}
       </div>
-      <div className="text-sm text-secondary-600 dark:text-secondary-400">
+      <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
         {label}
       </div>
       {subtitle && (
-        <div className="text-xs text-secondary-500 dark:text-secondary-500 mt-1">
+        <div className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
           {subtitle}
         </div>
       )}
@@ -355,9 +374,9 @@ interface KPIStatusProps {
 
 function KPIStatus({ label, target, current, status }: KPIStatusProps) {
   const statusColors = {
-    good: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20',
-    warning: 'text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20',
-    error: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
+    good: { bg: 'rgba(50, 215, 75, 0.15)', color: '#32D74B' },
+    warning: { bg: 'rgba(255, 214, 10, 0.15)', color: '#FFD60A' },
+    error: { bg: 'rgba(255, 69, 58, 0.15)', color: '#FF453A' },
   };
 
   const statusLabels = {
@@ -367,16 +386,22 @@ function KPIStatus({ label, target, current, status }: KPIStatusProps) {
   };
 
   return (
-    <div className="flex items-center justify-between p-3 rounded-lg bg-secondary-50 dark:bg-secondary-900/50">
+    <div
+      className="flex items-center justify-between p-3 rounded-lg"
+      style={{ backgroundColor: 'var(--bg-tertiary)' }}
+    >
       <div>
-        <div className="text-sm font-medium text-secondary-900 dark:text-secondary-100">
+        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           {label}
         </div>
-        <div className="text-xs text-secondary-600 dark:text-secondary-400">
+        <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
           Target: {target} | Current: {current}
         </div>
       </div>
-      <div className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[status]}`}>
+      <div
+        className="px-3 py-1 rounded-full text-xs font-medium"
+        style={{ backgroundColor: statusColors[status].bg, color: statusColors[status].color }}
+      >
         {statusLabels[status]}
       </div>
     </div>

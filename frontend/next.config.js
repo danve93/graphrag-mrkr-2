@@ -9,11 +9,9 @@ const nextConfig = {
   // When NEXT_PUBLIC_API_URL is set to an absolute URL, client-side code calls
   // the API directly and rewrites are not needed.
   async rewrites() {
-    // Disable rewrites if using an absolute API URL (e.g., production with external hostname)
-    if (process.env.NEXT_PUBLIC_API_URL) {
-      return []
-    }
-    
+    // We allow rewrites even if NEXT_PUBLIC_API_URL is set, to support Hybrid modes
+    // and Docker internal networking where Next.js proxies to backend.
+
     // If running in development on the host machine, default to localhost:8000
     const serverApiUrl =
       process.env.NEXT_PUBLIC_API_URL_SERVER ||

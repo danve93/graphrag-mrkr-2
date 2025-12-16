@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Tooltip, IconButton, Chip, Button } from '@mui/material';
-import { RestartAlt as RetryIcon, ExpandMore as ExpandIcon, ExpandLess as CollapseIcon } from '@mui/icons-material';
+import { Tooltip, Chip, Button } from '@mui/material';
+import { RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface CategoryRetryProps {
   query: string;
@@ -53,7 +53,7 @@ const CategoryRetry: React.FC<CategoryRetryProps> = ({ query, currentCategories,
         <Tooltip title="Search in different categories" arrow>
           <Button
             size="small"
-            startIcon={<RetryIcon />}
+            startIcon={<RotateCcw size={14} />}
             onClick={() => setExpanded(true)}
             style={{
               fontSize: '0.75rem',
@@ -83,9 +83,21 @@ const CategoryRetry: React.FC<CategoryRetryProps> = ({ query, currentCategories,
         <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)' }}>
           Select Categories to Search
         </div>
-        <IconButton size="small" onClick={() => setExpanded(false)}>
-          <CollapseIcon fontSize="small" />
-        </IconButton>
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '4px',
+            cursor: 'pointer',
+            color: 'var(--text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <ChevronUp size={18} />
+        </button>
       </div>
 
       {suggestedCategories.length > 0 && (
@@ -148,7 +160,7 @@ const CategoryRetry: React.FC<CategoryRetryProps> = ({ query, currentCategories,
           variant="contained"
           onClick={handleRetry}
           disabled={selectedCategories.length === 0}
-          startIcon={<RetryIcon />}
+          startIcon={<RotateCcw size={14} />}
           style={{
             textTransform: 'none',
             backgroundColor: 'var(--accent-primary)',

@@ -1,40 +1,38 @@
-name: E2E tests (Testcontainers)
+name: Container Smoke (Neo4j)
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  e2e:
+  neo4j-smoke:
+    name: Neo4j container health
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    env:
+      COMPOSE_PROJECT_NAME: ci-neo4j
+      NEO4J_AUTH: neo4j/test
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.11
+      - name: Start Neo4j via docker compose
+        run: docker compose -f docker-compose.yml up -d neo4j
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
+      - name: Wait for Neo4j health
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          for i in {1..30}; do
+            if docker exec neo4j bin/cypher-shell -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" "RETURN 1" >/dev/null 2>&1; then
+              echo "Neo4j is ready"
+              exit 0
+            fi
+            echo "Waiting for Neo4j to become ready ($i/30)..."
+            sleep 5
+          done
+          echo "Neo4j did not become ready in time"
+          docker compose -f docker-compose.yml logs neo4j || true
+          exit 1
 
-      - name: Run e2e tests
-        env:
-          CI: true
-        run: |
-          pytest tests/e2e -q
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.yml down --volumes

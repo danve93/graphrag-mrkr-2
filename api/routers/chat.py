@@ -8,10 +8,11 @@ import logging
 import uuid
 from typing import AsyncGenerator, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 
 from api.models import ChatRequest, ChatResponse, FollowUpRequest, FollowUpResponse
+from api.auth import get_current_user
 from api.routers.chat_tuning import load_config as load_chat_tuning_config
 from config.settings import settings
 from api.services.chat_history_service import chat_history_service
@@ -274,15 +275,38 @@ async def stream_response_generator(
 
 async def _prepare_chat_context(
     request: ChatRequest,
+    user_id: Optional[str] = None,
 ) -> Tuple[str, List[dict], dict, List[str], List[str], List[str]]:
     """Load chat history, run RAG, and enrich metadata for downstream handlers."""
 
     session_id = request.session_id or str(uuid.uuid4())
+    
+    # Ensure session exists and is linked to user if provided
+    await chat_history_service.create_session(
+        session_id=session_id,
+        user_id=user_id
+    )
+
+    # Determine user_type for TruLens tracking (external, admin, user, anonymous)
+    user_type = "anonymous"
+    if user_id:
+        if user_id == "admin":
+            user_type = "admin"
+        else:
+            try:
+                from api.services.user_service import user_service
+                user = user_service.get_user(user_id)
+                if user:
+                    user_type = user.get("role", "user")
+            except Exception:
+                user_type = "user"
 
     chat_history: List[dict] = []
     if request.session_id:
         try:
-            history = await chat_history_service.get_conversation(session_id)
+            # Enforce user ownership during history load? 
+            # Currently get_conversation verifies ownership if user_id passed
+            history = await chat_history_service.get_conversation(session_id, user_id=user_id)
             chat_history = [
                 {"role": msg.role, "content": msg.content}
                 for msg in history.messages
@@ -367,26 +391,60 @@ async def _prepare_chat_context(
     except Exception as exc:
         logger.warning(f"Failed to apply chat-tuning retriever overrides to settings: {exc}")
 
-    result = graph_rag.query(
-        user_query=request.message,
-        retrieval_mode=request.retrieval_mode,
-        top_k=effective_top_k,
-        temperature=effective_temperature,
-        use_multi_hop=request.use_multi_hop,
-        chunk_weight=effective_chunk_weight,
-        entity_weight=effective_entity_weight,
-        path_weight=effective_path_weight,
-        max_hops=effective_max_hops,
-        beam_size=effective_beam_size,
-        restrict_to_context=effective_restrict_to_context,
-        graph_expansion_depth=effective_graph_expansion_depth,
-        llm_model=effective_llm_model,
-        embedding_model=effective_embedding_model,
-        chat_history=chat_history,
-        session_id=session_id,
-        context_documents=context_documents,
-        category_filter=request.category_filter,
-    )
+    # Apply evaluation-specific feature flag overrides
+    # These are temporary per-request overrides for A/B testing variants
+    # Settings are restored immediately after graph_rag.query() completes
+    original_settings: Dict[str, Any] = {}
+
+    def _apply_eval_override(attr: str, value: Optional[bool]) -> None:
+        """Apply per-request feature flag override if value is not None."""
+        if value is not None:
+            # Save original value for restoration
+            original_settings[attr] = getattr(settings, attr)
+            # Apply override
+            setattr(settings, attr, value)
+            logger.info(
+                f"[Eval Override] {attr} = {value} (original: {original_settings[attr]})"
+            )
+
+    try:
+        # Apply all evaluation overrides
+        _apply_eval_override("enable_query_routing", request.eval_enable_query_routing)
+        _apply_eval_override("enable_structured_kg", request.eval_enable_structured_kg)
+        _apply_eval_override("enable_rrf", request.eval_enable_rrf)
+        _apply_eval_override("enable_routing_cache", request.eval_enable_routing_cache)
+        _apply_eval_override("flashrank_enabled", request.eval_flashrank_enabled)
+        _apply_eval_override("enable_graph_clustering", request.eval_enable_graph_clustering)
+
+        # Run RAG query with potentially overridden settings
+        result = graph_rag.query(
+            user_query=request.message,
+            session_id=session_id,
+            user_id=user_id,
+            user_type=user_type,
+            retrieval_mode=request.retrieval_mode,
+            top_k=effective_top_k,
+            temperature=effective_temperature,
+            use_multi_hop=request.use_multi_hop,
+            chunk_weight=effective_chunk_weight,
+            entity_weight=effective_entity_weight,
+            path_weight=effective_path_weight,
+            max_hops=effective_max_hops,
+            beam_size=effective_beam_size,
+            restrict_to_context=effective_restrict_to_context,
+            graph_expansion_depth=effective_graph_expansion_depth,
+            llm_model=effective_llm_model,
+            embedding_model=effective_embedding_model,
+            chat_history=chat_history,
+            context_documents=context_documents,
+            category_filter=request.category_filter,
+        )
+
+    finally:
+        # CRITICAL: Restore original settings even if query raises exception
+        for attr, orig_value in original_settings.items():
+            setattr(settings, attr, orig_value)
+            logger.debug(f"[Eval Restore] {attr} = {orig_value}")
 
     metadata = result.get("metadata", {}) or {}
     metadata["chat_history_turns"] = len(chat_history)
@@ -439,12 +497,13 @@ async def _prepare_chat_context(
 
 
 @router.post("/query", response_model=ChatResponse)
-async def chat_query(request: ChatRequest):
+async def chat_query(request: ChatRequest, user_id: Optional[str] = Depends(get_current_user)):
     """
     Handle chat query request.
 
     Args:
         request: Chat request with message and parameters
+        user_id: Authenticated user ID (optional)
 
     Returns:
         Chat response with answer, sources, and metadata
@@ -457,7 +516,7 @@ async def chat_query(request: ChatRequest):
             context_documents,
             context_document_labels,
             context_hashtags,
-        ) = await _prepare_chat_context(request)
+        ) = await _prepare_chat_context(request, user_id=user_id)
 
         # Log the stages for debugging
         stages = result.get("stages", [])
@@ -553,7 +612,7 @@ async def chat_query(request: ChatRequest):
 
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest, http_request: Request):
+async def chat_stream(request: ChatRequest, http_request: Request, user_id: Optional[str] = Depends(get_current_user)):
     """Dedicated SSE endpoint that always streams responses."""
 
     try:
@@ -563,7 +622,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         chat_history: List[dict] = []
         if request.session_id:
             try:
-                history = await chat_history_service.get_conversation(session_id)
+                # Enforce user ownership
+                history = await chat_history_service.get_conversation(session_id, user_id=user_id)
                 chat_history = [{"role": msg.role, "content": msg.content} for msg in history.messages]
             except Exception as exc:
                 logger.warning(f"Could not load chat history for streaming: {exc}")
@@ -659,7 +719,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             context_documents,
             context_document_labels,
             context_hashtags,
-        ) = await _prepare_chat_context(request)
+        ) = await _prepare_chat_context(request, user_id=user_id)
 
         stages = result.get("stages", [])
         logger.info(f"RAG pipeline completed with stages: {stages}")

@@ -123,6 +123,33 @@ class GraphDB:
                 last_exc = e
                 logger.warning("Neo4j connection attempt %s failed: %s", attempt, e)
 
+                # If we see an incomplete TLS/handshake error when talking to Bolt,
+                # try a fallback scheme that trusts the server certificate. This
+                # helps local Docker setups where Neo4j exposes Bolt with a
+                # self-signed certificate and the client needs to use
+                # `neo4j+ssc://` to accept it.
+                try:
+                    msg = str(e).lower()
+                    if "handshake" in msg or "incomplete handshake" in msg or "tls" in msg or "ssl" in msg:
+                        if uri.startswith("bolt://") or uri.startswith("neo4j://"):
+                            alt_uri = uri
+                            if uri.startswith("bolt://"):
+                                alt_uri = "neo4j+ssc://" + uri.split("//", 1)[1]
+                            elif uri.startswith("neo4j://"):
+                                alt_uri = "neo4j+ssc://" + uri.split("//", 1)[1]
+                            logger.info("Attempting fallback Neo4j URI using neo4j+ssc:// -> %s", alt_uri)
+                            try:
+                                self.driver = GraphDatabase.driver(alt_uri, auth=(username, password))
+                                self.driver.verify_connectivity()
+                                settings.neo4j_uri = alt_uri
+                                logger.info("Successfully connected to Neo4j using fallback URI %s", alt_uri)
+                                return
+                            except Exception as ee:
+                                logger.warning("Fallback neo4j+ssc connection failed: %s", ee)
+                except Exception:
+                    # Swallow any errors from fallback logic and continue retry/backoff
+                    pass
+
                 # Exponential backoff before retrying
                 import time
 
@@ -312,18 +339,19 @@ class GraphDB:
             return self._get_entity_label_direct(entity_id)
         
         # Check cache (thread-safe read)
-        with self._entity_label_lock:
-            if entity_id in self._entity_label_cache:
-                logger.debug(f"Entity label cache HIT: {entity_id}")
-                return self._entity_label_cache[entity_id]
+        # Check cache (thread-safe read)
+        # CacheService handles locking internally for diskcache, but we have a lock here anyway.
+        cached_label = self._entity_label_cache.get(entity_id)
+        if cached_label is not None:
+            logger.debug(f"Entity label cache HIT: {entity_id}")
+            return cached_label
         
         # Cache miss - query database
         logger.debug(f"Entity label cache MISS: {entity_id}")
         label = self._get_entity_label_direct(entity_id)
         
         # Store in cache (thread-safe write)
-        with self._entity_label_lock:
-            self._entity_label_cache[entity_id] = label
+        self._entity_label_cache.set(entity_id, label)
         
         return label
 
@@ -453,6 +481,285 @@ class GraphDB:
                 doc_id=doc_id,
                 hashtags=hashtags,
             )
+
+    def update_document_metadata(
+        self,
+        doc_id: str,
+        metadata: Dict[str, Any]
+    ) -> None:
+        """Update the metadata (properties) for a document."""
+        with self.session_scope() as session:
+            # We want to merge the new metadata into the existing document properties.
+            # CAUTION: This will overwrite existing keys with the same name.
+            # It will strictly add/update the properties provided in `metadata`.
+            # To replace the entire metadata, one would need to remove other props first,
+            # but typically patch semantics are preferred.
+            
+            # Since 'metadata' in the request is a dict of arbitrary fields,
+            # and we store document properties at the node root level or within
+            # a 'metadata' map depending on architecture.
+            # Looking at create_document_node: SET d += $metadata
+            # so we are storing them at root level or mixed in.
+            
+            # Use same += operator to merge/update
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                SET d.metadata = $metadata
+                """,
+                doc_id=doc_id,
+                metadata=metadata,
+            )
+
+    # Temporal Graph Methods
+
+    def create_temporal_nodes_for_document(
+        self, doc_id: str, timestamp: Optional[float] = None
+    ) -> None:
+        """Create temporal nodes and link document to them.
+
+        Creates a hierarchy of temporal nodes (Date -> Month -> Quarter -> Year)
+        and links the document via CREATED_AT relationship.
+
+        Args:
+            doc_id: Document ID to link to temporal nodes
+            timestamp: Unix timestamp (if None, fetches from document's created_at)
+        """
+        with self.session_scope() as session:
+            # Get timestamp from document if not provided
+            if timestamp is None:
+                result = session.run(
+                    "MATCH (d:Document {id: $doc_id}) RETURN d.created_at AS ts",
+                    doc_id=doc_id,
+                ).single()
+                if not result or not result["ts"]:
+                    logger.warning(f"No timestamp found for document {doc_id}, skipping temporal nodes")
+                    return
+                timestamp = result["ts"]
+
+            # Convert timestamp to datetime
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+            # Extract temporal components
+            year = dt.year
+            quarter = (dt.month - 1) // 3 + 1
+            month = dt.month
+            date_str = dt.strftime("%Y-%m-%d")
+
+            # Create temporal node hierarchy and link document
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+
+                // Create Year node
+                MERGE (y:TimeNode:Year {year: $year})
+                SET y.type = 'year'
+
+                // Create Quarter node
+                MERGE (q:TimeNode:Quarter {year: $year, quarter: $quarter})
+                SET q.type = 'quarter',
+                    q.label = $year + 'Q' + $quarter
+
+                // Create Month node
+                MERGE (m:TimeNode:Month {year: $year, month: $month})
+                SET m.type = 'month',
+                    m.label = $month_label
+
+                // Create Date node
+                MERGE (dt:TimeNode:Date {date: $date_str})
+                SET dt.type = 'date',
+                    dt.year = $year,
+                    dt.month = $month,
+                    dt.day = $day
+
+                // Create temporal hierarchy
+                MERGE (dt)-[:IN_MONTH]->(m)
+                MERGE (m)-[:IN_QUARTER]->(q)
+                MERGE (q)-[:IN_YEAR]->(y)
+
+                // Link document to date node
+                MERGE (d)-[:CREATED_AT]->(dt)
+                """,
+                doc_id=doc_id,
+                year=year,
+                quarter=quarter,
+                month=month,
+                date_str=date_str,
+                month_label=dt.strftime("%Y-%m"),
+                day=dt.day,
+            )
+            logger.debug(f"Created temporal nodes for document {doc_id} at {date_str}")
+
+    def retrieve_chunks_with_temporal_filter(
+        self,
+        query_embedding: List[float],
+        top_k: int = 5,
+        after_date: Optional[str] = None,
+        before_date: Optional[str] = None,
+        time_decay_weight: float = 0.0,
+        allowed_document_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve chunks with temporal filtering and optional time-decay scoring.
+
+        Args:
+            query_embedding: Query embedding vector
+            top_k: Number of results to return
+            after_date: ISO date string (YYYY-MM-DD) - only return docs after this date
+            before_date: ISO date string (YYYY-MM-DD) - only return docs before this date
+            time_decay_weight: Weight for time-decay scoring (0.0 = no decay, 1.0 = full decay)
+            allowed_document_ids: Optional list of document IDs to restrict search
+
+        Returns:
+            List of chunks with similarity scores (adjusted for time decay if enabled)
+        """
+        with self.session_scope() as session:
+            # Build temporal filter clause
+            temporal_filter = ""
+            params = {
+                "embedding": query_embedding,
+                "top_k": top_k,
+                "time_decay_weight": time_decay_weight,
+            }
+
+            if after_date or before_date:
+                temporal_filter = """
+                MATCH (d)-[:CREATED_AT]->(dt:Date)
+                """
+                if after_date:
+                    temporal_filter += " WHERE dt.date >= $after_date"
+                    params["after_date"] = after_date
+                if before_date:
+                    connector = " AND" if after_date else " WHERE"
+                    temporal_filter += f"{connector} dt.date <= $before_date"
+                    params["before_date"] = before_date
+
+            # Build document filter clause
+            doc_filter = ""
+            if allowed_document_ids:
+                doc_filter = " AND d.id IN $allowed_doc_ids"
+                params["allowed_doc_ids"] = allowed_document_ids
+
+            # Build time-decay scoring
+            time_decay_clause = ""
+            if time_decay_weight > 0:
+                time_decay_clause = """
+                // Calculate time decay (exponential decay based on age in days)
+                , duration.between(datetime(d.created_at), datetime()).days AS age_days
+                , exp(-0.01 * age_days) AS time_factor
+                , similarity * (1 - $time_decay_weight + $time_decay_weight * time_factor) AS adjusted_similarity
+                """
+                score_field = "adjusted_similarity"
+            else:
+                time_decay_clause = ", similarity AS adjusted_similarity"
+                score_field = "adjusted_similarity"
+
+            query = f"""
+            CALL db.index.vector.queryNodes('chunk_embeddings', $top_k * 2, $embedding)
+            YIELD node AS c, score AS similarity
+            MATCH (d:Document)-[:HAS_CHUNK]->(c)
+            {temporal_filter}
+            WHERE similarity > 0.3{doc_filter}
+            WITH c, d, similarity
+            {time_decay_clause}
+            RETURN c.id AS chunk_id,
+                   c.content AS content,
+                   c.metadata AS metadata,
+                   d.id AS document_id,
+                   d.filename AS filename,
+                   {score_field} AS score
+            ORDER BY {score_field} DESC
+            LIMIT $top_k
+            """
+
+            result = session.run(query, **params)
+            return [dict(record) for record in result]
+
+    def find_temporally_related_chunks(
+        self,
+        reference_doc_id: str,
+        time_window_days: int = 30,
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Find chunks from documents created around the same time.
+
+        Args:
+            reference_doc_id: Reference document ID
+            time_window_days: Time window in days (before and after)
+            top_k: Number of results to return
+
+        Returns:
+            List of chunks from temporally related documents
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                // Find reference document's date
+                MATCH (ref:Document {id: $ref_doc_id})-[:CREATED_AT]->(ref_date:Date)
+
+                // Find other documents within time window
+                MATCH (d:Document)-[:CREATED_AT]->(dt:Date)
+                WHERE d.id <> $ref_doc_id
+                  AND duration.between(date(ref_date.date), date(dt.date)).days <= $time_window_days
+                  AND duration.between(date(ref_date.date), date(dt.date)).days >= -$time_window_days
+
+                // Get chunks from those documents
+                MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+
+                // Calculate temporal proximity score
+                WITH c, d, dt, ref_date,
+                     abs(duration.between(date(ref_date.date), date(dt.date)).days) AS days_diff,
+                     1.0 / (1.0 + abs(duration.between(date(ref_date.date), date(dt.date)).days)) AS proximity_score
+
+                RETURN c.id AS chunk_id,
+                       c.content AS content,
+                       c.metadata AS metadata,
+                       d.id AS document_id,
+                       d.filename AS filename,
+                       dt.date AS created_date,
+                       days_diff,
+                       proximity_score AS score
+                ORDER BY proximity_score DESC
+                LIMIT $top_k
+                """,
+                ref_doc_id=reference_doc_id,
+                time_window_days=time_window_days,
+                top_k=top_k,
+            )
+            return [dict(record) for record in result]
+
+    def get_temporal_statistics(self) -> Dict[str, Any]:
+        """Get statistics about temporal distribution of documents.
+
+        Returns:
+            Dictionary with temporal statistics
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document)-[:CREATED_AT]->(dt:Date)
+                WITH dt.date AS date, count(d) AS doc_count
+                WITH min(date) AS earliest_date,
+                     max(date) AS latest_date,
+                     sum(doc_count) AS total_docs,
+                     collect({date: date, count: doc_count}) AS date_distribution
+                RETURN earliest_date, latest_date, total_docs, date_distribution
+                """
+            ).single()
+
+            if not result:
+                return {
+                    "earliest_date": None,
+                    "latest_date": None,
+                    "total_documents": 0,
+                    "date_distribution": [],
+                }
+
+            return {
+                "earliest_date": result["earliest_date"],
+                "latest_date": result["latest_date"],
+                "total_documents": result["total_docs"],
+                "date_distribution": result["date_distribution"],
+            }
 
     def update_document_precomputed_summary(self, doc_id: str) -> Dict[str, int]:
         """Compute and store lightweight precomputed counts on the Document node.
@@ -624,6 +931,9 @@ class GraphDB:
         )
 
         try:
+            # Extract content_hash from metadata to store as top-level property
+            content_hash = metadata.get("content_hash", "")
+            
             with self.session_scope() as session:
                 session.run(
                     """
@@ -632,6 +942,7 @@ class GraphDB:
                         c.embedding = $embedding,
                         c.chunk_index = $chunk_index,
                         c.offset = $offset,
+                        c.content_hash = $content_hash,
                         c += $metadata
                     WITH c
                     MATCH (d:Document {id: $doc_id})
@@ -643,6 +954,7 @@ class GraphDB:
                     embedding=embedding,
                     chunk_index=metadata.get("chunk_index", 0),
                     offset=metadata.get("offset", 0),
+                    content_hash=content_hash,
                     metadata=metadata,
                 )
         except Exception as e:
@@ -1149,6 +1461,158 @@ class GraphDB:
                 f"Deleted document {doc_id} and cleaned up {len(chunk_ids)} chunks and related entities"
             )
 
+    # ========== Incremental Document Update Methods ==========
+
+    def get_chunk_hashes_for_document(self, doc_id: str) -> Dict[str, str]:
+        """
+        Return {content_hash: chunk_id} mapping for a document.
+        
+        Used for incremental updates to identify which chunks already exist.
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
+                WHERE c.content_hash IS NOT NULL
+                RETURN c.content_hash as hash, c.id as chunk_id
+                """,
+                doc_id=doc_id,
+            )
+            return {record["hash"]: record["chunk_id"] for record in result if record["hash"]}
+
+    def get_document_chunking_params(self, doc_id: str) -> Optional[Dict[str, int]]:
+        """
+        Get the chunking parameters used when the document was originally ingested.
+        
+        Returns:
+            Dict with chunk_size_used and chunk_overlap_used, or None if not found.
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                RETURN d.chunk_size_used as chunk_size, d.chunk_overlap_used as chunk_overlap
+                """,
+                doc_id=doc_id,
+            )
+            record = result.single()
+            if record and record["chunk_size"] is not None:
+                return {
+                    "chunk_size_used": record["chunk_size"],
+                    "chunk_overlap_used": record["chunk_overlap"],
+                }
+            return None
+
+    def delete_chunks_with_entity_cleanup(self, chunk_ids: List[str]) -> Dict[str, int]:
+        """
+        Delete specific chunks with comprehensive entity cleanup.
+        
+        This method performs a targeted deletion of chunks while properly cleaning
+        up all related entities and relationships:
+        
+        1. Find entities ONLY referenced by these chunks (orphaned after deletion)
+        2. Delete those orphaned entities
+        3. Remove CONTAINS_ENTITY relationships from the chunks
+        4. Update Entity.source_chunks lists to remove references
+        5. Delete SIMILAR_TO relationships involving these chunks
+        6. Delete the chunks themselves
+        
+        Args:
+            chunk_ids: List of chunk IDs to delete
+            
+        Returns:
+            Dict with cleanup statistics:
+                - chunks_deleted: Number of chunks removed
+                - entities_deleted: Number of orphaned entities removed
+                - relationships_cleaned: Number of relationships removed
+                - source_chunks_updated: Number of entities whose source_chunks were updated
+        """
+        if not chunk_ids:
+            return {
+                "chunks_deleted": 0,
+                "entities_deleted": 0,
+                "relationships_cleaned": 0,
+                "source_chunks_updated": 0,
+            }
+
+        with self.session_scope() as session:
+            # 1. Update Entity.source_chunks lists to remove references to these chunks
+            source_update_result = session.run(
+                """
+                UNWIND $chunk_ids AS cid
+                MATCH (e:Entity)
+                WHERE cid IN coalesce(e.source_chunks, [])
+                SET e.source_chunks = [s IN coalesce(e.source_chunks, []) WHERE s <> cid]
+                RETURN count(DISTINCT e) as updated_count
+                """,
+                chunk_ids=chunk_ids,
+            ).single()
+            source_chunks_updated = source_update_result["updated_count"] if source_update_result else 0
+
+            # 2. Delete CONTAINS_ENTITY relationships from these chunks
+            contains_result = session.run(
+                """
+                MATCH (c:Chunk)-[r:CONTAINS_ENTITY]->(e:Entity)
+                WHERE c.id IN $chunk_ids
+                DELETE r
+                RETURN count(r) as deleted_count
+                """,
+                chunk_ids=chunk_ids,
+            ).single()
+            contains_deleted = contains_result["deleted_count"] if contains_result else 0
+
+            # 3. Delete SIMILAR_TO relationships involving these chunks
+            similar_result = session.run(
+                """
+                MATCH (c:Chunk)-[r:SIMILAR_TO]-()
+                WHERE c.id IN $chunk_ids
+                DELETE r
+                RETURN count(r) as deleted_count
+                """,
+                chunk_ids=chunk_ids,
+            ).single()
+            similar_deleted = similar_result["deleted_count"] if similar_result else 0
+
+            # 4. Delete orphaned entities (no remaining source_chunks and no CONTAINS_ENTITY)
+            orphan_result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE (coalesce(e.source_chunks, []) = [] OR e.source_chunks IS NULL)
+                AND NOT ( ()-[:CONTAINS_ENTITY]->(e) )
+                DETACH DELETE e
+                RETURN count(e) as deleted_count
+                """,
+            ).single()
+            entities_deleted = orphan_result["deleted_count"] if orphan_result else 0
+
+            # 5. Delete the chunks themselves
+            chunks_result = session.run(
+                """
+                MATCH (c:Chunk)
+                WHERE c.id IN $chunk_ids
+                DETACH DELETE c
+                RETURN count(c) as deleted_count
+                """,
+                chunk_ids=chunk_ids,
+            ).single()
+            chunks_deleted = chunks_result["deleted_count"] if chunks_result else 0
+
+            total_relationships = contains_deleted + similar_deleted
+
+            logger.info(
+                f"Deleted {chunks_deleted} chunks with cleanup: "
+                f"{entities_deleted} orphaned entities removed, "
+                f"{total_relationships} relationships removed, "
+                f"{source_chunks_updated} entities updated"
+            )
+
+            return {
+                "chunks_deleted": chunks_deleted,
+                "entities_deleted": entities_deleted,
+                "relationships_cleaned": total_relationships,
+                "source_chunks_updated": source_chunks_updated,
+            }
+
     def reset_document_entities(self, doc_id: str) -> Dict[str, int]:
         """Remove existing entity links for a document so extraction can be rerun cleanly."""
 
@@ -1517,6 +1981,11 @@ class GraphDB:
             "limit": max(1, min(limit, 1000)),
         }
 
+        # Bound the total number of materialized nodes used in the Cypher
+        # to avoid large transactions that can hit Neo4j memory limits.
+        # Choose a sensible cap relative to the requested `limit`.
+        params["max_nodes"] = min(max(25, params["limit"] * 3), 1000)
+
         if community_id is not None:
             filters.append("e.community_id = $community_id")
             params["community_id"] = community_id
@@ -1542,15 +2011,16 @@ class GraphDB:
             WITH collect(e)[0..$limit] AS selected
             UNWIND selected AS e
             OPTIONAL MATCH (e)-[r:RELATED_TO]-(n:Entity)
-            WITH collect(DISTINCT e) AS selectedNodes,
-                 collect(DISTINCT n) AS neighborNodes,
-                 collect(DISTINCT r) AS relatedEdges
-            WITH selectedNodes + neighborNodes AS rawNodes, relatedEdges
-            UNWIND rawNodes AS node
-            WITH collect(DISTINCT node) AS allNodes, relatedEdges
-            UNWIND allNodes AS node
-            OPTIONAL MATCH (node)-[rel:RELATED_TO]-()
-            WITH allNodes, relatedEdges, node, count(DISTINCT rel) AS degree
+              WITH collect(DISTINCT e) AS selectedNodes,
+                  collect(DISTINCT n) AS neighborNodes,
+                  collect(DISTINCT r)[0..100] AS relatedEdges
+              WITH selectedNodes + neighborNodes AS rawNodes, relatedEdges
+              UNWIND rawNodes AS node
+              WITH collect(DISTINCT node) AS allNodes, relatedEdges
+              WITH allNodes[0..$max_nodes] AS allNodes, relatedEdges
+              UNWIND allNodes AS node
+              OPTIONAL MATCH (node)-[rel:RELATED_TO]-()
+              WITH allNodes, relatedEdges, node, count(DISTINCT rel) AS degree
             OPTIONAL MATCH (node)<-[:CONTAINS_ENTITY]-(c:Chunk)<-[:HAS_CHUNK]-(d:Document)
             WITH
                 allNodes,
@@ -1592,7 +2062,7 @@ class GraphDB:
                     weight: coalesce(rel.strength, 0.5),
                     description: rel.description,
                     text_units: [tu IN textUnits WHERE tu IS NOT NULL]
-                }}) AS edges
+                }})[0..200] AS edges
         """
 
         # Ensure DB connection is available before opening a session
@@ -1715,6 +2185,22 @@ class GraphDB:
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.name)")
             
+            # Index for incremental document updates (content hash matching)
+            session.run("CREATE INDEX IF NOT EXISTS FOR (c:Chunk) ON (c.content_hash)")
+
+            # Create temporal indexes for performance
+            session.run("CREATE INDEX IF NOT EXISTS FOR (t:TimeNode) ON (t.date)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (t:Date) ON (t.date)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (t:Month) ON (t.year, t.month)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (t:Quarter) ON (t.year, t.quarter)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (t:Year) ON (t.year)")
+
+            # Create memory system indexes (User, Fact, Conversation nodes)
+            session.run("CREATE INDEX IF NOT EXISTS FOR (u:User) ON (u.id)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (f:Fact) ON (f.id)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (conv:Conversation) ON (conv.id)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (conv:Conversation) ON (conv.user_id, conv.created_at)")
+
             # Create fulltext index on chunk content for BM25-style keyword search
             try:
                 session.run(
@@ -1724,14 +2210,127 @@ class GraphDB:
                 logger.info("Chunk fulltext index created successfully")
             except Exception as e:
                 logger.warning(f"Failed to create chunk fulltext index (may already exist): {e}")
-            
-            logger.info("Database indexes created successfully")
+
+            logger.info("Database indexes created successfully (including temporal indexes)")
+
+    def estimate_total_chunks(self) -> int:
+        """Estimate total number of chunks in the database.
+
+        Returns:
+            Approximate count of chunks
+        """
+        try:
+            with self.session_scope() as session:
+                result = session.run(
+                    "MATCH (:Chunk) RETURN count(*) AS total"
+                ).single()
+                return result["total"] if result else 0
+        except Exception as e:
+            logger.error(f"Failed to estimate chunk count: {e}")
+            return 0
+
+    def retrieve_chunks_by_ids_with_similarity(
+        self,
+        query_embedding: List[float],
+        candidate_chunk_ids: List[str],
+        top_k: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Perform vector similarity search on a filtered set of candidate chunks.
+
+        This is used in two-stage retrieval where BM25 pre-filters candidates,
+        and then vector search runs only on those candidates for efficiency.
+
+        Args:
+            query_embedding: Query embedding vector
+            candidate_chunk_ids: List of chunk IDs to search within
+            top_k: Maximum number of results to return
+
+        Returns:
+            List of chunks with similarity scores, sorted by score descending
+        """
+        if not candidate_chunk_ids:
+            return []
+
+        try:
+            with self.session_scope() as session:
+                result = session.run(
+                    """
+                    MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+                    WHERE c.id IN $candidate_ids
+                    WITH c, d, gds.similarity.cosine(c.embedding, $query_embedding) AS similarity
+                    RETURN c.id as chunk_id, c.content as content, similarity,
+                           coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                    ORDER BY similarity DESC
+                    LIMIT $top_k
+                    """,
+                    query_embedding=query_embedding,
+                    candidate_ids=candidate_chunk_ids,
+                    top_k=top_k,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            # Fallback to Python-side cosine calculation if GDS unavailable
+            msg = str(e).lower()
+            if "unknown function 'gds.similarity.cosine'" in msg or 'gds.similarity.cosine' in msg:
+                logger.warning("GDS cosine function unavailable; falling back to Python cosine computation: %s", e)
+
+                # Query only the candidate chunks
+                with self.session_scope() as session:
+                    result = session.run(
+                        """
+                        MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+                        WHERE c.id IN $candidate_ids AND c.embedding IS NOT NULL
+                        RETURN c.id as chunk_id, c.content as content, c.embedding as embedding,
+                               coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                        """,
+                        candidate_ids=candidate_chunk_ids,
+                    )
+                    candidates = [record.data() for record in result]
+
+                # Compute cosine similarity in Python
+                def _cosine(a: List[float], b: List[float]) -> float:
+                    try:
+                        dot = 0.0
+                        na = 0.0
+                        nb = 0.0
+                        for x, y in zip(a, b):
+                            dot += x * y
+                            na += x * x
+                            nb += y * y
+                        if na == 0.0 or nb == 0.0:
+                            return 0.0
+                        return dot / ((na ** 0.5) * (nb ** 0.5))
+                    except Exception:
+                        return 0.0
+
+                scored = []
+                for row in candidates:
+                    emb = row.get("embedding")
+                    if not emb:
+                        continue
+                    try:
+                        sim = _cosine(query_embedding, emb)
+                    except Exception:
+                        sim = 0.0
+                    scored.append({
+                        "chunk_id": row.get("chunk_id"),
+                        "content": row.get("content"),
+                        "similarity": sim,
+                        "document_name": row.get("document_name"),
+                        "document_id": row.get("document_id"),
+                    })
+
+                scored.sort(key=lambda r: r.get("similarity", 0.0), reverse=True)
+                return scored[:top_k]
+            # Re-raise for other exceptions
+            raise
 
     def chunk_keyword_search(
         self,
         query: str,
         top_k: int = 10,
         allowed_document_ids: Optional[List[str]] = None,
+        fuzzy_distance: int = 0,
     ) -> List[Dict[str, Any]]:
         """Perform BM25-style keyword search on chunk content using fulltext index.
 
@@ -1739,11 +2338,23 @@ class GraphDB:
             query: Search query text
             top_k: Maximum number of results to return
             allowed_document_ids: Optional list of document IDs to restrict search
+            fuzzy_distance: Edit distance for fuzzy matching (0=exact, 1-2=fuzzy).
+                          Neo4j supports fuzzy with ~ operator (term~1 or term~2)
 
         Returns:
             List of chunks with keyword match scores
         """
         try:
+            # Apply fuzzy matching if requested
+            search_query = query
+            if fuzzy_distance > 0:
+                # Transform query to add fuzzy operator to each term
+                # Example: "authentication system" -> "authentication~2 system~2"
+                terms = query.split()
+                fuzzy_terms = [f"{term}~{fuzzy_distance}" for term in terms]
+                search_query = " ".join(fuzzy_terms)
+                logger.debug(f"Fuzzy search: '{query}' -> '{search_query}'")
+
             with self.session_scope() as session:
                 # Build Cypher query with optional document filter
                 if allowed_document_ids:
@@ -1764,7 +2375,7 @@ class GraphDB:
                     """
                     result = session.run(
                         cypher,
-                        query=query,
+                        query=search_query,
                         allowed_doc_ids=allowed_document_ids,
                         limit=top_k,
                     )
@@ -1783,7 +2394,7 @@ class GraphDB:
                     ORDER BY score DESC
                     LIMIT $limit
                     """
-                    result = session.run(cypher, query=query, limit=top_k)
+                    result = session.run(cypher, query=search_query, limit=top_k)
 
                 chunks = []
                 for record in result:
@@ -3466,6 +4077,485 @@ class GraphDB:
                 "file_path": file_path,
                 "mime_type": mime_type,
             }
+
+    # ============================================================
+    # Memory System: User Management
+    # ============================================================
+
+    def create_user(self, user_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a new User node.
+
+        Args:
+            user_id: Unique user identifier
+            metadata: Optional metadata (name, email, preferences, etc.)
+
+        Returns:
+            User data including id, created_at, and metadata
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MERGE (u:User {id: $user_id})
+                ON CREATE SET
+                    u.created_at = datetime(),
+                    u.metadata = $metadata
+                ON MATCH SET
+                    u.metadata = $metadata
+                RETURN u.id as user_id, u.created_at as created_at, u.metadata as metadata
+                """,
+                user_id=user_id,
+                metadata=metadata or {},
+            ).single()
+
+            if result:
+                return {
+                    "user_id": result["user_id"],
+                    "created_at": result["created_at"],
+                    "metadata": result["metadata"],
+                }
+            return {}
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get User node data.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            User data or None if not found
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (u:User {id: $user_id})
+                RETURN u.id as user_id, u.created_at as created_at, u.metadata as metadata
+                """,
+                user_id=user_id,
+            ).single()
+
+            if result:
+                return {
+                    "user_id": result["user_id"],
+                    "created_at": result["created_at"],
+                    "metadata": result["metadata"] or {},
+                }
+            return None
+
+    def update_user(self, user_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Update User node metadata.
+
+        Args:
+            user_id: User identifier
+            metadata: Updated metadata
+
+        Returns:
+            Updated user data
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (u:User {id: $user_id})
+                SET u.metadata = $metadata
+                RETURN u.id as user_id, u.created_at as created_at, u.metadata as metadata
+                """,
+                user_id=user_id,
+                metadata=metadata,
+            ).single()
+
+            if result:
+                return {
+                    "user_id": result["user_id"],
+                    "created_at": result["created_at"],
+                    "metadata": result["metadata"],
+                }
+            return {}
+
+    # ============================================================
+    # Memory System: User Facts (Preferences)
+    # ============================================================
+
+    def create_fact(
+        self,
+        user_id: str,
+        fact_id: str,
+        content: str,
+        importance: float = 0.5,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a Fact node linked to a User.
+
+        Facts represent user preferences, statements, or important information
+        extracted from conversations.
+
+        Args:
+            user_id: User identifier
+            fact_id: Unique fact identifier
+            content: Fact content/description
+            importance: Importance score (0.0-1.0)
+            metadata: Optional metadata (category, source, etc.)
+
+        Returns:
+            Fact data including id, content, importance
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (u:User {id: $user_id})
+                MERGE (f:Fact {id: $fact_id})
+                ON CREATE SET
+                    f.content = $content,
+                    f.importance = $importance,
+                    f.created_at = datetime(),
+                    f.metadata = $metadata
+                ON MATCH SET
+                    f.content = $content,
+                    f.importance = $importance,
+                    f.metadata = $metadata
+                MERGE (u)-[r:HAS_PREFERENCE]->(f)
+                RETURN f.id as fact_id, f.content as content, f.importance as importance,
+                       f.created_at as created_at, f.metadata as metadata
+                """,
+                user_id=user_id,
+                fact_id=fact_id,
+                content=content,
+                importance=importance,
+                metadata=metadata or {},
+            ).single()
+
+            if result:
+                return {
+                    "fact_id": result["fact_id"],
+                    "content": result["content"],
+                    "importance": result["importance"],
+                    "created_at": result["created_at"],
+                    "metadata": result["metadata"],
+                }
+            return {}
+
+    def get_user_facts(
+        self, user_id: str, min_importance: float = 0.0, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get all facts for a user, sorted by importance.
+
+        Args:
+            user_id: User identifier
+            min_importance: Minimum importance threshold
+            limit: Maximum number of facts to return
+
+        Returns:
+            List of facts ordered by importance descending
+        """
+        with self.session_scope() as session:
+            results = session.run(
+                """
+                MATCH (u:User {id: $user_id})-[:HAS_PREFERENCE]->(f:Fact)
+                WHERE f.importance >= $min_importance
+                RETURN f.id as fact_id, f.content as content, f.importance as importance,
+                       f.created_at as created_at, f.metadata as metadata
+                ORDER BY f.importance DESC
+                LIMIT $limit
+                """,
+                user_id=user_id,
+                min_importance=min_importance,
+                limit=limit,
+            )
+
+            facts = []
+            for record in results:
+                facts.append({
+                    "fact_id": record["fact_id"],
+                    "content": record["content"],
+                    "importance": record["importance"],
+                    "created_at": record["created_at"],
+                    "metadata": record["metadata"] or {},
+                })
+            return facts
+
+    def update_fact(
+        self,
+        fact_id: str,
+        content: Optional[str] = None,
+        importance: Optional[float] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Update a Fact node.
+
+        Args:
+            fact_id: Fact identifier
+            content: Updated content (if provided)
+            importance: Updated importance (if provided)
+            metadata: Updated metadata (if provided)
+
+        Returns:
+            Updated fact data
+        """
+        with self.session_scope() as session:
+            # Build SET clause dynamically based on what's provided
+            set_clauses = []
+            params = {"fact_id": fact_id}
+
+            if content is not None:
+                set_clauses.append("f.content = $content")
+                params["content"] = content
+            if importance is not None:
+                set_clauses.append("f.importance = $importance")
+                params["importance"] = importance
+            if metadata is not None:
+                set_clauses.append("f.metadata = $metadata")
+                params["metadata"] = metadata
+
+            if not set_clauses:
+                # Nothing to update, just return current data
+                result = session.run(
+                    """
+                    MATCH (f:Fact {id: $fact_id})
+                    RETURN f.id as fact_id, f.content as content, f.importance as importance,
+                           f.created_at as created_at, f.metadata as metadata
+                    """,
+                    fact_id=fact_id,
+                ).single()
+            else:
+                set_clause = ", ".join(set_clauses)
+                result = session.run(
+                    f"""
+                    MATCH (f:Fact {{id: $fact_id}})
+                    SET {set_clause}
+                    RETURN f.id as fact_id, f.content as content, f.importance as importance,
+                           f.created_at as created_at, f.metadata as metadata
+                    """,
+                    **params,
+                ).single()
+
+            if result:
+                return {
+                    "fact_id": result["fact_id"],
+                    "content": result["content"],
+                    "importance": result["importance"],
+                    "created_at": result["created_at"],
+                    "metadata": result["metadata"] or {},
+                }
+            return {}
+
+    def delete_fact(self, fact_id: str) -> bool:
+        """Delete a Fact node.
+
+        Args:
+            fact_id: Fact identifier
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (f:Fact {id: $fact_id})
+                DETACH DELETE f
+                RETURN count(f) as deleted_count
+                """,
+                fact_id=fact_id,
+            ).single()
+
+            return result and result["deleted_count"] > 0
+
+    # ============================================================
+    # Memory System: Conversation Summaries
+    # ============================================================
+
+    def create_conversation(
+        self,
+        user_id: str,
+        conversation_id: str,
+        title: str = "",
+        summary: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a Conversation summary node linked to a User.
+
+        Args:
+            user_id: User identifier
+            conversation_id: Unique conversation identifier
+            title: Conversation title
+            summary: Conversation summary (not full transcript)
+            metadata: Optional metadata (topics, key points, etc.)
+
+        Returns:
+            Conversation data
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (u:User {id: $user_id})
+                MERGE (conv:Conversation {id: $conversation_id})
+                ON CREATE SET
+                    conv.user_id = $user_id,
+                    conv.title = $title,
+                    conv.summary = $summary,
+                    conv.created_at = datetime(),
+                    conv.updated_at = datetime(),
+                    conv.metadata = $metadata
+                ON MATCH SET
+                    conv.title = $title,
+                    conv.summary = $summary,
+                    conv.updated_at = datetime(),
+                    conv.metadata = $metadata
+                MERGE (u)-[r:HAS_CONVERSATION]->(conv)
+                RETURN conv.id as conversation_id, conv.user_id as user_id,
+                       conv.title as title, conv.summary as summary,
+                       conv.created_at as created_at, conv.updated_at as updated_at,
+                       conv.metadata as metadata
+                """,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                title=title,
+                summary=summary,
+                metadata=metadata or {},
+            ).single()
+
+            if result:
+                return {
+                    "conversation_id": result["conversation_id"],
+                    "user_id": result["user_id"],
+                    "title": result["title"],
+                    "summary": result["summary"],
+                    "created_at": result["created_at"],
+                    "updated_at": result["updated_at"],
+                    "metadata": result["metadata"],
+                }
+            return {}
+
+    def get_user_conversations(
+        self, user_id: str, limit: int = 10, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get recent conversations for a user.
+
+        Args:
+            user_id: User identifier
+            limit: Maximum number of conversations to return
+            offset: Number of conversations to skip (for pagination)
+
+        Returns:
+            List of conversation summaries ordered by updated_at descending
+        """
+        with self.session_scope() as session:
+            results = session.run(
+                """
+                MATCH (u:User {id: $user_id})-[:HAS_CONVERSATION]->(conv:Conversation)
+                RETURN conv.id as conversation_id, conv.user_id as user_id,
+                       conv.title as title, conv.summary as summary,
+                       conv.created_at as created_at, conv.updated_at as updated_at,
+                       conv.metadata as metadata
+                ORDER BY conv.updated_at DESC
+                SKIP $offset
+                LIMIT $limit
+                """,
+                user_id=user_id,
+                limit=limit,
+                offset=offset,
+            )
+
+            conversations = []
+            for record in results:
+                conversations.append({
+                    "conversation_id": record["conversation_id"],
+                    "user_id": record["user_id"],
+                    "title": record["title"],
+                    "summary": record["summary"],
+                    "created_at": record["created_at"],
+                    "updated_at": record["updated_at"],
+                    "metadata": record["metadata"] or {},
+                })
+            return conversations
+
+    def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific conversation by ID.
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            Conversation data or None if not found
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (conv:Conversation {id: $conversation_id})
+                RETURN conv.id as conversation_id, conv.user_id as user_id,
+                       conv.title as title, conv.summary as summary,
+                       conv.created_at as created_at, conv.updated_at as updated_at,
+                       conv.metadata as metadata
+                """,
+                conversation_id=conversation_id,
+            ).single()
+
+            if result:
+                return {
+                    "conversation_id": result["conversation_id"],
+                    "user_id": result["user_id"],
+                    "title": result["title"],
+                    "summary": result["summary"],
+                    "created_at": result["created_at"],
+                    "updated_at": result["updated_at"],
+                    "metadata": result["metadata"] or {},
+                }
+            return None
+
+    def update_conversation(
+        self,
+        conversation_id: str,
+        title: Optional[str] = None,
+        summary: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Update a Conversation node.
+
+        Args:
+            conversation_id: Conversation identifier
+            title: Updated title (if provided)
+            summary: Updated summary (if provided)
+            metadata: Updated metadata (if provided)
+
+        Returns:
+            Updated conversation data
+        """
+        with self.session_scope() as session:
+            # Build SET clause dynamically
+            set_clauses = ["conv.updated_at = datetime()"]
+            params = {"conversation_id": conversation_id}
+
+            if title is not None:
+                set_clauses.append("conv.title = $title")
+                params["title"] = title
+            if summary is not None:
+                set_clauses.append("conv.summary = $summary")
+                params["summary"] = summary
+            if metadata is not None:
+                set_clauses.append("conv.metadata = $metadata")
+                params["metadata"] = metadata
+
+            set_clause = ", ".join(set_clauses)
+            result = session.run(
+                f"""
+                MATCH (conv:Conversation {{id: $conversation_id}})
+                SET {set_clause}
+                RETURN conv.id as conversation_id, conv.user_id as user_id,
+                       conv.title as title, conv.summary as summary,
+                       conv.created_at as created_at, conv.updated_at as updated_at,
+                       conv.metadata as metadata
+                """,
+                **params,
+            ).single()
+
+            if result:
+                return {
+                    "conversation_id": result["conversation_id"],
+                    "user_id": result["user_id"],
+                    "title": result["title"],
+                    "summary": result["summary"],
+                    "created_at": result["created_at"],
+                    "updated_at": result["updated_at"],
+                    "metadata": result["metadata"] or {},
+                }
+            return {}
 
     def clear_database(self) -> None:
         """Clear all data from the database."""

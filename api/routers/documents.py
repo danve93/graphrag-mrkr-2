@@ -7,11 +7,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from neo4j.exceptions import ServiceUnavailable
 
-from api.models import DocumentMetadataResponse, UpdateHashtagsRequest
+from api.models import DocumentMetadataResponse, UpdateHashtagsRequest, UpdateMetadataRequest
 from core.document_summarizer import document_summarizer
 from core.graph_db import graph_db
 from core.singletons import get_response_cache, ResponseKeyLock
@@ -486,7 +486,124 @@ async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequ
         raise HTTPException(status_code=500, detail="Failed to update hashtags") from exc
 
 
+@router.patch("/{document_id}/metadata")
+async def update_document_metadata(document_id: str, request: UpdateMetadataRequest):
+    """Update the metadata for a document."""
+    try:
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
 
+        # Update metadata
+        graph_db.update_document_metadata(doc_id=document_id, metadata=request.metadata)
+
+        return {"document_id": document_id, "metadata": request.metadata, "status": "success"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
+        logger.error("Failed to update metadata for %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update metadata") from exc
+
+
+
+
+
+# PUT endpoint for incremental document updates
+@router.put("/{document_id}")
+async def update_document_content(
+    document_id: str,
+    file: UploadFile = File(...),
+):
+    """
+    Update an existing document incrementally.
+    
+    This endpoint enables efficient document updates by:
+    - Only processing chunks that have changed (based on content hash)
+    - Preserving unchanged chunks and their entities
+    - Cleaning up orphaned entities from removed chunks
+    
+    Returns a summary of what changed (unchanged/added/removed counts).
+    
+    Note: If chunking parameters (chunk_size, chunk_overlap) have changed since
+    the document was first ingested, this will return an error. In that case,
+    delete and re-upload the document or reindex the corpus first.
+    """
+    from pathlib import Path
+    import tempfile
+    import shutil
+    from ingestion.document_processor import document_processor
+    
+    try:
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Save uploaded file to temp location
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "").suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            temp_path = Path(tmp.name)
+        
+        try:
+            # Call the incremental update method
+            result = await document_processor.update_document(
+                doc_id=document_id,
+                file_path=temp_path,
+                original_filename=file.filename,
+            )
+            
+            # Check for errors
+            if result.get("status") == "error":
+                error_type = result.get("error", "unknown")
+                if error_type == "chunking_params_changed":
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "chunking_params_changed",
+                            "message": result.get("message"),
+                            "stored_params": result.get("stored_params"),
+                            "current_params": result.get("current_params"),
+                            "options": [
+                                "Delete and re-upload the document",
+                                "Reindex the entire corpus with new parameters first"
+                            ]
+                        }
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=result.get("error", "Unknown error during update")
+                    )
+            
+            return {
+                "document_id": document_id,
+                "status": "success",
+                "changes": {
+                    "unchanged_chunks": result.get("unchanged_chunks", 0),
+                    "added_chunks": result.get("added_chunks", 0),
+                    "removed_chunks": result.get("removed_chunks", 0),
+                    "entities_removed": result.get("entities_removed", 0),
+                    "relationships_cleaned": result.get("relationships_cleaned", 0),
+                },
+                "processing_time": result.get("processing_time"),
+            }
+        finally:
+            # Clean up temp file
+            if temp_path.exists():
+                temp_path.unlink()
+                
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
+        logger.error("Failed to update document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update document") from exc
 
 
 # Generic document metadata route comes LAST to avoid catching sub-paths
@@ -526,6 +643,9 @@ async def get_document_metadata(document_id: str) -> DocumentMetadataResponse:
         return DocumentMetadataResponse(**resp)
     except ValueError:
         raise HTTPException(status_code=404, detail="Document not found") from None
+    except HTTPException:
+        # Propagate HTTP exceptions (e.g., 404) so the correct status is returned
+        raise
     except Exception as exc:  # pragma: no cover - defensive logging
         if isinstance(exc, ServiceUnavailable):
             raise

@@ -3,6 +3,7 @@ FastAPI backend for GraphRAG chat application.
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,7 +12,31 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from neo4j.exceptions import ServiceUnavailable
 
-from api.routers import chat, database, documents, graph, history, classification, chat_tuning, rag_tuning, jobs, prompts, structured_kg, feedback, documentation
+from api.routers import (
+    chat,
+    users,
+    database,
+    documents,
+    graph,
+    history,
+    classification,
+    chat_tuning,
+    rag_tuning,
+    jobs,
+    prompts,
+    structured_kg,
+    feedback,
+    documentation,
+    metrics,
+    memory,
+    trulens_metrics,
+    trulens_control,
+    ragas_metrics,
+    ragas_control,
+    system,
+)
+import api.routers.admin.api_keys as api_keys
+import api.routers.admin_user_management as admin_user_management
 from config.settings import settings
 from api import auth
 from core.singletons import get_graph_db_driver, cleanup_singletons
@@ -79,6 +104,30 @@ async def lifespan(app: FastAPI):
                 logger.warning("Failed to schedule FlashRank pre-warm at startup: %s", e)
     except Exception:
         logger.exception("Unexpected error while attempting to schedule FlashRank pre-warm")
+
+    # OpenTelemetry Tracing
+    if os.getenv("ENABLE_OPENTELEMETRY") == "1":
+        try:
+            from core.otel_config import initialize_opentelemetry
+            initialize_opentelemetry()
+            logger.info("OpenTelemetry distributed tracing enabled")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenTelemetry: {e}")
+
+    # TruLens continuous monitoring (opt-in)
+    if os.getenv("ENABLE_TRULENS_MONITORING") == "1":
+        try:
+            from evals.trulens.trulens_initializer import initialize_trulens
+            initialize_trulens()
+            logger.info("TruLens continuous monitoring enabled")
+        except ImportError:
+            logger.warning(
+                "TruLens not installed; skipping monitoring. "
+                "Install with: uv pip install -r evals/trulens/requirements-trulens.txt"
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize TruLens: {e}")
+
     yield
     logger.info("Shutting down GraphRAG API...")
     cleanup_singletons()
@@ -119,6 +168,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(database.router, prefix="/api/database", tags=["database"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
@@ -131,7 +181,16 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
 app.include_router(structured_kg.router, prefix="/api/structured-kg", tags=["structured-kg"])
 app.include_router(feedback.router, prefix="/api", tags=["feedback"])
+app.include_router(metrics.router, prefix="/api", tags=["metrics"])
+app.include_router(trulens_metrics.router, prefix="/api", tags=["trulens"])
+app.include_router(trulens_control.router, prefix="/api", tags=["trulens"])
+app.include_router(ragas_metrics.router, prefix="/api", tags=["ragas"])
+app.include_router(ragas_control.router, prefix="/api", tags=["ragas"])
+app.include_router(memory.router, tags=["memory"])
 app.include_router(documentation.router, tags=["documentation"])
+app.include_router(admin_user_management.router, prefix="/api/admin/user-management", tags=["admin"])
+app.include_router(api_keys.router, prefix="/api/admin/api-keys", tags=["admin"])
+app.include_router(system.router, prefix="/api", tags=["system"])
 
 
 @app.get("/api/health")
@@ -151,6 +210,7 @@ async def health_check():
         "enable_entity_extraction": settings.enable_entity_extraction,
         "enable_quality_scoring": settings.enable_quality_scoring,
         "flashrank": flashrank_status,
+        "opentelemetry_enabled": os.getenv("ENABLE_OPENTELEMETRY") == "1",
     }
 
 
@@ -172,5 +232,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
+        loop="asyncio",
         log_level=settings.log_level.lower(),
     )

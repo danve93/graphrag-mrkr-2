@@ -1,6 +1,6 @@
 import React from 'react';
-import { Tooltip, IconButton } from '@mui/material';
-import { Route as RouteIcon } from '@mui/icons-material';
+import { Tooltip } from '@mui/material';
+import { GitBranch } from 'lucide-react';
 import type { RoutingInfo } from '@/types';
 
 interface RoutingBadgeProps {
@@ -67,7 +67,7 @@ const RoutingBadge: React.FC<RoutingBadgeProps> = ({ routingInfo }) => {
           cursor: 'help',
         }}
       >
-        <RouteIcon style={{ fontSize: '14px' }} />
+        <GitBranch size={14} />
         <span>{categoryDisplay[0]}{categories.length > 1 ? ` +${categories.length - 1}` : ''}</span>
       </div>
     </Tooltip>

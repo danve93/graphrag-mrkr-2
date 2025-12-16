@@ -5,6 +5,10 @@ import socket
 
 import pytest
 
+# Enable e2e setup only when explicitly requested
+if os.environ.get("TEST_ENABLE_E2E", "0") in ("0", "", None):
+    pytest.skip("TEST_ENABLE_E2E not set; skipping e2e setup", allow_module_level=True)
+
 try:
     from testcontainers.core.container import DockerContainer
 except Exception as e:
@@ -17,6 +21,25 @@ def neo4j_container():
 
     Uses a randomly generated password to avoid relying on repo defaults.
     """
+    # If caller provided a reachable Neo4j URI, reuse it instead of starting a new container.
+    def _reuse_provided_uri() -> bool:
+        uri = os.environ.get("NEO4J_URI")
+        if not uri:
+            return False
+        parsed = uri.replace("neo4j://", "").replace("bolt://", "").split(":")
+        host = parsed[0]
+        port = int(parsed[1]) if len(parsed) > 1 else 7687
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return True
+        except Exception:
+            return False
+
+    if _reuse_provided_uri():
+        # Assume username/password already provided in env
+        yield
+        return
+
     password = secrets.token_urlsafe(12)
     auth = f"neo4j/{password}"
 

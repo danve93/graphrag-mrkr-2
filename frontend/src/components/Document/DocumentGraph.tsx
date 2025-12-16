@@ -1,4 +1,4 @@
- 'use client'
+'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
@@ -57,25 +57,25 @@ export default function DocumentGraph({
 
   const [canvasBg, setCanvasBg] = useState('#f8fafc')
 
-    const loadGraph = async () => {
-      try {
-        setLoading(true)
-        setError(null)
-        const data = await api.getGraph({ document_id: documentId, limit: 50 })
-        setGraphData(data)
-      } catch (err) {
-        console.error('Failed to load document graph:', err)
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load graph data'
-        // Check if it's the "too many entities" error
-        if (errorMessage.includes('entities') || errorMessage.includes('community_id')) {
-          setError('This document has too many entities for graph visualization. Please use the Communities tab to explore specific communities.')
-        } else {
-          setError(errorMessage)
-        }
-      } finally {
-        setLoading(false)
+  const loadGraph = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const data = await api.getGraph({ document_id: documentId, limit: 50 })
+      setGraphData(data)
+    } catch (err) {
+      console.error('Failed to load document graph:', err)
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load graph data'
+      // Check if it's the "too many entities" error
+      if (errorMessage.includes('entities') || errorMessage.includes('community_id')) {
+        setError('This document has too many entities for graph visualization. Please use the Communities tab to explore specific communities.')
+      } else {
+        setError(errorMessage)
       }
+    } finally {
+      setLoading(false)
     }
+  }
 
   useEffect(() => {
     if (documentId) {
@@ -205,12 +205,12 @@ export default function DocumentGraph({
     return (
       <div
         id={`graph-${documentId}`}
-        style={{ height: `${height}px` }}
-        className="flex items-center justify-center bg-secondary-50 dark:bg-secondary-900 rounded-lg border border-slate-200 dark:border-slate-700"
+        style={{ height: `${height}px`, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+        className="flex items-center justify-center rounded-lg"
       >
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-2" />
-          <p className="text-sm text-slate-600 dark:text-slate-400">Loading graph...</p>
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Loading graph...</p>
         </div>
       </div>
     )
@@ -233,10 +233,14 @@ export default function DocumentGraph({
   // If the graph returned no nodes for this document, show a clear CTA to process entities
   if (graphData && Array.isArray(graphData.nodes) && graphData.nodes.length === 0) {
     return (
-      <div id={`graph-${documentId}`} style={{ height: `${height}px` }} className="flex items-center justify-center bg-secondary-50 dark:bg-secondary-900 rounded-lg border border-slate-200 dark:border-slate-700">
+      <div
+        id={`graph-${documentId}`}
+        style={{ height: `${height}px`, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+        className="flex items-center justify-center rounded-lg"
+      >
         <div className="text-center p-6">
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-2">No entities extracted for this document</p>
-          <p className="text-xs text-slate-600 dark:text-slate-400 mb-4">Run entity extraction to populate the graph and community data.</p>
+          <p className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>No entities extracted for this document</p>
+          <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>Run entity extraction to populate the graph and community data.</p>
           <button
             type="button"
             onClick={async () => {
@@ -291,18 +295,24 @@ export default function DocumentGraph({
     <>
       <div id={`graph-${documentId}`} className="w-full grid grid-cols-4 gap-4 min-h-[250px]" style={{ height: `${computedHeight}px` }}>
         {/* Left sidebar: filters (1 column) */}
-        <div className="col-span-1 bg-white dark:bg-secondary-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 overflow-y-auto">
+        <div
+          className="col-span-1 rounded-lg p-4 overflow-y-auto"
+          style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+        >
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold">Filters</h3>
-            <button className="text-xs text-blue-600 dark:text-blue-400 underline" onClick={clearFilters}>Reset</button>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Filters</h3>
+            <button className="text-xs underline" style={{ color: 'var(--accent-primary)' }} onClick={clearFilters}>Reset</button>
           </div>
 
           {/* Node Types Dropdown */}
           <div className="mb-4">
-            <label className="block text-xs font-medium mb-2">Node Types</label>
-            <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-600 rounded p-2">
+            <label className="block text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Node Types</label>
+            <div
+              className="space-y-2 max-h-48 overflow-y-auto rounded p-2"
+              style={{ border: '1px solid var(--border)' }}
+            >
               {availableTypes.map((t) => (
-                <label key={t} className="flex items-center text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-1 rounded">
+                <label key={t} className="flex items-center text-xs cursor-pointer p-1 rounded" style={{ color: 'var(--text-primary)' }}>
                   <input
                     type="checkbox"
                     checked={selectedTypes.has(t)}
@@ -318,10 +328,13 @@ export default function DocumentGraph({
           {/* Communities Dropdown */}
           {availableCommunities.length > 0 && (
             <div>
-              <label className="block text-xs font-medium mb-2">Communities</label>
-              <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-600 rounded p-2">
+              <label className="block text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Communities</label>
+              <div
+                className="space-y-2 max-h-48 overflow-y-auto rounded p-2"
+                style={{ border: '1px solid var(--border)' }}
+              >
                 {availableCommunities.map((c) => (
-                  <label key={`${String(c)}`} className="flex items-center text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-1 rounded">
+                  <label key={`${String(c)}`} className="flex items-center text-xs cursor-pointer p-1 rounded" style={{ color: 'var(--text-primary)' }}>
                     <input
                       type="checkbox"
                       checked={selectedCommunities.has(c)}
@@ -340,7 +353,10 @@ export default function DocumentGraph({
         </div>
 
         {/* Right: graph view (3 columns) */}
-        <div className="col-span-3 relative bg-secondary-50 dark:bg-secondary-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div
+          className="col-span-3 relative rounded-lg overflow-hidden"
+          style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+        >
           <ForceGraph3D
             graphData={graphPayload}
             nodeLabel={(node: any) => `${node.name} (${node.type})`}
@@ -355,12 +371,11 @@ export default function DocumentGraph({
             height={computedHeight}
             {...({} as any)}
           />
-          
+
           {/* Node details panel with slide-in animation */}
-          <div 
-            className={`absolute bottom-16 left-3 z-30 w-64 p-3 bg-white/95 dark:bg-secondary-800 rounded-md shadow-md text-xs transition-all duration-200 ease-out ${
-              selectedNode ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0 pointer-events-none'
-            }`}
+          <div
+            className={`absolute bottom-16 left-3 z-30 w-64 p-3 bg-white/95 dark:bg-secondary-800 rounded-md shadow-md text-xs transition-all duration-200 ease-out ${selectedNode ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0 pointer-events-none'
+              }`}
           >
             {selectedNode && (
               <>
@@ -405,7 +420,7 @@ export default function DocumentGraph({
               </>
             )}
           </div>
-          
+
           {/* Expand button */}
           <div className="absolute top-2 right-2 z-20">
             <button
@@ -415,9 +430,12 @@ export default function DocumentGraph({
               Expand
             </button>
           </div>
-          
+
           {/* Stats bar pinned to bottom overlay */}
-          <div className="absolute bottom-0 left-0 right-0 z-10 text-xs text-slate-500 dark:text-slate-400 p-2 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-secondary-800/90 backdrop-blur-sm">
+          <div
+            className="absolute bottom-0 left-0 right-0 z-10 text-xs p-2 backdrop-blur-sm"
+            style={{ color: 'var(--text-secondary)', borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+          >
             <span>{graphData.nodes.length} entities</span>
             {' · '}
             <span>{graphData.edges.length} relationships</span>

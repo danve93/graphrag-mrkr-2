@@ -2,6 +2,229 @@
   "default_llm_model": "gpt-4o-mini",
   "sections": [
     {
+      "key": "content_filtering",
+      "label": "Content Filtering",
+      "description": "Pre-filter low-quality content before embedding to reduce costs by 50-70%.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_content_filtering",
+          "label": "Enable Content Filtering",
+          "value": false,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable heuristic-based filtering of low-quality chunks before embedding. Reduces embedding costs by 50-70% on noisy data by filtering repetitive text, navigation menus, boilerplate, etc. No LLM calls required."
+        },
+        {
+          "key": "content_filter_min_length",
+          "label": "Min Chunk Length",
+          "value": 50,
+          "options": null,
+          "min": 10.0,
+          "max": 500.0,
+          "step": 10.0,
+          "type": "slider",
+          "tooltip": "Minimum chunk length in characters. Filters out very short chunks that typically lack context. Recommended: 50-100 characters."
+        },
+        {
+          "key": "content_filter_unique_ratio",
+          "label": "Unique Word Ratio",
+          "value": 0.3,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum ratio of unique words (0.0-1.0). Filters repetitive chunks like 'Loading... Loading... Loading...'. Recommended: 0.2-0.4."
+        },
+        {
+          "key": "content_filter_max_special_char_ratio",
+          "label": "Max Special Char Ratio",
+          "value": 0.5,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Maximum ratio of special characters (0.0-1.0). Filters chunks with excessive symbols, often navigation or formatting artifacts. Recommended: 0.4-0.6."
+        },
+        {
+          "key": "content_filter_min_alphanumeric_ratio",
+          "label": "Min Alphanumeric Ratio",
+          "value": 0.3,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum ratio of alphanumeric characters (0.0-1.0). Ensures chunks contain meaningful text. Recommended: 0.3-0.5."
+        },
+        {
+          "key": "content_filter_enable_conversation",
+          "label": "Filter Low-Quality Conversations",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable conversation thread quality filtering. Removes unengaged threads (e.g., 'Thanks!', 'Bump', 'Anyone?') that lack substantive content."
+        },
+        {
+          "key": "content_filter_enable_structured",
+          "label": "Filter Empty Structured Data",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable structured data quality filtering. Removes empty tables, single-column tables, and sparse spreadsheet data with low information density."
+        },
+        {
+          "key": "content_filter_enable_code",
+          "label": "Filter Low-Quality Code",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable code quality filtering. Removes comment-only files, auto-generated code (like package-lock.json), and minified code with no semantic value."
+        }
+      ]
+    },
+    {
+      "key": "temporal_retrieval",
+      "label": "Temporal Retrieval",
+      "description": "Time-based filtering and time-decay scoring for recent document prioritization.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_temporal_filtering",
+          "label": "Enable Temporal Filtering",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable time-based document retrieval and filtering. Supports queries like 'documents from last week' and prioritizes recent content with time-decay scoring."
+        },
+        {
+          "key": "default_time_decay_weight",
+          "label": "Time Decay Weight",
+          "value": 0.2,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Default weight for time-decay scoring (0.0-1.0). Higher values give more preference to recent documents. 0.0 = no time decay, 1.0 = maximum recency bias. Recommended: 0.1-0.3 for balanced results."
+        },
+        {
+          "key": "temporal_window_days",
+          "label": "Temporal Window (days)",
+          "value": 30,
+          "options": null,
+          "min": 1.0,
+          "max": 365.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Default time window in days for temporal correlation queries (e.g., 'what happened around the same time'). Recommended: 7-30 days for most use cases."
+        }
+      ]
+    },
+    {
+      "key": "multi_stage_retrieval",
+      "label": "Multi-Stage Retrieval",
+      "description": "Two-stage retrieval: fast BM25 pre-filter + vector search on candidates (10x speedup at 5K+ docs).",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_two_stage_retrieval",
+          "label": "Enable Two-Stage Retrieval",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable two-stage retrieval: Stage 1 uses fast BM25 keyword search to narrow candidates, Stage 2 applies expensive vector similarity only to filtered set. Provides 5-10x speedup at 5K+ documents with minimal quality loss."
+        },
+        {
+          "key": "two_stage_threshold_docs",
+          "label": "Activation Threshold (docs)",
+          "value": 5000,
+          "options": null,
+          "min": 1000.0,
+          "max": 50000.0,
+          "step": 1000.0,
+          "type": "slider",
+          "tooltip": "Minimum corpus size (document count) to automatically activate two-stage retrieval. Below this threshold, uses standard vector search. Recommended: 3K-10K documents."
+        },
+        {
+          "key": "two_stage_multiplier",
+          "label": "BM25 Candidate Multiplier",
+          "value": 10,
+          "options": null,
+          "min": 3.0,
+          "max": 20.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Multiplier for BM25 candidate count (top_k * multiplier). Higher values improve recall but increase Stage 2 cost. If BM25 returns no matches, automatically falls back to full vector search. Recommended: 8-15."
+        }
+      ]
+    },
+    {
+      "key": "fuzzy_matching",
+      "label": "Fuzzy Matching",
+      "description": "Spelling-based fuzzy search for technical terms, typo correction, and identifier matching.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_fuzzy_matching",
+          "label": "Enable Fuzzy Matching",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable fuzzy matching for technical terms and typo correction using Neo4j fuzzy search (~). Automatically detects technical queries (snake_case, IDs, error codes) and applies edit-distance matching. Handles queries like 'user_acount' → 'user_account'."
+        },
+        {
+          "key": "max_fuzzy_distance",
+          "label": "Max Fuzzy Distance",
+          "value": 2,
+          "options": null,
+          "min": 1.0,
+          "max": 2.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Maximum edit distance for fuzzy matching (1-2 recommended). Distance 1 = single character typo (authntication→authentication), Distance 2 = two typos (athentication→authentication). Higher values increase false positives. Neo4j supports max distance of 2."
+        },
+        {
+          "key": "fuzzy_confidence_threshold",
+          "label": "Fuzzy Confidence Threshold",
+          "value": 0.5,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum confidence (0.0-1.0) to enable fuzzy matching for a query. Based on technical pattern detection (snake_case, IDs, config keys, error codes, file paths). Higher values ensure fuzzy only applies to clearly technical queries."
+        }
+      ]
+    },
+    {
       "key": "retrieval_fusion",
       "label": "Retrieval Fusion",
       "description": "Combine multiple ranked lists (vector, entity, keyword, paths) using Reciprocal Rank Fusion.",
@@ -77,6 +300,70 @@
       ]
     },
     {
+      "key": "query_analysis",
+      "label": "Query Analysis & Expansion",
+      "description": "Intelligent query expansion to handle abbreviations, synonyms, and improve recall.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_query_expansion",
+          "label": "Enable Query Expansion",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Automatically expand queries with abbreviations, synonyms, and related terms to improve recall. Uses 120+ technical abbreviation mappings (API→Application Programming Interface) plus optional LLM-based synonym expansion."
+        },
+        {
+          "key": "query_expansion_threshold",
+          "label": "Expansion Threshold",
+          "value": 3,
+          "options": null,
+          "min": 1.0,
+          "max": 10.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Trigger query expansion when initial retrieval returns fewer than this many results. Lower values expand more aggressively. Recommended: 3-5 for balanced recall/precision."
+        },
+        {
+          "key": "max_expansions",
+          "label": "Max Expansions",
+          "value": 5,
+          "options": null,
+          "min": 1.0,
+          "max": 10.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Maximum number of expansion terms to generate per query. Higher values increase recall but may introduce noise. Recommended: 3-5 terms."
+        },
+        {
+          "key": "expansion_penalty",
+          "label": "Expansion Score Penalty",
+          "value": 0.7,
+          "options": null,
+          "min": 0.1,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Score multiplier applied to chunks retrieved from expanded terms (0.0-1.0). Lower values reduce expansion noise. Recommended: 0.6-0.8 to ensure original query results rank higher."
+        },
+        {
+          "key": "use_llm_expansion",
+          "label": "Use LLM for Expansion",
+          "value": false,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable LLM-based synonym generation for broader coverage (adds 200-500ms latency). Rule-based abbreviation expansion is always enabled. Disable for faster queries."
+        }
+      ]
+    },
+    {
       "key": "reranking",
       "label": "Reranking",
       "description": "Configure FlashRank reranking to refine top candidates.",
@@ -145,33 +432,44 @@
       ]
     },
     {
-      "key": "query_analysis",
-      "label": "Query Analysis",
-      "description": "Intelligent query routing and expansion to optimize retrieval strategy.",
+      "key": "quality_monitoring",
+      "label": "Quality Monitoring",
+      "description": "Continuous retrieval quality monitoring with automatic alerting on degradation.",
       "llm_override_enabled": false,
       "llm_override_value": null,
       "parameters": [
         {
-          "key": "enable_query_expansion",
-          "label": "Enable Query Expansion",
-          "value": false,
+          "key": "enable_quality_monitoring",
+          "label": "Enable Quality Monitoring",
+          "value": true,
           "options": null,
           "min": null,
           "max": null,
           "step": null,
           "type": "toggle",
-          "tooltip": "When results are sparse, automatically generate synonyms and related terms to expand the query and improve recall. Uses LLM for term generation."
+          "tooltip": "Enable continuous monitoring of retrieval quality metrics (quality scores, latency, cache hit rate, error rate) with automatic baseline calculation and alerting. Tracks metrics in a sliding window with <1ms overhead per query."
         },
         {
-          "key": "query_expansion_threshold",
-          "label": "Expansion Threshold",
-          "value": 3,
+          "key": "quality_monitor_window_size",
+          "label": "Monitor Window Size",
+          "value": 1000,
           "options": null,
-          "min": 1.0,
-          "max": 10.0,
-          "step": 1.0,
+          "min": 100.0,
+          "max": 10000.0,
+          "step": 100.0,
           "type": "slider",
-          "tooltip": "Trigger query expansion when initial retrieval returns fewer than this many results. Lower values expand more aggressively."
+          "tooltip": "Number of queries to track in the sliding window. Larger windows provide more stable metrics but use more memory. Baseline is calculated from first 100 queries. Recommended: 500-2000 queries."
+        },
+        {
+          "key": "quality_alert_threshold",
+          "label": "Alert Threshold",
+          "value": 0.7,
+          "options": null,
+          "min": 0.3,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Quality drop threshold (0.0-1.0) for triggering alerts. Alerts trigger when current quality < (threshold * baseline). Example: 0.7 = alert when quality drops below 70% of baseline. Critical alerts at <50% baseline."
         }
       ]
     },
@@ -346,7 +644,7 @@
           "type": "toggle",
           "tooltip": "Enable strict validation of tuple format output structure and field requirements. Recommended for production to ensure data quality."
         },
-        
+
         {
           "key": "tuple_max_description_length",
           "label": "Tuple Max Description Length",
@@ -602,6 +900,90 @@
           "step": 0.5,
           "type": "slider",
           "tooltip": "Maximum delay in seconds between embedding API requests during exponential backoff. Caps retry delays."
+        }
+      ]
+    },
+    {
+      "key": "client_side_vector_search",
+      "label": "Client-Side Vector Search",
+      "description": "Pre-computed embeddings for static entities with in-memory matching (10-100x faster).",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_static_entity_matching",
+          "label": "Enable Static Entity Matching",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable client-side vector matching for static entities (categories, types) using precomputed embeddings. Performs in-memory cosine similarity matching with 5-10ms latency vs 200-500ms for LLM routing. Ideal for static taxonomies <50MB that change infrequently."
+        },
+        {
+          "key": "static_matching_min_similarity",
+          "label": "Min Similarity Threshold",
+          "value": 0.6,
+          "options": null,
+          "min": 0.3,
+          "max": 0.95,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum cosine similarity (0.0-1.0) for static entity matches. Lower values are more permissive. Falls back to LLM routing when similarity is below threshold. Recommended: 0.5-0.7 for balanced accuracy."
+        }
+      ]
+    },
+    {
+      "key": "layered_memory",
+      "label": "Layered Memory System",
+      "description": "4-layer memory architecture for user context and conversation continuity (80% token reduction).",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_memory_system",
+          "label": "Enable Memory System",
+          "value": false,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable 4-layer memory architecture: Session metadata → User facts → Conversation summaries → Current messages. Provides 80%+ token reduction for long conversations and enables cross-conversation continuity. Disabled by default for backward compatibility."
+        },
+        {
+          "key": "memory_max_facts",
+          "label": "Max User Facts",
+          "value": 20,
+          "options": null,
+          "min": 5.0,
+          "max": 100.0,
+          "step": 5.0,
+          "type": "slider",
+          "tooltip": "Maximum number of user facts (preferences, context) to load per session. Facts are stored as graph nodes and ranked by importance. Higher values provide more context but increase token usage. Recommended: 10-30 facts."
+        },
+        {
+          "key": "memory_max_conversations",
+          "label": "Max Conversation Summaries",
+          "value": 5,
+          "options": null,
+          "min": 0.0,
+          "max": 20.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Maximum number of past conversation summaries to load. Summaries are lightweight titles + key points, not full transcripts. 0 = current session only. Recommended: 3-10 for cross-conversation continuity."
+        },
+        {
+          "key": "memory_min_fact_importance",
+          "label": "Min Fact Importance",
+          "value": 0.3,
+          "options": null,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.05,
+          "type": "slider",
+          "tooltip": "Minimum importance threshold (0.0-1.0) for facts to be loaded. Acts as quality filter to exclude low-value facts. Lower values include more facts. Recommended: 0.2-0.5 for balanced context."
         }
       ]
     }

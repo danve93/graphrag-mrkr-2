@@ -45,11 +45,11 @@ async def get_clustered_graph(
     # tab or by filtering by `community_id`.
     if document_id:
         # Conservative default for document-scoped visualizations
-        limit = min(limit, 50)
+        limit = min(limit, 25)
     else:
         # For global graph queries, enforce a low default when unfiltered
         if community_id is None and node_type is None:
-            limit = min(limit, 50)
+            limit = min(limit, 25)
 
     try:
         graph = graph_db.get_clustered_graph(

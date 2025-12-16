@@ -25,6 +25,84 @@ class RoutingMetrics:
         self.failure_points: defaultdict[str, int] = defaultdict(int)
 
         self.total_queries: int = 0
+        self._metrics_file = "data/routing_metrics.json"
+        
+        # Load persisted metrics if available
+        self.load_metrics()
+
+    def load_metrics(self):
+        """Load metrics from JSON file."""
+        import json
+        import os
+        
+        if not os.path.exists(self._metrics_file):
+            return
+            
+        try:
+            with open(self._metrics_file, 'r') as f:
+                data = json.load(f)
+                
+            self.total_queries = data.get("total_queries", 0)
+            self.routing_latency = data.get("routing_latency", [])
+            self.routing_accuracy = data.get("routing_accuracy", [])
+            self.category_usage = Counter(data.get("category_usage", {}))
+            self.fallback_triggered = data.get("fallback_triggered", 0)
+            self.multi_category_queries = data.get("multi_category_queries", 0)
+            self.cache_hits = data.get("cache_hits", 0)
+            self.cache_misses = data.get("cache_misses", 0)
+            self.failure_points = defaultdict(int, data.get("failure_points", {}))
+            
+            logger.info(f"Loaded routing metrics from {self._metrics_file}")
+        except Exception as e:
+            logger.error(f"Failed to load routing metrics: {e}")
+
+    def save_metrics(self):
+        """Save metrics to JSON file."""
+        import json
+        import os
+        
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self._metrics_file), exist_ok=True)
+            
+            data = {
+                "total_queries": self.total_queries,
+                "routing_latency": self.routing_latency,
+                "routing_accuracy": self.routing_accuracy,
+                "category_usage": dict(self.category_usage),
+                "fallback_triggered": self.fallback_triggered,
+                "multi_category_queries": self.multi_category_queries,
+                "cache_hits": self.cache_hits,
+                "cache_misses": self.cache_misses,
+                "failure_points": dict(self.failure_points)
+            }
+            
+            with open(self._metrics_file, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+        except Exception as e:
+            logger.error(f"Failed to save routing metrics: {e}")
+
+    def clear_metrics(self):
+        """Reset all metrics and clear persistence file."""
+        import os
+        
+        self.routing_latency = []
+        self.routing_accuracy = []
+        self.category_usage = Counter()
+        self.fallback_triggered = 0
+        self.multi_category_queries = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.failure_points = defaultdict(int)
+        self.total_queries = 0
+        
+        try:
+            if os.path.exists(self._metrics_file):
+                os.remove(self._metrics_file)
+            logger.info("Cleared routing metrics")
+        except Exception as e:
+            logger.error(f"Failed to clear routing metrics file: {e}")
 
     def record_routing(
         self,
@@ -52,6 +130,9 @@ class RoutingMetrics:
 
         if fallback_used:
             self.fallback_triggered += 1
+            
+        # Save after update
+        self.save_metrics()
 
     def record_failure_point(self, fp_type: str, details: Dict[str, Any]):
         """
@@ -61,11 +142,13 @@ class RoutingMetrics:
         details: context about the failure
         """
         self.failure_points[fp_type] += 1
+        self.save_metrics()
         logger.warning(f"Failure Point {fp_type} detected: {details}")
 
     def record_user_feedback(self, correct: bool):
         """Record user feedback on routing accuracy."""
         self.routing_accuracy.append(1.0 if correct else 0.0)
+        self.save_metrics()
 
     def get_stats(self) -> Dict[str, Any]:
         """Get comprehensive routing statistics."""

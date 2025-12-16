@@ -123,9 +123,12 @@ class DocumentRetriever:
         top_k: int = 5,
         allowed_document_ids: Optional[List[str]] = None,
         query_embedding: Optional[List[float]] = None,
+        time_decay_weight: float = 0.0,
+        temporal_window: Optional[int] = None,
+        fuzzy_distance: int = 0,
     ) -> List[Dict[str, Any]]:
         """
-        Traditional chunk-based retrieval using vector similarity.
+        Traditional chunk-based retrieval using vector similarity with optional temporal filtering.
 
         Args:
             query: Original user query (for logging)
@@ -133,6 +136,9 @@ class DocumentRetriever:
             top_k: Number of similar chunks to retrieve
             allowed_document_ids: Optional list of document IDs to restrict retrieval
             query_embedding: Pre-computed query embedding (to avoid recomputation)
+            time_decay_weight: Weight for time-decay scoring (0.0-1.0)
+            temporal_window: Time window in days for temporal filtering
+            fuzzy_distance: Edit distance for fuzzy matching (0=exact, 1-2=fuzzy)
 
         Returns:
             List of similar chunks with metadata
@@ -140,19 +146,85 @@ class DocumentRetriever:
         try:
             # Use search_query if provided, otherwise fall back to query
             effective_query = search_query if search_query is not None else query
-            
+
             # Generate query embedding if not provided
             if query_embedding is None:
                 query_embedding = embedding_manager.get_embedding(effective_query)
-            
-            # Perform vector similarity search with larger top_k to allow filtering
-            search_limit = top_k * 3
-            if allowed_document_ids:
-                search_limit = max(search_limit, top_k * 5)
 
-            similar_chunks = graph_db.vector_similarity_search(
-                query_embedding, search_limit
-            )
+            # Determine if two-stage retrieval should be used
+            use_two_stage = False
+            if settings.enable_two_stage_retrieval:
+                corpus_size = graph_db.estimate_total_chunks()
+                use_two_stage = corpus_size >= settings.two_stage_threshold_docs
+                if use_two_stage:
+                    logger.info(
+                        f"Using two-stage retrieval: corpus_size={corpus_size}, "
+                        f"threshold={settings.two_stage_threshold_docs}"
+                    )
+
+            # Perform retrieval using two-stage or standard approach
+            if use_two_stage:
+                # Stage 1: BM25 keyword search to get candidates
+                candidate_count = top_k * settings.two_stage_multiplier
+                logger.debug(f"Stage 1: BM25 search for {candidate_count} candidates")
+
+                keyword_results = graph_db.chunk_keyword_search(
+                    query=effective_query,
+                    top_k=candidate_count,
+                    allowed_document_ids=allowed_document_ids,
+                    fuzzy_distance=fuzzy_distance,
+                )
+
+                candidate_chunk_ids = [chunk["chunk_id"] for chunk in keyword_results]
+                logger.debug(f"Stage 1 complete: {len(candidate_chunk_ids)} candidates from BM25")
+
+                # Stage 2: Vector search only on BM25 candidates
+                if candidate_chunk_ids:
+                    logger.debug(f"Stage 2: Vector search on {len(candidate_chunk_ids)} candidates")
+                    search_limit = top_k * 3  # Allow some buffer for filtering
+
+                    similar_chunks = graph_db.retrieve_chunks_by_ids_with_similarity(
+                        query_embedding=query_embedding,
+                        candidate_chunk_ids=candidate_chunk_ids,
+                        top_k=search_limit,
+                    )
+                    logger.debug(f"Stage 2 complete: {len(similar_chunks)} chunks with similarity scores")
+                else:
+                    logger.warning("Stage 1 returned no candidates, falling back to full vector search")
+                    similar_chunks = graph_db.vector_similarity_search(
+                        query_embedding, top_k * 3
+                    )
+            else:
+                # Standard retrieval path
+                search_limit = top_k * 3
+                if allowed_document_ids:
+                    search_limit = max(search_limit, top_k * 5)
+
+                # Use temporal filtering if enabled and temporal parameters provided
+                use_temporal = (
+                    settings.enable_temporal_filtering
+                    and (time_decay_weight > 0 or temporal_window is not None)
+                )
+
+                if use_temporal:
+                    # Calculate date range if temporal window is specified
+                    from datetime import datetime, timedelta, timezone
+                    after_date = None
+                    if temporal_window:
+                        after_date = (datetime.now(timezone.utc) - timedelta(days=temporal_window)).strftime("%Y-%m-%d")
+                        logger.info(f"Using temporal filtering: after_date={after_date}, time_decay_weight={time_decay_weight}")
+
+                    similar_chunks = graph_db.retrieve_chunks_with_temporal_filter(
+                        query_embedding,
+                        top_k=search_limit,
+                        after_date=after_date,
+                        time_decay_weight=time_decay_weight,
+                        allowed_document_ids=allowed_document_ids,
+                    )
+                else:
+                    similar_chunks = graph_db.vector_similarity_search(
+                        query_embedding, search_limit
+                    )
 
             # Enforce document restriction if provided
             similar_chunks = self._filter_chunks_by_documents(
@@ -897,9 +969,30 @@ class DocumentRetriever:
             
             logger.info(f"Final counts: chunk={chunk_count}, entity={entity_count}, path={path_count}, keyword={keyword_count}")
 
+            # Extract temporal parameters from query analysis
+            time_decay_weight = query_analysis.get("time_decay_weight", 0.0)
+            temporal_window = query_analysis.get("temporal_window")
+            is_temporal = query_analysis.get("is_temporal", False)
+
+            # Extract fuzzy matching parameters from query analysis
+            fuzzy_distance = query_analysis.get("fuzzy_distance", 0)
+            is_technical = query_analysis.get("is_technical", False)
+
+            if is_temporal:
+                logger.info(f"Temporal query detected: time_decay_weight={time_decay_weight}, window={temporal_window} days")
+
+            if is_technical:
+                logger.info(f"Technical query detected: fuzzy_distance={fuzzy_distance}")
+
             # Get results from different approaches using search_query
             chunk_results = await self.chunk_based_retrieval(
-                query, search_query, chunk_count, allowed_document_ids=allowed_document_ids
+                query,
+                search_query,
+                chunk_count,
+                allowed_document_ids=allowed_document_ids,
+                time_decay_weight=time_decay_weight,
+                temporal_window=temporal_window,
+                fuzzy_distance=fuzzy_distance,
             )
             entity_results = await self.entity_based_retrieval(
                 query, search_query, entity_count, allowed_document_ids=allowed_document_ids

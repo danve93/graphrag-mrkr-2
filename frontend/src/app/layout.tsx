@@ -3,7 +3,7 @@ import './globals.css'
 import ToastContainer from '@/components/Toast/ToastContainer'
 import { ThemeProvider } from '@/components/Theme/ThemeProvider'
 import StatusIndicator from '@/components/Theme/StatusIndicator'
-import BottomDock from '@/components/Navigation/BottomDock'
+import ConditionalBottomDock from '@/components/Navigation/ConditionalBottomDock'
 import KeyboardShortcutHint from '@/components/Utils/KeyboardShortcutHint'
 import fs from 'fs'
 import path from 'path'
@@ -24,9 +24,9 @@ export const metadata: Metadata = {
   description: branding.description,
   icons: {
     icon: [
-      { 
+      {
         url: branding.use_image && branding.image_path ? branding.image_path : '/favicon.svg',
-        type: 'image/svg+xml' 
+        type: 'image/svg+xml'
       }
     ]
   },
@@ -34,14 +34,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className="dark" suppressHydrationWarning>
       <head></head>
       <body className="min-h-screen">
         <ThemeProvider>
           <BrandingProvider branding={branding}>
             <StatusIndicator />
             {children}
-            <BottomDock />
+            <ConditionalBottomDock />
             <KeyboardShortcutHint />
             <ToastContainer />
           </BrandingProvider>

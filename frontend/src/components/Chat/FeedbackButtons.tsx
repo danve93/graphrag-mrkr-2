@@ -3,6 +3,7 @@ import { IconButton, Tooltip } from "@mui/material";
 import ThumbUpIcon from "@mui/icons-material/ThumbUp";
 import ThumbDownIcon from "@mui/icons-material/ThumbDown";
 import axios from "axios";
+import { API_URL } from "../../lib/api";
 
 interface FeedbackProps {
   messageId: string;
@@ -25,13 +26,13 @@ export const FeedbackButtons: React.FC<FeedbackProps> = ({
   const sendFeedback = async (rating: number) => {
     setLoading(true);
     try {
-      await axios.post("/api/feedback", {
+      await axios.post(`${API_URL || ''}/api/feedback`, {
         message_id: messageId,
         session_id: sessionId,
         query,
         rating,
         routing_info: routingInfo || {},
-      });
+      }, { withCredentials: true });
       setSubmitted(rating);
       if (onFeedbackSent) onFeedbackSent(rating);
     } catch (err) {

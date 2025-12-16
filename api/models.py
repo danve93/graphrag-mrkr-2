@@ -88,6 +88,34 @@ class ChatRequest(BaseModel):
         description="List of hashtags used to filter documents",
     )
 
+    # Evaluation-specific feature flag overrides
+    # These are optional per-request overrides for A/B testing variants
+    # When None, global settings are used (normal production behavior)
+    eval_enable_query_routing: Optional[bool] = Field(
+        None,
+        description="[Evaluation] Override enable_query_routing setting for this request only"
+    )
+    eval_enable_structured_kg: Optional[bool] = Field(
+        None,
+        description="[Evaluation] Override enable_structured_kg setting for this request only"
+    )
+    eval_enable_rrf: Optional[bool] = Field(
+        None,
+        description="[Evaluation] Override enable_rrf (Reciprocal Rank Fusion) for this request only"
+    )
+    eval_enable_routing_cache: Optional[bool] = Field(
+        None,
+        description="[Evaluation] Override enable_routing_cache setting for this request only"
+    )
+    eval_flashrank_enabled: Optional[bool] = Field(
+        None,
+        description="[Evaluation] Override flashrank_enabled (reranking) for this request only"
+    )
+    eval_enable_graph_clustering: Optional[bool] = Field(
+        None,
+        description="[Evaluation] Override enable_graph_clustering for this request only"
+    )
+
 
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
@@ -365,6 +393,15 @@ class UpdateHashtagsRequest(BaseModel):
     hashtags: List[str] = Field(
         ...,
         description="List of hashtags to set for the document"
+    )
+
+
+class UpdateMetadataRequest(BaseModel):
+    """Request model for updating document metadata."""
+
+    metadata: Dict[str, Any] = Field(
+        ...,
+        description="Dictionary of metadata key-value pairs to set"
     )
 
 

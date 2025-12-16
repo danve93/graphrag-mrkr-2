@@ -16,7 +16,7 @@ type DocumentPreviewProps = {
 
 const isPdf = (mimeType?: string) => mimeType?.includes('pdf') ?? false
 const isImage = (mimeType?: string) => mimeType?.startsWith('image/') ?? false
-const isMarkdown = (mimeType?: string) => 
+const isMarkdown = (mimeType?: string) =>
   (mimeType?.includes('markdown') || mimeType?.includes('text/markdown') || mimeType?.includes('text/x-markdown')) ?? false
 const isPlainText = (mimeType?: string) => !mimeType ? false : mimeType === 'text/plain'
 const isTextPreviewable = (mimeType?: string) => isMarkdown(mimeType) || isPlainText(mimeType)
@@ -96,67 +96,88 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
       line-height: 1.6;
-      color: #121212;
-      background: #fff;
+      background: #121212;
+      color: #f3f4f6;
       padding: 2rem;
       max-width: 900px;
       margin: 0 auto;
     }
     
-    @media (prefers-color-scheme: dark) {
-      body {
-        background: #121212;
-        color: #f3f4f6;
-      }
-      
-      a {
-        color: #60a5fa;
-      }
-      
-      a:visited {
-        color: #a78bfa;
-      }
-      
-      code {
-        background: #121212 !important;
-        color: #e5e7eb;
-      }
-      
-      pre {
-        background: #121212 !important;
-        color: #e5e7eb;
-      }
-      
-      blockquote {
-        border-left-color: #4b5563;
-        color: #d1d5db;
-      }
-      
-      table {
-        border-color: #4b5563;
-      }
-      
-      th, td {
-        border-color: #4b5563;
-      }
+    a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+    
+    a:visited {
+      color: #a78bfa;
+    }
+    
+    a:hover {
+      text-decoration: underline;
+    }
+    
+    code {
+      background: #1e1e1e;
+      color: #e5e7eb;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+    
+    pre {
+      background: #1e1e1e;
+      color: #e5e7eb;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      font-family: 'Monaco', 'Courier New', monospace;
+    }
+    
+    pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+    }
+    
+    blockquote {
+      border-left: 4px solid #4b5563;
+      padding-left: 1rem;
+      margin-left: 0;
+      margin-bottom: 1rem;
+      color: #d1d5db;
+    }
+    
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 1rem;
+      border: 1px solid #4b5563;
+    }
+    
+    th, td {
+      border: 1px solid #4b5563;
+      padding: 0.75rem;
+      text-align: left;
+    }
+    
+    th {
+      background: #1e1e1e;
+      font-weight: 600;
     }
     
     h1, h2, h3, h4, h5, h6 {
       margin-top: 1.5rem;
       margin-bottom: 1rem;
       font-weight: 600;
+      color: #f3f4f6;
     }
     
     h1 {
       font-size: 2rem;
-      border-bottom: 2px solid #e5e7eb;
+      border-bottom: 2px solid #4b5563;
       padding-bottom: 0.5rem;
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      h1 {
-        border-bottom-color: #4b5563;
-      }
     }
     
     h2 {
@@ -171,46 +192,6 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
       margin-bottom: 1rem;
     }
     
-    a {
-      color: #2563eb;
-      text-decoration: none;
-    }
-    
-    a:hover {
-      text-decoration: underline;
-    }
-    
-    code {
-      background: #f3f4f6;
-      padding: 0.2rem 0.4rem;
-      border-radius: var(--radius-sm);
-      font-family: 'Monaco', 'Courier New', monospace;
-      font-size: 0.9em;
-    }
-    
-    pre {
-      background: #f3f4f6;
-      padding: 1rem;
-      border-radius: var(--radius-md);
-      overflow-x: auto;
-      margin-bottom: 1rem;
-      font-family: 'Monaco', 'Courier New', monospace;
-    }
-    
-    pre code {
-      background: none;
-      padding: 0;
-      border-radius: 0;
-    }
-    
-    blockquote {
-      border-left: 4px solid #e5e7eb;
-      padding-left: 1rem;
-      margin-left: 0;
-      margin-bottom: 1rem;
-      color: #6b7280;
-    }
-    
     ul, ol {
       margin-left: 2rem;
       margin-bottom: 1rem;
@@ -218,30 +199,6 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     
     li {
       margin-bottom: 0.5rem;
-    }
-    
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin-bottom: 1rem;
-      border: 1px solid #e5e7eb;
-    }
-    
-    th, td {
-      border: 1px solid #e5e7eb;
-      padding: 0.75rem;
-      text-align: left;
-    }
-    
-    th {
-      background: #f9fafb;
-      font-weight: 600;
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      th {
-        background: #121212;
-      }
     }
     
     img {
@@ -252,7 +209,7 @@ export default function DocumentPreview({ previewUrl, mimeType, content, onClose
     
     hr {
       border: none;
-      border-top: 1px solid #e5e7eb;
+      border-top: 1px solid #4b5563;
       margin: 2rem 0;
     }
   </style>
@@ -341,7 +298,7 @@ ${cleanHtml}
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800">
                 <p className="font-medium">Office Document Viewer</p>
                 <p className="text-xs mt-1">
-                  Using Microsoft Office Online viewer. If the document doesn&apos;t load, 
+                  Using Microsoft Office Online viewer. If the document doesn&apos;t load,
                   try opening it in a new tab or downloading it.
                 </p>
               </div>

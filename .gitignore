@@ -52,3 +52,11 @@ docs/msoft_iteration/
 
 # Local backups created by developer assistants
 /backup/
+/.claude
+/.agent
+/.github
+/.github
+/amber_backend.egg-info
+DEPLOYMENT.md
+/docs
+PHASE4_FINDINGS.md

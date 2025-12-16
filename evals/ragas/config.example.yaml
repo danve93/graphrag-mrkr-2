@@ -1,0 +1,53 @@
+version: 0.1
+
+backend:
+  base_url: "http://localhost:8000"
+  chat_endpoint: "/api/chat"
+  structured_endpoint: "/api/structured-kg"
+  api_key_env: null              # optional; set to an env var name if your API needs auth
+  timeout_seconds: 120
+
+defaults:
+  llm_model: "gpt-4o-mini"
+  embedding_model: "text-embedding-3-small"
+  max_concurrency: 2
+  max_examples: null           # null to evaluate all rows
+  retry_attempts: 1
+  enable_cache_metrics: true   # when true, runner tries to fetch cache/routing stats for observability
+
+variants:
+  vector_only:
+    description: "Baseline vector retrieval without graph/routing."
+    payload_flags:
+      retrieval_mode: "simple"
+      enable_query_routing: false
+      enable_structured_kg: false
+      enable_rrf: false
+      enable_routing_cache: false
+      flashrank_enabled: false
+      enable_graph_clustering: false
+  graph_hybrid:
+    description: "Graph-enhanced hybrid retrieval with routing/cache."
+    payload_flags:
+      retrieval_mode: "hybrid"
+      enable_query_routing: true
+      enable_structured_kg: true
+      enable_rrf: true
+      enable_routing_cache: true
+      flashrank_enabled: true
+      enable_graph_clustering: true
+
+paths:
+  dataset: "evals/ragas/testsets/amber_carbonio_ragas_gold_testset.csv"
+  output_dir: "reports/ragas"
+  baseline: "reports/ragas/baseline.json"   # optional; used by ragas_report for regression checks
+
+reporting:
+  metrics:
+    - context_precision
+    - context_recall
+    - faithfulness
+    - answer_relevancy
+    # optional
+    # - context_entities_recall
+    # - factual_correctness

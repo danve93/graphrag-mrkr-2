@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 
 from config.settings import settings
 from core.llm import llm_manager
+from core.static_entity_matcher import get_static_matcher
 from rag.nodes.routing_cache import routing_cache
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,64 @@ def route_query_to_categories(
                 "reasoning": cached.get("reasoning", "cached"),
                 "should_filter": should_filter,
             }
+
+        # Try static matcher first (fast path <10ms vs 200ms LLM call)
+        if settings.enable_static_entity_matching:
+            try:
+                static_matcher = get_static_matcher()
+                if static_matcher.is_loaded:
+                    matches = static_matcher.match(
+                        query,
+                        top_k=3,
+                        min_similarity=settings.static_matching_min_similarity
+                    )
+
+                    if matches and matches[0]['similarity'] >= confidence_threshold:
+                        # Use top static match
+                        categories = [matches[0]['id']]
+                        confidence = matches[0]['similarity']
+                        should_filter = confidence >= confidence_threshold and categories != ["general"]
+
+                        reasoning = f"static_match: {matches[0]['title']} (sim={confidence:.2f})"
+                        if len(matches) > 1:
+                            reasoning += f", alternatives: {[m['id'] for m in matches[1:]]}"
+
+                        logger.info(
+                            f"Static routing: {categories} (confidence {confidence:.2f}, filter={should_filter})"
+                        )
+
+                        # Cache decision asynchronously
+                        try:
+                            import asyncio
+                            payload = {
+                                "categories": categories,
+                                "confidence": confidence,
+                                "reasoning": reasoning,
+                            }
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                asyncio.create_task(routing_cache.set(query, payload))
+                            else:
+                                loop.run_until_complete(routing_cache.set(query, payload))
+                        except Exception:
+                            pass
+
+                        return {
+                            "categories": categories,
+                            "confidence": confidence,
+                            "reasoning": reasoning,
+                            "should_filter": should_filter,
+                        }
+                    else:
+                        # Static match exists but below threshold, log for debugging
+                        if matches:
+                            logger.debug(
+                                f"Static match below threshold: {matches[0]['id']} "
+                                f"(sim={matches[0]['similarity']:.2f} < {confidence_threshold:.2f}), "
+                                f"falling back to LLM"
+                            )
+            except Exception as e:
+                logger.warning(f"Static matcher failed: {e}, falling back to LLM routing")
 
         # Disabled routing → no filtering
         if not settings.enable_query_routing:

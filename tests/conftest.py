@@ -12,6 +12,43 @@ LOG = logging.getLogger("tests.conftest")
 DOCKER_AVAILABLE = shutil.which("docker") is not None
 
 
+def pytest_configure(config):
+    """Set test-friendly Neo4j defaults before collection/imports."""
+    os.environ.setdefault("NEO4J_URI", "bolt://localhost:7687")
+    os.environ.setdefault("NEO4J_USERNAME", "neo4j")
+    os.environ.setdefault("NEO4J_PASSWORD", "neo4j")
+
+    # Also update settings object and reset any pre-initialized drivers
+    try:
+        from config.settings import settings as app_settings
+        app_settings.neo4j_uri = os.environ["NEO4J_URI"]
+        app_settings.neo4j_username = os.environ["NEO4J_USERNAME"]
+        app_settings.neo4j_password = os.environ["NEO4J_PASSWORD"]
+
+        # Reset singleton driver so it reconnects with the test URI
+        import core.singletons as singletons
+        singletons._graph_db_driver = None  # type: ignore[attr-defined]
+        # Skip verify on next init so driver creation doesn't fail before services start
+        singletons._skip_verify_on_next_init = True  # type: ignore[attr-defined]
+        try:
+            from core.graph_db import graph_db
+            graph_db.driver = None
+        except Exception:
+            pass
+    except Exception:
+        # Safe fallback: collection will surface connection issues if any
+        pass
+
+
+def _wants_service_tests(session) -> bool:
+    """Detect whether any collected tests live under integration/e2e."""
+    for item in getattr(session, "items", []):
+        path = Path(str(getattr(item, "fspath", "")))
+        if "integration" in path.parts or "e2e" in path.parts:
+            return True
+    return False
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip service-dependent suites when Docker is unavailable."""
 
@@ -26,8 +63,8 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def docker_services():
-    """Start docker compose services for the integration tests.
+def docker_services(request):
+    """Start docker compose services for the integration tests when needed.
 
     - Runs `docker compose up -d --build` at the start of the test session.
     - Waits for Neo4j to accept Bolt connections on localhost:7687 (configurable
@@ -38,8 +75,19 @@ def docker_services():
       unless `TEST_KEEP_SERVICES` is set to a truthy value.
     """
 
+    # Skip entirely when no integration/e2e tests are in play
+    if not _wants_service_tests(request.session):
+        LOG.info("No integration/e2e tests collected; skipping docker compose startup")
+        yield
+        return
+
     if not DOCKER_AVAILABLE:
         LOG.warning("Docker CLI not available; skipping docker compose startup for tests")
+        yield
+        return
+
+    if os.environ.get("TEST_SKIP_DOCKER", "0") not in ("0", "", None):
+        LOG.warning("TEST_SKIP_DOCKER set; skipping docker compose startup for tests")
         yield
         return
 
@@ -105,20 +153,37 @@ def docker_services():
         if "NEO4J_USERNAME" in compose_env and "NEO4J_PASSWORD" in compose_env:
             compose_env.setdefault("NEO4J_AUTH", f"{compose_env['NEO4J_USERNAME']}/{compose_env['NEO4J_PASSWORD']}")
 
-        ps = subprocess.run(["docker", "compose", "-p", project, "ps", "-q"], capture_output=True, text=True, env=compose_env)
+        ps = subprocess.run(
+            ["docker", "compose", "-p", project, "ps", "-q", "neo4j"],
+            capture_output=True,
+            text=True,
+            env=compose_env,
+        )
         if ps.stdout.strip():
-            LOG.info("Compose project '%s' already has running services; skipping `up`.", project)
+            LOG.info("Compose project '%s' already has running neo4j; skipping `up`.", project)
         else:
             # Run compose up and capture output to help diagnose failures in CI/local runs.
             try:
-                subprocess.run(["docker", "compose", "-p", project, "up", "-d", "--build"], check=True, capture_output=True, text=True, env=compose_env)
+                subprocess.run(
+                    ["docker", "compose", "-p", project, "up", "-d", "--build", "neo4j"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=compose_env,
+                )
             except subprocess.CalledProcessError as cpe:  # pragma: no cover - environment dependent
                 # Emit captured stdout/stderr to logs for easier debugging, then try a lighter fallback.
                 LOG.error("`docker compose up` failed (stdout):\n%s", cpe.stdout)
                 LOG.error("`docker compose up` failed (stderr):\n%s", cpe.stderr)
                 LOG.info("Attempting fallback: `docker compose up -d` (no --build)")
                 try:
-                    subprocess.run(["docker", "compose", "-p", project, "up", "-d"], check=True, capture_output=True, text=True, env=compose_env)
+                    subprocess.run(
+                        ["docker", "compose", "-p", project, "up", "-d", "neo4j"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        env=compose_env,
+                    )
                 except subprocess.CalledProcessError as cpe2:  # pragma: no cover - environment dependent
                     LOG.error("Fallback `docker compose up -d` also failed (stdout):\n%s", cpe2.stdout)
                     LOG.error("Fallback `docker compose up -d` also failed (stderr):\n%s", cpe2.stderr)
@@ -157,8 +222,58 @@ def docker_services():
     except Exception:
         LOG.exception("Failed to capture docker service logs")
 
+    # Wait for Neo4j bolt protocol to be fully ready (not just TCP port open)
+    LOG.info("Waiting for Neo4j bolt protocol to be ready...")
+    bolt_ready = False
+    bolt_start = time.time()
+    bolt_wait_seconds = 30
+    while time.time() - bolt_start < bolt_wait_seconds:
+        try:
+            from neo4j import GraphDatabase
+            # Try to actually connect and verify Neo4j is ready
+            test_driver = GraphDatabase.driver(
+                "bolt://localhost:7687",
+                auth=("neo4j", os.environ.get("NEO4J_PASSWORD", "neo4j")),
+            )
+            test_driver.verify_connectivity()
+            test_driver.close()
+            LOG.info("Neo4j bolt protocol is ready")
+            bolt_ready = True
+            break
+        except Exception as e:
+            LOG.debug(f"Neo4j bolt protocol not ready yet: {e}")
+            time.sleep(2)
+
+    if not bolt_ready:
+        LOG.warning(f"Neo4j bolt protocol did not become ready within {bolt_wait_seconds}s, proceeding anyway")
+
     # Give a short grace for app-level readiness
     time.sleep(1)
+
+    # Force host-based Neo4j URI for tests running on the host
+    # (override any container-internal URIs from .env)
+    os.environ["NEO4J_URI"] = "bolt://localhost:7687"
+    os.environ.setdefault("NEO4J_USERNAME", "neo4j")
+    os.environ.setdefault("NEO4J_PASSWORD", os.environ.get("NEO4J_PASSWORD", "neo4j"))
+
+    # Update settings object and reset driver to pick up the correct URI
+    try:
+        from config.settings import settings as app_settings
+        app_settings.neo4j_uri = "bolt://localhost:7687"
+        app_settings.neo4j_username = os.environ["NEO4J_USERNAME"]
+        app_settings.neo4j_password = os.environ["NEO4J_PASSWORD"]
+
+        # Reset singleton driver so it reconnects with the test URI
+        import core.singletons as singletons
+        if singletons._graph_db_driver is not None:
+            try:
+                singletons._graph_db_driver.close()
+            except Exception:
+                pass
+        singletons._graph_db_driver = None
+        LOG.info("Reset Neo4j driver singleton to use test URI")
+    except Exception as e:
+        LOG.warning(f"Could not reset settings/driver: {e}")
 
     yield
 
@@ -169,6 +284,9 @@ def docker_services():
 
     LOG.info("Tearing down docker compose services for integration tests (project=%s)...", project)
     try:
-        subprocess.run(["docker", "compose", "-p", project, "down", "--volumes", "--remove-orphans"], check=False)
+        subprocess.run(
+            ["docker", "compose", "-p", project, "down", "--volumes", "--remove-orphans", "neo4j"],
+            check=False,
+        )
     except Exception:
         LOG.exception("Failed to shut down docker compose services")

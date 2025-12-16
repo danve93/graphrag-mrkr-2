@@ -151,7 +151,61 @@ async def retrieve_documents_async(
             use_multi_hop,
             bool(allowed_docs),
         )
-        
+
+        # Query expansion: retrieve additional chunks for expanded terms
+        expanded_terms = query_analysis.get("expanded_terms", [])
+        if expanded_terms and settings.enable_query_expansion:
+            logger.info(f"Applying query expansion with {len(expanded_terms)} terms: {expanded_terms}")
+
+            expansion_penalty = getattr(settings, "expansion_penalty", 0.7)
+            expansion_chunks = []
+
+            # Retrieve for each expanded term
+            for term in expanded_terms[:3]:  # Limit to top 3 expansion terms to avoid latency
+                try:
+                    term_chunks = await document_retriever.retrieve(
+                        query=term,
+                        mode=enhanced_mode,
+                        top_k=min(adjusted_top_k, 3),  # Fewer results per expansion
+                        chunk_weight=chunk_weight,
+                        use_multi_hop=False,  # Keep expansion simple
+                        entity_weight=entity_weight,
+                        path_weight=path_weight,
+                        restrict_to_context=restrict_to_context,
+                        allowed_document_ids=allowed_ids,
+                        embedding_model=embedding_model,
+                    )
+
+                    # Apply penalty to expansion scores
+                    for chunk in term_chunks:
+                        chunk["score"] = chunk.get("score", 0.0) * expansion_penalty
+                        chunk["expansion_term"] = term  # Mark as expansion result
+
+                    expansion_chunks.extend(term_chunks)
+                except Exception as e:
+                    logger.warning(f"Expansion retrieval failed for term '{term}': {e}")
+
+            # Merge and deduplicate chunks
+            if expansion_chunks:
+                chunk_ids = {chunk.get("id") for chunk in chunks}
+                unique_expansion_chunks = [
+                    chunk for chunk in expansion_chunks
+                    if chunk.get("id") not in chunk_ids
+                ]
+
+                chunks.extend(unique_expansion_chunks)
+                logger.info(
+                    f"Added {len(unique_expansion_chunks)} unique chunks from expansion "
+                    f"({len(expansion_chunks) - len(unique_expansion_chunks)} duplicates filtered)"
+                )
+
+                # Re-sort by score and limit to top_k * 1.5 (allow some extra from expansion)
+                chunks.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+                max_chunks = int(adjusted_top_k * 1.5)
+                if len(chunks) > max_chunks:
+                    chunks = chunks[:max_chunks]
+                    logger.info(f"Trimmed to top {max_chunks} chunks after expansion")
+
         # Extract alternative chunks from retrieval metadata if available
         alternatives = []
         if hasattr(document_retriever, 'last_retrieval_metadata'):
@@ -164,7 +218,7 @@ async def retrieve_documents_async(
                 logger.info("No alternative chunks found in retrieval metadata")
         else:
             logger.warning("document_retriever does not have last_retrieval_metadata attribute")
-        
+
         return chunks, alternatives
 
     except Exception as e:

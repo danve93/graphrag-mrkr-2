@@ -1,6 +1,5 @@
 import React, { ReactNode } from 'react';
-import { IconButton } from '@mui/material';
-import { ExpandMore as ExpandIcon, ExpandLess as CollapseIcon } from '@mui/icons-material';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 interface ExpandablePanelProps {
   title: string;
@@ -39,9 +38,21 @@ const ExpandablePanel: React.FC<ExpandablePanelProps> = ({ title, expanded, onTo
         <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)' }}>
           {title}
         </div>
-        <IconButton size="small">
-          <ExpandIcon fontSize="small" />
-        </IconButton>
+        <button
+          type="button"
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '4px',
+            cursor: 'pointer',
+            color: 'var(--text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <ChevronDown size={18} />
+        </button>
       </div>
     );
   }
@@ -56,11 +67,11 @@ const ExpandablePanel: React.FC<ExpandablePanelProps> = ({ title, expanded, onTo
       }}
     >
       {/* Header */}
-      <div 
-        style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
           marginBottom: '12px',
           cursor: 'pointer'
         }}
@@ -69,9 +80,21 @@ const ExpandablePanel: React.FC<ExpandablePanelProps> = ({ title, expanded, onTo
         <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)' }}>
           {title}
         </div>
-        <IconButton size="small">
-          <CollapseIcon fontSize="small" />
-        </IconButton>
+        <button
+          type="button"
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '4px',
+            cursor: 'pointer',
+            color: 'var(--text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <ChevronUp size={18} />
+        </button>
       </div>
 
       {/* Content */}
