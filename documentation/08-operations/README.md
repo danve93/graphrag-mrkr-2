@@ -11,6 +11,12 @@ Production deployment, monitoring, and maintenance guides.
 - [Troubleshooting](08-operations/troubleshooting.md) - Common issues and solutions
 - [Backup and Restore](08-operations/maintenance-reindexing.md) - Data persistence strategies
 - [Scaling](08-operations/deployment.md) - Horizontal and vertical scaling
+- [Docker Deployment](08-operations/docker-deployment.md) - Docker specific deployment details
+- [Evaluation System](08-operations/evaluation-system.md) - Deep dive into evaluation metrics
+- [Local Runtime](08-operations/local-runtime.md) - Running locally with Python/Node
+- [Observability Health](08-operations/observability-health.md) - Health checks and observability
+- [Quality Monitoring](08-operations/quality-monitoring.md) - Monitoring response quality
+- [Rollback Procedures](08-operations/rollback.md) - Rollback strategies and guides
 
 ## Operations Overview
 

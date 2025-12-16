@@ -11,6 +11,7 @@ Developer workflows, testing, and contribution guidelines.
 - [Feature Flag Wiring](09-development/feature-flag-wiring.md) - Feature flag verification and testing
 - [Dev Scripts](09-development/dev-scripts.md) - Development scripts and utilities
 - [Contributing](09-development/contributing.md) - Contribution guidelines
+- [UI Kit Reference](09-development/ui-kit.md) - Frontend UI component library
 
 ## Development Setup
 

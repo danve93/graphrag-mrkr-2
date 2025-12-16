@@ -8,6 +8,7 @@ End-to-end traces of key operations through the Amber system.
 - [Chat Query Flow](05-data-flows/chat-query-flow.md) - Complete request lifecycle from frontend to response
 - [Ingestion Flow](05-data-flows/document-ingestion-flow.md) - Document upload through persistence
 - [Retrieval Flow](05-data-flows/graph-expansion-flow.md) - Query to hybrid retrieval to reranking
+- [Reranking Flow](05-data-flows/reranking-flow.md) - FlashRank reranking pipeline details
 - [Entity Deduplication](05-data-flows/entity-extraction-flow.md) - NetworkX in-memory graph merging
 - [Streaming SSE](05-data-flows/streaming-sse-flow.md) - Server-Sent Events token streaming
 

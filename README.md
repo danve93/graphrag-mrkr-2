@@ -386,6 +386,7 @@ Comprehensive documentation is available in the `documentation/` directory:
 7. **Configuration** - Complete parameter reference
 8. **Operations** - Monitoring and maintenance guides
 9. **Development** - Testing and feature development guides
+10. **Scripts** - Utility scripts and CLI tools
 
 ## Deployment
 

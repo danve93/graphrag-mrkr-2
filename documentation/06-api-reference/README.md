@@ -6,6 +6,7 @@ Complete REST API documentation for the Amber platform.
 
 - [README](06-api-reference/README.md) - API overview
 - [Chat Endpoints](06-api-reference/chat-endpoints.md) - Chat query and streaming endpoints
+- [Chat API Details](06-api-reference/chat-api.md) - Comprehensive Chat API reference
 - [Document Endpoints](06-api-reference/document-endpoints.md) - Document operations and metadata
 - [Database Endpoints](06-api-reference/database-endpoints.md) - Upload, stats, and maintenance
 - [Graph Editor Endpoints](06-api-reference/graph-editor-endpoints.md) - Curation, healing, and backups

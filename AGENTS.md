@@ -128,7 +128,7 @@ The following implementation highlights summarize factual, developer-facing feat
 
 - Document conversion integration: the ingestion pipeline supports a high-accuracy document conversion tool integration that can be used in-process, via CLI, or via a small server. Modes include LLM-assisted extraction, OCR, and table merging, and the integration is configurable for device and runtime settings.
 
-- UI robustness and design updates: layout corrections (removal of top padding on scroll containers), tooltip refactor to avoid adding positional wrapper elements, defensive color parsing, and community-color rendering improvements. The UI also adopts a tokenized design system (spacing, typography, color tokens) and simplified animations.
+- UI robustness and design updates: layout corrections (removal of top padding on scroll containers), tooltip refactor to avoid adding positional wrapper elements, defensive color parsing, and community-color rendering improvements. The UI also adopts a tokenized design system (spacing, typography, color tokens) and simplified animations. See [UI Kit Reference](documentation/09-development/ui-kit.md) for details.
 
 - Conversation context preservation: the chat system maintains conversation context across follow-up queries by preserving conversation history in the RAG state. Follow-up queries correctly reference previous messages without re-sending full context, reducing token usage and improving response relevance.
 
@@ -176,7 +176,7 @@ The RAG pipeline in `rag/graph_rag.py` uses LangGraph's StateGraph to implement 
 2. **Structured KG Router** (`structured_kg_router`) — When enabled, detects queries suitable for direct graph database execution and routes them to Text-to-Cypher translation. Suitable queries skip standard retrieval and proceed directly to generation with structured results. Unsuitable queries fall back to standard retrieval path.
 3. **Retrieval** (`retrieval`) — Hybrid retrieval combining embedding similarity with entity-aware candidate selection. Executed only if structured KG router passes through.
 4. **Graph Reasoning / Expansion** (`graph_reasoning`) — Neo4j-backed multi-hop expansion that traverses chunk similarities and entity relationships to enrich context.
-5. **Reranking (optional)** — Post-retrieval reranking using FlashRank (when enabled) to refine candidate ordering.
+5. **Reranking (optional)** — Post-retrieval reranking using FlashRank (when enabled) to refine candidate ordering. See [Reranking Flow](documentation/05-data-flows/reranking-flow.md).
 6. **Generation** (`generation`) — LLM generation that streams tokens; downstream tasks include quality scoring and follow-up suggestion. Receives either structured KG results or standard retrieval context.
 
 State Management: the pipeline uses plain dict-based `state` objects; each node appends readable stage identifiers to `state["stages"]`. The API streams these stage updates to the frontend (SSE) for progress UI and diagnostics. Each stage tracks execution timing (duration_ms) and metadata (chunks_retrieved, context_items, response_length, model_used, query_type, cypher_query, linked_entities) for observability and performance tuning.

@@ -11,6 +11,9 @@ Command-line tools for ingestion, maintenance, and utilities.
 - [Maintenance Scripts](10-scripts/setup-neo4j.md) - Additional utilities
 - [Neo4j Setup](10-scripts/setup-neo4j.md) - Indexes, constraints, casefold, dedupe
 - [Reindex Classification](10-scripts/reindex-classification.md) - Classify documents and update metadata
+- [Build Leiden Projection](10-scripts/build-leiden-projection.md) - Build graph projection for Leiden
+- [FlashRank Prewarm](10-scripts/flashrank-prewarm-worker.md) - Pre-warm the reranker model
+- [Inspect Entities](10-scripts/inspect-entities.md) - Inspect extracted entities CLI
 
 ## Available Scripts
 
