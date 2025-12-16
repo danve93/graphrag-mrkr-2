@@ -792,10 +792,11 @@ class DocumentRetriever:
         )
         
         # Check cache (thread-safe read)
-        with self._cache_lock:
-            if cache_key in self._cache:
-                logger.info(f"Retrieval cache HIT for query: {search_query[:50]}...")
-                return self._cache[cache_key]
+        # Check cache (thread-safe read)
+        cached_result = self._cache.get(cache_key)
+        if cached_result is not None:
+            logger.info(f"Retrieval cache HIT for query: {search_query[:50]}...")
+            return cached_result
         
         # Cache miss - perform retrieval
         logger.info(f"Retrieval cache MISS for query: {search_query[:50]}...")
@@ -806,8 +807,8 @@ class DocumentRetriever:
         )
         
         # Store in cache (thread-safe write)
-        with self._cache_lock:
-            self._cache[cache_key] = results
+        # Store in cache
+        self._cache.set(cache_key, results)
         
         return results
 

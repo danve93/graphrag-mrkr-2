@@ -559,6 +559,62 @@ export const api = {
     return response.json()
   },
 
+  // Incremental document update - updates only changed chunks
+  async updateDocument(documentId: string, file: File): Promise<{
+    document_id: string
+    status: string
+    changes?: {
+      unchanged_chunks: number
+      added_chunks: number
+      removed_chunks: number
+      entities_removed: number
+      relationships_cleaned: number
+    }
+    processing_time?: number
+    error?: string
+    details?: string
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}`, {
+      method: 'PUT',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `API error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
+  // Search for documents with similar filenames (for update dialog)
+  async searchSimilarDocuments(filename: string, limit: number = 10): Promise<{
+    query_filename: string
+    matches: Array<{
+      document_id: string
+      filename: string
+      is_exact_match: boolean
+      is_normalized_match: boolean
+      similarity_score: number
+      document_type?: string
+      created_at?: string
+      chunk_count: number
+    }>
+    total_found: number
+  }> {
+    const params = new URLSearchParams({ filename, limit: String(limit) })
+    const response = await fetchWithAuth(`${API_URL}/api/documents/search-similar?${params}`)
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
   async hasDocumentPreview(documentId: string): Promise<boolean> {
     // Try a HEAD request first to avoid downloading the full file.
     try {

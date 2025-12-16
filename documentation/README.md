@@ -15,6 +15,9 @@ Detailed technical reference for all system components organized by layer: backe
 
 ### [04. Features](04-features)
 In-depth documentation for advanced features including entity clustering, reranking, chat tuning, classification, gleaning, and response caching.
+- **[External User Integration](./04-features/external-user-integration.md)**: Details on the guest/external chat access feature.
+- **[Graph Curation Workbench](./04-features/graph-curation-workbench.md)**: Manual and AI-assisted tools for maintaining the Knowledge Graph (Healing, Merging, Pruning).
+- **[Search & RAG Pipeline](./04-features/search-rag.md)**: Understanding the retrieval mechanisms.
 
 ### [05. Data Flows](05-data-flows)
 End-to-end traces of key operations showing how data moves through the system from input to output.

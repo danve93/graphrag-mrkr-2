@@ -606,6 +606,76 @@ async def update_document_content(
         raise HTTPException(status_code=500, detail="Failed to update document") from exc
 
 
+@router.get("/search-similar")
+async def search_similar_documents(
+    filename: str = Query(..., description="Filename to search for similar documents"),
+    limit: int = Query(10, ge=1, le=50, description="Maximum results")
+):
+    """
+    Search for documents with similar filenames.
+    
+    Returns both exact matches and fuzzy matches for use in upload update dialog.
+    """
+    import re
+    from difflib import SequenceMatcher
+    
+    try:
+        # Get all documents
+        all_docs = graph_db.get_all_documents()
+        
+        # Parse uploaded filename
+        base_name = Path(filename).stem.lower()
+        extension = Path(filename).suffix.lower()
+        
+        # Remove common version patterns for matching (e.g., _v1, _v2, -final, -draft)
+        version_pattern = re.compile(r'[-_](v\d+|final|draft|new|old|updated|revised|\d{8}|\d{4}[-_]\d{2}[-_]\d{2})$', re.IGNORECASE)
+        normalized_base = version_pattern.sub('', base_name)
+        
+        results = []
+        for doc in all_docs:
+            doc_filename = doc.get('original_filename') or doc.get('filename') or ''
+            doc_base = Path(doc_filename).stem.lower()
+            doc_ext = Path(doc_filename).suffix.lower()
+            doc_normalized = version_pattern.sub('', doc_base)
+            
+            # Calculate match scores
+            is_exact = doc_filename.lower() == filename.lower()
+            is_normalized_match = doc_normalized == normalized_base and doc_ext == extension
+            
+            # Fuzzy similarity score
+            similarity = SequenceMatcher(None, normalized_base, doc_normalized).ratio()
+            
+            # Only include if reasonably similar (> 0.5 similarity) or exact/normalized match
+            if is_exact or is_normalized_match or similarity > 0.5:
+                results.append({
+                    "document_id": doc.get('id') or doc.get('document_id'),
+                    "filename": doc_filename,
+                    "is_exact_match": is_exact,
+                    "is_normalized_match": is_normalized_match,
+                    "similarity_score": round(similarity, 2),
+                    "document_type": doc.get('document_type'),
+                    "created_at": doc.get('created_at'),
+                    "chunk_count": doc.get('chunk_count', 0),
+                })
+        
+        # Sort: exact matches first, then normalized matches, then by similarity
+        results.sort(key=lambda x: (
+            -x['is_exact_match'],
+            -x['is_normalized_match'],
+            -x['similarity_score']
+        ))
+        
+        return {
+            "query_filename": filename,
+            "matches": results[:limit],
+            "total_found": len(results),
+        }
+        
+    except Exception as exc:
+        logger.error("Failed to search similar documents: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to search documents") from exc
+
+
 # Generic document metadata route comes LAST to avoid catching sub-paths
 @router.get("/{document_id}", response_model=DocumentMetadataResponse)
 async def get_document_metadata(document_id: str) -> DocumentMetadataResponse:

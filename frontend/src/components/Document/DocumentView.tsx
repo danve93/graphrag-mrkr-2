@@ -8,6 +8,7 @@ import {
   MagnifyingGlassIcon,
   ClipboardIcon,
   ExclamationCircleIcon,
+  ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline'
 import { Button } from '@mui/material'
 import { Description as DocumentIconMui, Storage as DatabaseIconMui } from '@mui/icons-material'
@@ -90,6 +91,8 @@ export default function DocumentView() {
   const [loadingChunksData, setLoadingChunksData] = useState(false)
   const [loadingEntitiesData, setLoadingEntitiesData] = useState(false)
   const [entitySummary, setEntitySummary] = useState<null | { document_id: string; total: number; groups: Array<{ type: string; count: number }> }>(null)
+  const [isUpdating, setIsUpdating] = useState(false)
+  const updateFileInputRef = useRef<HTMLInputElement>(null)
 
   const refreshProcessingState = useCallback(async () => {
     try {
@@ -672,6 +675,48 @@ export default function DocumentView() {
     }
   }, [documentData?.id, editedMetadata])
 
+  // Handler for updating document with new file (incremental update)
+  const handleUpdateDocument = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file || !selectedDocumentId) return
+
+    setIsUpdating(true)
+    setActionError(null)
+    setActionMessage(null)
+
+    try {
+      const result = await api.updateDocument(selectedDocumentId, file)
+
+      if (result.status === 'success' && result.changes) {
+        const { unchanged_chunks, added_chunks, removed_chunks } = result.changes
+        setActionMessage(
+          `Document updated: ${unchanged_chunks} chunks unchanged, ${added_chunks} added, ${removed_chunks} removed (${result.processing_time?.toFixed(2) || '0'}s)`
+        )
+        // Refresh document data
+        const summary = await api.getDocumentSummary(selectedDocumentId)
+        setSummaryData({ id: summary.id, filename: summary.filename, stats: summary.stats })
+        if (documentData) {
+          const doc = await api.getDocument(selectedDocumentId)
+          setDocumentData(doc)
+        }
+      } else {
+        setActionError(result.error || 'Update failed')
+      }
+    } catch (updateError) {
+      setActionError(
+        updateError instanceof Error
+          ? updateError.message
+          : 'Failed to update document'
+      )
+    } finally {
+      setIsUpdating(false)
+      // Reset file input
+      if (updateFileInputRef.current) {
+        updateFileInputRef.current.value = ''
+      }
+    }
+  }, [selectedDocumentId, documentData])
+
   useEffect(() => {
     if (!actionMessage) return
     const timer = window.setTimeout(() => setActionMessage(null), 4000)
@@ -922,6 +967,31 @@ export default function DocumentView() {
                 {previewState.isLoading ? 'Loading...' : 'Preview'}
               </Button>
             )}
+            {/* Update Document Button */}
+            <input
+              ref={updateFileInputRef}
+              type="file"
+              id="document-update-file"
+              className="hidden"
+              onChange={handleUpdateDocument}
+              accept=".pdf,.doc,.docx,.md,.txt,.pptx,.xlsx"
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => updateFileInputRef.current?.click()}
+              disabled={isUpdating || disableManualActions}
+              startIcon={isUpdating ? undefined : <ArrowUpTrayIcon className="w-4 h-4" />}
+              title="Upload a new version of this document (only changed chunks will be reprocessed)"
+              style={{
+                textTransform: 'none',
+                borderColor: 'var(--accent-primary)',
+                color: 'var(--accent-primary)',
+                fontSize: '0.75rem'
+              }}
+            >
+              {isUpdating ? 'Updating...' : 'Update'}
+            </Button>
           </div>
         </div>
         {previewState.error && (

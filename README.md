@@ -78,6 +78,7 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 |---------|-------------|
 | **Chat Tuning** | Runtime controls for model selection and retrieval parameters |
 | **Document Classification** | Rule-based and LLM-based automatic labeling |
+| **Incremental Updates** | Content-hash diffing for efficient document updates (only changed chunks reprocessed) |
 | **Multi-Layer Caching** | Persistent embedding/response cache (disk), in-memory entity/retrieval cache |
 | **External User Integration** | API key authentication with minimal chat interface |
 | **SSE Streaming** | Real-time token streaming (20-50ms per token) |
@@ -272,6 +273,7 @@ ENABLE_ADAPTIVE_ROUTING=true
 | `GET /api/documents` | List documents |
 | `GET /api/documents/{id}` | Document metadata and analytics |
 | `POST /api/database/upload` | Upload and ingest document |
+| `PUT /api/documents/{id}` | Incremental update (only changed chunks reprocessed) |
 | `DELETE /api/database/documents/{id}` | Delete document |
 
 ### Configuration

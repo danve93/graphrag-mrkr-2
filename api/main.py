@@ -18,6 +18,7 @@ from api.routers import (
     database,
     documents,
     graph,
+    graph_editor,
     history,
     classification,
     chat_tuning,
@@ -173,6 +174,7 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(database.router, prefix="/api/database", tags=["database"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
+app.include_router(graph_editor.router, prefix="/api/graph/editor", tags=["graph-editor"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
 app.include_router(classification.router, prefix="/api/classification", tags=["classification"])
 app.include_router(chat_tuning.router, prefix="/api/chat-tuning", tags=["chat-tuning"])

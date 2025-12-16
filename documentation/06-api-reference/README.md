@@ -8,6 +8,7 @@ Complete REST API documentation for the Amber platform.
 - [Chat Endpoints](06-api-reference/chat-endpoints.md) - Chat query and streaming endpoints
 - [Document Endpoints](06-api-reference/document-endpoints.md) - Document operations and metadata
 - [Database Endpoints](06-api-reference/database-endpoints.md) - Upload, stats, and maintenance
+- [Graph Editor Endpoints](06-api-reference/graph-editor-endpoints.md) - Curation, healing, and backups
 - [History Endpoints](06-api-reference/history-endpoints.md) - Conversation persistence
 - [Jobs Endpoints](06-api-reference/jobs-endpoints.md) - Background job management
 - [Models and Schemas](06-api-reference/models-schemas.md) - Pydantic request/response models

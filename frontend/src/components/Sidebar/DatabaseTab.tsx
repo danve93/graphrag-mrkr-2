@@ -7,6 +7,7 @@ import { TrashIcon, DocumentArrowUpIcon, MagnifyingGlassIcon, XMarkIcon } from '
 import Loader from '@/components/Utils/Loader'
 import { useChatStore } from '@/store/chatStore'
 import { showToast } from '@/components/Toast/ToastContainer'
+import UploadUpdateDialog from '@/components/Document/UploadUpdateDialog'
 
 export default function DatabaseTab() {
   const [stats, setStats] = useState<DatabaseStats | null>(null)
@@ -25,18 +26,28 @@ export default function DatabaseTab() {
   const clearSelectedDocument = useChatStore((state) => state.clearSelectedDocument)
   const selectedDocumentId = useChatStore((state) => state.selectedDocumentId)
 
+  // Upload dialog state
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [showUploadDialog, setShowUploadDialog] = useState(false)
+
   const handleFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files)
+
+    // For single file uploads, show the dialog
+    if (fileArray.length === 1) {
+      setPendingFile(fileArray[0])
+      setShowUploadDialog(true)
+      return
+    }
+
+    // For multiple files, upload directly as new
     setUploadingFile(true)
-
     try {
-      const fileArray = Array.from(files)
-
       for (const file of fileArray) {
         await api.stageFile(file)
         showToast('success', `${file.name} uploaded`, 'Document queued for processing')
       }
 
-      // Emit event to notify other components
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('documents:uploaded'))
       }
@@ -46,6 +57,59 @@ export default function DatabaseTab() {
     } finally {
       setUploadingFile(false)
     }
+  }
+
+  // Handle dialog: upload as new
+  const handleUploadNew = async () => {
+    if (!pendingFile) return
+    setShowUploadDialog(false)
+    setUploadingFile(true)
+    try {
+      await api.stageFile(pendingFile)
+      showToast('success', `${pendingFile.name} uploaded`, 'Document queued for processing')
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('documents:uploaded'))
+      }
+    } catch (error) {
+      showToast('error', 'Upload failed', error instanceof Error ? error.message : 'Failed to upload file')
+    } finally {
+      setUploadingFile(false)
+      setPendingFile(null)
+    }
+  }
+
+  // Handle dialog: update existing document
+  const handleUpdateExisting = async (documentId: string) => {
+    if (!pendingFile) return
+    setShowUploadDialog(false)
+    setUploadingFile(true)
+    try {
+      const result = await api.updateDocument(documentId, pendingFile)
+      if (result.status === 'success' && result.changes) {
+        const { unchanged_chunks, added_chunks, removed_chunks } = result.changes
+        showToast(
+          'success',
+          `${pendingFile.name} updated`,
+          `${unchanged_chunks} chunks unchanged, ${added_chunks} added, ${removed_chunks} removed`
+        )
+      } else if (result.error) {
+        showToast('error', 'Update failed', result.details || result.error)
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('documents:uploaded'))
+      }
+    } catch (error) {
+      showToast('error', 'Update failed', error instanceof Error ? error.message : 'Failed to update document')
+    } finally {
+      setUploadingFile(false)
+      setPendingFile(null)
+    }
+  }
+
+  // Handle dialog close
+  const handleDialogClose = () => {
+    setShowUploadDialog(false)
+    setPendingFile(null)
   }
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -570,6 +634,16 @@ export default function DatabaseTab() {
           </div>
         )}
       </div>
+
+      {/* Upload Update Dialog */}
+      {showUploadDialog && pendingFile && (
+        <UploadUpdateDialog
+          file={pendingFile}
+          onClose={handleDialogClose}
+          onUploadNew={handleUploadNew}
+          onUpdateExisting={handleUpdateExisting}
+        />
+      )}
     </div>
   )
 }

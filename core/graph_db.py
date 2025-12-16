@@ -444,6 +444,272 @@ class GraphDB:
                 metadata=metadata,
             )
 
+    def merge_nodes(self, target_id: str, source_ids: List[str]) -> bool:
+        """
+        Merge source nodes into a target node. 
+        Transfers all relationships from sources to target, merges properties, and deletes sources.
+        
+        Args:
+            target_id: ID of the node to keep.
+            source_ids: IDs of nodes to merge into target.
+            
+        Returns:
+            bool: True if successful.
+        """
+        if not source_ids:
+            return False
+            
+        with self.session_scope() as session:
+            # 1. Verify existence of all nodes
+            all_ids = [target_id] + source_ids
+            check = session.run(
+                "MATCH (n:Entity) WHERE n.id IN $ids RETURN count(n) as count",
+                ids=all_ids
+            ).single()
+            
+            if not check or check["count"] != len(set(all_ids)):
+                logger.error(f"Merge failed: Not all nodes found. Expected {len(set(all_ids))}, found {check['count'] if check else 0}")
+                raise ValueError("Target or source nodes not found")
+
+            # 2. Transfer relationships
+            # Redirect incoming edges: (Other)-[r]->(Source) ==> (Other)-[r]->(Target)
+            session.run(
+                """
+                MATCH (source:Entity)<-[r]-(other)
+                WHERE source.id IN $source_ids
+                AND other.id <> $target_id
+                WITH source, r, other
+                MATCH (target:Entity {id: $target_id})
+                CALL apoc.refactor.to(r, target) YIELD input, output, error
+                RETURN count(*)
+                """,
+                source_ids=source_ids,
+                target_id=target_id
+            )
+            
+            # Redirect outgoing edges: (Source)-[r]->(Other) ==> (Target)-[r]->(Other)
+            session.run(
+                """
+                MATCH (source:Entity)-[r]->(other)
+                WHERE source.id IN $source_ids
+                AND other.id <> $target_id
+                WITH source, r, other
+                MATCH (target:Entity {id: $target_id})
+                CALL apoc.refactor.from(r, target) YIELD input, output, error
+                RETURN count(*)
+                """,
+                source_ids=source_ids,
+                target_id=target_id
+            )
+
+            # 3. Merge properties (Simple strategy: Append/Concatenate descriptions)
+            # We fetch source details and append meaningful distinct info to target
+            sources_data = session.run(
+                "MATCH (s:Entity) WHERE s.id IN $source_ids RETURN s.name, s.description",
+                source_ids=source_ids
+            )
+            
+            # Get current target desc
+            target_data = session.run(
+                "MATCH (t:Entity {id: $target_id}) RETURN t.description",
+                target_id=target_id
+            ).single()
+            
+            current_desc = target_data["t.description"] if target_data else ""
+            
+            # Append source info
+            new_desc_parts = [current_desc]
+            for rec in sources_data:
+                src_name = rec["s.name"]
+                src_desc = rec["s.description"]
+                if src_desc and src_desc not in current_desc:
+                    new_desc_parts.append(f"[{src_name}]: {src_desc}")
+            
+            final_desc = "\n".join(filter(None, new_desc_parts))
+            
+            session.run(
+                "MATCH (t:Entity {id: $target_id}) SET t.description = $desc",
+                target_id=target_id,
+                desc=final_desc
+            )
+            
+            # 4. Delete source nodes
+            session.run(
+                "MATCH (s:Entity) WHERE s.id IN $source_ids DETACH DELETE s",
+                source_ids=source_ids
+            )
+            
+            # 5. Re-generate embedding for target since description changed
+            # (Done asynchronously/lazily or we can force it here)
+            # We'll just force a re-embed
+            self.heal_node(target_id) # heal_node re-generates embedding if missing, but we might want to force update.
+            # Actually, let's just nullify the embedding so heal_node or next search fixes it
+            session.run("MATCH (t:Entity {id: $target_id}) SET t.embedding = NULL", target_id=target_id)
+            self.heal_node(target_id)
+            
+            return True
+
+    def heal_node(self, node_id: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Find potential missing connections for a node using vector similarity + LLM judgment.
+        
+        Two-phase approach:
+        1. Vector search to find semantically similar candidates (fast)
+        2. LLM judges each candidate for logical relationship validity (accurate)
+        
+        Args:
+            node_id: The ID of the node to heal.
+            top_k: Number of final candidates to return.
+            
+        Returns:
+            List of candidate nodes with similarity scores and LLM reasoning.
+        """
+        from core.llm import llm_manager
+        
+        with self.session_scope() as session:
+            # 1. Get target node info
+            result = session.run(
+                "MATCH (e:Entity {id: $node_id}) RETURN e.id, e.name, e.description, e.type, e.embedding",
+                node_id=node_id
+            ).single()
+            
+            if not result:
+                raise ValueError(f"Node {node_id} not found")
+            
+            embedding = result["e.embedding"]
+            source_name = result["e.name"]
+            source_description = result["e.description"] or ""
+            source_type = result["e.type"] or "Entity"
+            
+            # 2. If embedding is missing, generate it on the fly
+            if not embedding:
+                logger.info(f"Generating missing embedding for node {node_id} during healing")
+                text = f"{source_name}: {source_description}" if source_description else source_name
+                try:
+                    embedding = embedding_manager.get_embedding(text)
+                    # Save it back
+                    session.run(
+                        "MATCH (e:Entity {id: $node_id}) SET e.embedding = $embedding",
+                        node_id=node_id,
+                        embedding=embedding
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to generate embedding for {node_id}: {e}")
+                    return []
+
+            # 3. Vector search for similar nodes (get more candidates for LLM to filter)
+            # Exclude existing neighbors to find *new* connections
+            candidates_result = session.run(
+                """
+                CALL db.index.vector.queryNodes('entity_embeddings', $candidate_count, $embedding)
+                YIELD node, score
+                WHERE node.id <> $node_id
+                AND NOT (node)-[:RELATED_TO]-(:Entity {id: $node_id})
+                AND score > 0.5
+                RETURN node.id as id, node.name as name, node.description as description, node.type as type, score
+                LIMIT $candidate_count
+                """,
+                embedding=embedding,
+                node_id=node_id,
+                candidate_count=top_k * 3  # Get more candidates for LLM to filter
+            )
+            
+            candidates = [dict(record) for record in candidates_result]
+            
+            if not candidates:
+                logger.info(f"No embedding candidates found for node {node_id}")
+                return []
+            
+            # 4. LLM judges each candidate
+            logger.info(f"LLM judging {len(candidates)} candidates for node '{source_name}'")
+            approved_candidates = []
+            
+            for candidate in candidates:
+                try:
+                    # Build prompt for LLM judgment
+                    target_name = candidate.get("name", "Unknown")
+                    target_description = candidate.get("description", "") or ""
+                    target_type = candidate.get("type", "Entity") or "Entity"
+                    
+                    prompt = f"""Evaluate if these two entities from a knowledge graph should be directly connected:
+
+SOURCE ENTITY:
+- Name: {source_name}
+- Type: {source_type}
+- Description: {source_description[:300] if source_description else 'No description'}
+
+TARGET ENTITY:
+- Name: {target_name}
+- Type: {target_type}
+- Description: {target_description[:300] if target_description else 'No description'}
+
+Should these entities have a direct relationship in a knowledge graph?
+Consider: Are they related concepts, processes, components, or have meaningful semantic connection?
+
+Reply with ONLY one of:
+- YES: [brief reason why they should be connected]
+- NO: [brief reason why they should NOT be connected]"""
+
+                    system_message = "You are a knowledge graph curator. Evaluate entity relationships objectively. A connection should represent a meaningful semantic relationship, not just coincidental similarity."
+                    
+                    response = llm_manager.generate_response(
+                        prompt=prompt,
+                        system_message=system_message,
+                        temperature=0.1,
+                        max_tokens=100
+                    ).strip()
+                    
+                    # Parse response
+                    if response.upper().startswith("YES"):
+                        reason = response[4:].strip(": ").strip() if len(response) > 4 else "Approved by AI"
+                        candidate["approved"] = True
+                        candidate["reason"] = reason
+                        approved_candidates.append(candidate)
+                        logger.debug(f"  ✓ Approved: {source_name} → {target_name}: {reason}")
+                    else:
+                        logger.debug(f"  ✗ Rejected: {source_name} → {target_name}")
+                        
+                except Exception as e:
+                    logger.warning(f"LLM judgment failed for candidate {candidate.get('name')}: {e}")
+                    # On error, include candidate but mark as unverified
+                    candidate["approved"] = False
+                    candidate["reason"] = "LLM verification failed"
+                
+                # Stop if we have enough approved candidates
+                if len(approved_candidates) >= top_k:
+                    break
+            
+            logger.info(f"LLM approved {len(approved_candidates)}/{len(candidates)} candidates for '{source_name}'")
+            return approved_candidates[:top_k]
+
+    def find_orphan_nodes(self, min_cluster_size: int = 5) -> List[str]:
+        """
+        Find orphan nodes: entities not connected to any other entities.
+        
+        An orphan is an entity that has no RELATED_TO relationships with other entities.
+        This means it's isolated in the knowledge graph.
+        
+        Args:
+            min_cluster_size: (Reserved for future cluster-based detection)
+            
+        Returns:
+            List of node IDs that are orphans.
+        """
+        with self.session_scope() as session:
+            # Find entities with no RELATED_TO relationships to other entities
+            # These are truly isolated nodes in the knowledge graph
+            result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE NOT (e)-[:RELATED_TO]-(:Entity)
+                RETURN e.id as id
+                """
+            )
+            
+            orphan_ids = [record["id"] for record in result]
+            logger.info(f"Found {len(orphan_ids)} orphan nodes")
+            return orphan_ids
+
     def update_document_summary(
         self,
         doc_id: str,
@@ -798,6 +1064,177 @@ class GraphDB:
 
             chunk_count = rec["chunk_count"] or 0
             entity_count = rec["entity_count"] or 0
+            return {
+                "chunk_count": chunk_count,
+                "entity_count": entity_count,
+                "community_count": rec["community_count"] or 0,
+                "similarity_count": rec["similarity_count"] or 0,
+            }
+
+    # Snapshot & Restore (Phase 0: Safety)
+
+    def export_graph_snapshot(self) -> Dict[str, Any]:
+        """Export the entire graph structure (nodes and edges) directly."""
+        with self.session_scope() as session:
+            # Fetch all nodes with their properties and labels
+            # elementId is only available in newer Neo4j, using id() for compatibility or built-in ID handling if needed.
+            # However, standard practice for portable export is to rely on application IDs (d.id, e.id).
+            # We will grab all properties.
+            nodes_result = session.run(
+                """
+                MATCH (n)
+                RETURN labels(n) as labels, properties(n) as props, id(n) as internal_id
+                """
+            )
+            
+            nodes = []
+            # We map internal Neo4j IPs to a temporary ID for edge reconstruction if application IDs are missing,
+            # but ideally our graph is well-formed with 'id' properties on critical nodes.
+            # For a pure backup, we need a reliable way to link edge source/target.
+            # Using Neo4j internal IDs for the export map is safest for the edges step.
+            
+            for record in nodes_result:
+                nodes.append({
+                    "id": str(record["internal_id"]), # Use internal ID for linking
+                    "labels": record["labels"],
+                    "properties": record["props"]
+                })
+
+            # Fetch all edges
+            edges_result = session.run(
+                """
+                MATCH (s)-[r]->(t)
+                RETURN id(s) as source, id(t) as target, type(r) as type, properties(r) as props
+                """
+            )
+            
+            edges = []
+            for record in edges_result:
+                edges.append({
+                    "source": str(record["source"]),
+                    "target": str(record["target"]),
+                    "label": record["type"],
+                    "properties": record["props"]
+                })
+                
+            return {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "nodes": nodes,
+                "edges": edges,
+                "version": "1.0"
+            }
+
+    def restore_graph_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """
+        Wipe database and restore from snapshot.
+        Warning: This is a destructive operation.
+        """
+        nodes = snapshot.get("nodes", [])
+        edges = snapshot.get("edges", [])
+        
+        with self.session_scope() as session:
+            # 1. Wipe Database
+            logger.warning("Initiating Graph Restore: Wiping database...")
+            session.run("MATCH (n) DETACH DELETE n")
+            
+            # 2. Recreate Nodes (Batching recommended for large graphs, but simple version for now)
+            # We use the 'id' from the snapshot (which was the old internal ID) as a temporary key to link edges later.
+            # We will store it in a transient property `_restore_id` and remove it later.
+            
+            if nodes:
+                logger.info(f"Restoring {len(nodes)} nodes...")
+                session.run(
+                    """
+                    UNWIND $batch as row
+                    CALL apoc.create.node(row.labels, row.properties) YIELD node
+                    SET node._restore_id = row.id
+                    """,
+                    batch=nodes
+                )
+            
+            # 3. Recreate Edges
+            if edges:
+                logger.info(f"Restoring {len(edges)} edges...")
+                # We match source/target by the temporary `_restore_id`
+                session.run(
+                    """
+                    UNWIND $batch as row
+                    MATCH (s), (t)
+                    WHERE s._restore_id = row.source AND t._restore_id = row.target
+                    CALL apoc.create.relationship(s, row.label, row.properties, t) YIELD rel
+                    RETURN count(rel)
+                    """,
+                    batch=edges
+                )
+
+            # 4. Cleanup temporary ID
+            session.run("MATCH (n) REMOVE n._restore_id")
+            logger.info("Graph Restore completed.")
+
+    # Graph Editor (Phase 1: Manual Curation)
+
+    def create_relationship(self, source_id: str, target_id: str, relation_type: str, properties: Dict[str, Any] = {}) -> bool:
+        """Create a relationship between two nodes."""
+        # Sanitize relation type (Cypher cannot parameterize relationship types directly)
+        import re
+        safe_type = re.sub(r'[^A-Z0-9_]', '_', relation_type.upper())
+        if not safe_type:
+            safe_type = "RELATED_TO"
+
+        with self.session_scope() as session:
+            # We assume node IDs are the 'id' property. 
+            # If using Neo4j internal IDs, the strategy would differ.
+            result = session.run(
+                f"""
+                MATCH (s), (t)
+                WHERE (s.id = $source_id OR id(s) = toInteger($source_id)) 
+                  AND (t.id = $target_id OR id(t) = toInteger($target_id))
+                MERGE (s)-[r:`{safe_type}`]->(t)
+                SET r += $properties
+                RETURN count(r) as created
+                """,
+                source_id=source_id,
+                target_id=target_id,
+                properties=properties
+            )
+            rec = result.single()
+            return rec["created"] > 0 if rec else False
+
+    def delete_relationship(self, source_id: str, target_id: str, relation_type: str) -> bool:
+        """Delete a relationship between two nodes."""
+        import re
+        safe_type = re.sub(r'[^A-Z0-9_]', '_', relation_type.upper())
+        
+        with self.session_scope() as session:
+           result = session.run(
+                f"""
+                MATCH (s)-[r:`{safe_type}`]->(t)
+                WHERE (s.id = $source_id OR id(s) = toInteger($source_id)) 
+                  AND (t.id = $target_id OR id(t) = toInteger($target_id))
+                DELETE r
+                RETURN count(r) as deleted
+                """,
+                source_id=source_id,
+                target_id=target_id
+            )
+           rec = result.single()
+           return rec["deleted"] > 0 if rec else False
+
+    def update_node_properties(self, node_id: str, properties: Dict[str, Any]) -> bool:
+        """Update properties of a node."""
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (n)
+                WHERE n.id = $node_id OR id(n) = toInteger($node_id)
+                SET n += $properties
+                RETURN count(n) as updated
+                """,
+                node_id=node_id,
+                properties=properties
+            )
+            rec = result.single()
+            return rec["updated"] > 0 if rec else False
             community_count = rec["community_count"] or 0
             similarity_count = rec["similarity_count"] or 0
 
@@ -1271,74 +1708,70 @@ class GraphDB:
             with self.session_scope() as session:
                 result = session.run(
                     """
-                    MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
-                    WITH c, d, gds.similarity.cosine(c.embedding, $query_embedding) AS similarity
-                    RETURN c.id as chunk_id, c.content as content, similarity,
+                    CALL db.index.vector.queryNodes('chunk_embeddings', $top_k, $query_embedding)
+                    YIELD node, score
+                    MATCH (d:Document)-[:HAS_CHUNK]->(node)
+                    RETURN node.id as chunk_id, node.content as content, score as similarity,
                            coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
-                    ORDER BY similarity DESC
-                    LIMIT $top_k
                     """,
                     query_embedding=query_embedding,
                     top_k=top_k,
                 )
-                return [record.data() for record in result]
+                results_list = [record.data() for record in result]
+                logger.debug(f"Vector search returned {len(results_list)} results for query (top_k={top_k})")
+                return results_list
         except Exception as e:
-            # If the GDS cosine function isn't available in the running Neo4j instance
-            # fall back to a Python-side cosine calculation using stored embeddings.
-            msg = str(e).lower()
-            if "unknown function 'gds.similarity.cosine'" in msg or 'gds.similarity.cosine' in msg:
-                logger.warning("GDS cosine function unavailable; falling back to Python cosine computation: %s", e)
+            # If vector index search fails, fall back to Python-side cosine calculation
+            logger.warning("Vector index search failed; falling back to Python cosine computation: %s", e)
 
-                # Query candidate chunks that have embeddings and compute cosine locally
-                with self.session_scope() as session:
-                    result = session.run(
-                        """
-                        MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
-                        WHERE c.embedding IS NOT NULL
-                        RETURN c.id as chunk_id, c.content as content, c.embedding as embedding,
-                               coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
-                        """
-                    )
-                    candidates = [record.data() for record in result]
+            # Query candidate chunks that have embeddings and compute cosine locally
+            with self.session_scope() as session:
+                result = session.run(
+                    """
+                    MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+                    WHERE c.embedding IS NOT NULL
+                    RETURN c.id as chunk_id, c.content as content, c.embedding as embedding,
+                           coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                    """
+                )
+                candidates = [record.data() for record in result]
 
-                # Compute cosine similarity in Python (fallback, pure-Python implementation)
-                def _cosine(a: List[float], b: List[float]) -> float:
-                    try:
-                        # simple dot / (||a|| * ||b||)
-                        dot = 0.0
-                        na = 0.0
-                        nb = 0.0
-                        for x, y in zip(a, b):
-                            dot += x * y
-                            na += x * x
-                            nb += y * y
-                        if na == 0.0 or nb == 0.0:
-                            return 0.0
-                        return dot / ((na ** 0.5) * (nb ** 0.5))
-                    except Exception:
+            # Compute cosine similarity in Python (fallback, pure-Python implementation)
+            def _cosine(a: List[float], b: List[float]) -> float:
+                try:
+                    # simple dot / (||a|| * ||b||)
+                    dot = 0.0
+                    na = 0.0
+                    nb = 0.0
+                    for x, y in zip(a, b):
+                        dot += x * y
+                        na += x * x
+                        nb += y * y
+                    if na == 0.0 or nb == 0.0:
                         return 0.0
+                    return dot / ((na ** 0.5) * (nb ** 0.5))
+                except Exception:
+                    return 0.0
 
-                scored = []
-                for row in candidates:
-                    emb = row.get("embedding")
-                    if not emb:
-                        continue
-                    try:
-                        sim = _cosine(query_embedding, emb)
-                    except Exception:
-                        sim = 0.0
-                    scored.append({
-                        "chunk_id": row.get("chunk_id"),
-                        "content": row.get("content"),
-                        "similarity": sim,
-                        "document_name": row.get("document_name"),
-                        "document_id": row.get("document_id"),
-                    })
+            scored = []
+            for row in candidates:
+                emb = row.get("embedding")
+                if not emb:
+                    continue
+                try:
+                    sim = _cosine(query_embedding, emb)
+                except Exception:
+                    sim = 0.0
+                scored.append({
+                    "chunk_id": row.get("chunk_id"),
+                    "content": row.get("content"),
+                    "similarity": sim,
+                    "document_name": row.get("document_name"),
+                    "document_id": row.get("document_id"),
+                })
 
-                scored.sort(key=lambda r: r.get("similarity", 0.0), reverse=True)
-                return scored[:top_k]
-            # Re-raise for other exceptions
-            raise
+            scored.sort(key=lambda r: r.get("similarity", 0.0), reverse=True)
+            return scored[:top_k]
 
     def get_related_chunks(
         self,
@@ -2184,6 +2617,21 @@ class GraphDB:
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Chunk) ON (c.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.name)")
+            
+            # Create vector index for Entity embeddings
+            # Note: 1536 dimensions for text-embedding-ada-002
+            try:
+                session.run(
+                    "CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS "
+                    "FOR (e:Entity) ON (e.embedding) "
+                    "OPTIONS {indexConfig: { "
+                    " `vector.dimensions`: 1536, "
+                    " `vector.similarity_function`: 'cosine' "
+                    "}}"
+                )
+                logger.info("Entity vector index created successfully")
+            except Exception as e:
+                logger.warning(f"Failed to create entity vector index (may already exist or not supported): {e}")
             
             # Index for incremental document updates (content hash matching)
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Chunk) ON (c.content_hash)")

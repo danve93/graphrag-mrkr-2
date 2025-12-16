@@ -17,6 +17,9 @@ export interface GraphNode {
   level?: number | null
   degree?: number
   documents?: GraphDocumentRef[]
+  color?: string
+  description?: string
+  metadata?: Record<string, any>
 }
 
 export interface GraphEdge {
