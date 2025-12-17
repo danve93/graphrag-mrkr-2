@@ -1,5 +1,7 @@
 # Amber
 
+<img width="1280" height="640" alt="amber_avatar" src="https://github.com/user-attachments/assets/d86b3e7f-ca0b-488f-8ce6-9090bdb2a6a9" />
+
 A production-ready Graph-Enhanced Retrieval-Augmented Generation (GraphRAG) platform that combines vector similarity search with knowledge graph reasoning to deliver contextual, sourced, and high-quality answers over document collections.
 
 ## Overview
@@ -14,6 +16,8 @@ Traditional RAG systems rely solely on embedding similarity to retrieve context.
 This graph-enhanced approach surfaces contextually relevant information that pure vector search might miss.
 
 ## Architecture
+
+<img width="640" alt="architecture" src="https://github.com/user-attachments/assets/fcc010b5-5cb0-4e4c-be11-56ff12b87949" />
 
 ```
                          Frontend Layer
@@ -135,6 +139,8 @@ npm run dev
 ```
 
 ## GraphRAG Pipeline
+
+<img width="640" alt="pipeline" src="https://github.com/user-attachments/assets/f0d6b915-16c8-472f-bc44-9b7c24128246" />
 
 The RAG pipeline is implemented as a LangGraph StateGraph with the following stages:
 
@@ -258,6 +264,8 @@ ENABLE_ADAPTIVE_ROUTING=true
 
 ## API Reference
 
+<img width="640" alt="api" src="https://github.com/user-attachments/assets/807e87f8-b8bd-4f20-b376-7fa690f7e4fc" />
+
 ### Chat and Retrieval
 
 | Endpoint | Description |
@@ -374,6 +382,9 @@ amber/
 ```
 
 ## Documentation
+
+
+<img width="640" alt="documentation" src="https://github.com/user-attachments/assets/17fdc7ef-467f-4fde-a3e7-53093c4514ef" />
 
 Comprehensive documentation is available in the `documentation/` directory:
 
