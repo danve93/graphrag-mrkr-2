@@ -17,7 +17,8 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 
 ## Architecture
 
-<img width="640" height="320" alt="architecture" src="https://github.com/user-attachments/assets/fcc010b5-5cb0-4e4c-be11-56ff12b87949" />
+<img width="640" alt="architecture" src="https://github.com/user-attachments/assets/fcc010b5-5cb0-4e4c-be11-56ff12b87949" />
+
 ```
                          Frontend Layer
     ┌─────────────────────────────────────────────────────────────┐
@@ -139,7 +140,8 @@ npm run dev
 
 ## GraphRAG Pipeline
 
-<img width="640" height="320" alt="pipeline" src="https://github.com/user-attachments/assets/f0d6b915-16c8-472f-bc44-9b7c24128246" />
+<img width="640" alt="pipeline" src="https://github.com/user-attachments/assets/f0d6b915-16c8-472f-bc44-9b7c24128246" />
+
 The RAG pipeline is implemented as a LangGraph StateGraph with the following stages:
 
 ```
@@ -262,7 +264,8 @@ ENABLE_ADAPTIVE_ROUTING=true
 
 ## API Reference
 
-<img width="640" height="320" alt="api" src="https://github.com/user-attachments/assets/807e87f8-b8bd-4f20-b376-7fa690f7e4fc" />
+<img width="640" alt="api" src="https://github.com/user-attachments/assets/807e87f8-b8bd-4f20-b376-7fa690f7e4fc" />
+
 ### Chat and Retrieval
 
 | Endpoint | Description |
@@ -381,7 +384,8 @@ amber/
 ## Documentation
 
 
-<img width="640" height="320" alt="documentation" src="https://github.com/user-attachments/assets/17fdc7ef-467f-4fde-a3e7-53093c4514ef" />
+<img width="640" alt="documentation" src="https://github.com/user-attachments/assets/17fdc7ef-467f-4fde-a3e7-53093c4514ef" />
+
 Comprehensive documentation is available in the `documentation/` directory:
 
 1. **Getting Started** - Architecture, setup, configuration
