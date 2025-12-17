@@ -286,6 +286,8 @@ class ProcessProgress(BaseModel):
     progress_percentage: float
     entity_state: Optional[str] = Field(None, description="Entity extraction state")
     error: Optional[str] = None
+    cancelled: bool = Field(False, description="Whether this job has been cancelled")
+    message: Optional[str] = Field(None, description="Detailed status message")
 
 
 class ProcessDocumentsRequest(BaseModel):

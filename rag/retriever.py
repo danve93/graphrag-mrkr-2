@@ -1353,6 +1353,10 @@ class DocumentRetriever:
         Returns:
             List of relevant chunks with metadata
         """
+        # Apply RAG tuning config overrides (runtime sync from UI)
+        from config.settings import apply_rag_tuning_overrides
+        apply_rag_tuning_overrides(settings)
+        
         logger.info(
             f"Starting retrieval with mode: {mode.value}, top_k: {top_k}, multi_hop: {use_multi_hop}"
         )

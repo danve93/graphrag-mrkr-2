@@ -28,7 +28,7 @@ export default function SourcesList({ sources }: SourcesListProps) {
 
     sources.forEach((source) => {
       // Use original_filename if available, fall back to document_name
-      const docName = source.original_filename || source.document_name || source.filename || 'Unknown Document'
+      const docName = source.original_filename || source.document_name || source.filename || 'Reading document...'
       const docKey = docName // Use document name as the key
 
       if (!groups.has(docKey)) {
@@ -44,14 +44,14 @@ export default function SourcesList({ sources }: SourcesListProps) {
       }
 
       const group = groups.get(docKey)!
-      
+
       // If this source has a document_id and the group doesn't have one yet, use it
       if (source.document_id && group.documentId === docKey) {
         group.documentId = source.document_id
       }
-      
+
       group.chunks.push(source)
-      
+
       // Count entities (handle entity sources)
       if (source.entity_name) {
         group.entityCount++
@@ -63,7 +63,7 @@ export default function SourcesList({ sources }: SourcesListProps) {
       const validSimilarities = group.chunks
         .map((c) => c.similarity || c.relevance_score || 0)
         .filter((s) => !isNaN(s) && s > 0)
-      
+
       if (validSimilarities.length > 0) {
         group.avgSimilarity = validSimilarities.reduce((a, b) => a + b, 0) / validSimilarities.length
       } else {
@@ -92,9 +92,9 @@ export default function SourcesList({ sources }: SourcesListProps) {
         )}
       </button>
 
-        {expanded && (
-          <div className="space-y-2"
-          >
+      {expanded && (
+        <div className="space-y-2"
+        >
           {visibleDocs.map((doc, index) => (
             <div
               key={doc.documentId}
@@ -136,10 +136,10 @@ export default function SourcesList({ sources }: SourcesListProps) {
                 </div>
               </div>
 
-                {selectedDoc === doc.documentId && (
-                  <div
-                    className="mt-3 pt-3 border-t border-secondary-200 dark:border-secondary-700 space-y-2"
-                  >
+              {selectedDoc === doc.documentId && (
+                <div
+                  className="mt-3 pt-3 border-t border-secondary-200 dark:border-secondary-700 space-y-2"
+                >
                   {doc.chunks.map((chunk, chunkIndex) => {
                     const similarity = chunk.similarity || chunk.relevance_score || 0
                     const handleChunkClick = () => {

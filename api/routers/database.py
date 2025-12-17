@@ -55,31 +55,48 @@ _global_processing_state: Dict[str, Any] = {
 _ENTITY_STAGE_FRACTIONS = {
     EntityExtractionState.STARTING: 0.05,
     EntityExtractionState.LLM_EXTRACTION: 0.25,
-    EntityExtractionState.EMBEDDING_GENERATION: 0.55,
-    EntityExtractionState.DATABASE_OPERATIONS: 0.8,
-    EntityExtractionState.VALIDATION: 0.95,
+    EntityExtractionState.EMBEDDING_GENERATION: 0.45,
+    EntityExtractionState.DATABASE_OPERATIONS: 0.70,
+    EntityExtractionState.CLUSTERING: 0.80,
+    EntityExtractionState.VALIDATION: 0.90,
     EntityExtractionState.COMPLETED: 1.0,
     EntityExtractionState.ERROR: 1.0,
 }
 
 
 def _calculate_overall_progress(progress: ProcessProgress) -> float:
-    """Compute overall progress percentage blending chunk/entity phases."""
+    """
+    Compute overall progress percentage blending chunk/entity phases.
+    Weights:
+    - Preparation (Classification/Chunking/Summarization): 0-20%
+    - Embedding (Chunk Processing): 20-80%
+    - Entity Extraction: 80-100%
+    """
+    stage = (progress.stage or "").lower()
+    
+    # Phase 1: Preparation (0-20%)
+    if stage == "classification":
+        return 5.0
+    if stage == "chunking":
+        return 10.0
+    if stage == "summarization":
+        return 15.0
+        
+    # Phase 2: Embedding (20-80%)
+    # This phase is driven by chunk_progress (0.0 to 1.0)
+    if stage == "embedding" or (not progress.entity_progress and progress.chunk_progress > 0):
+        chunk_fraction = progress.chunk_progress or 0.0
+        return 20.0 + (chunk_fraction * 60.0)
 
-    mode = progress.mode or "full"
-    chunk_weight = 0.7 if mode == "full" else (1.0 if mode == "chunks_only" else 0.0)
-    entity_weight = 0.3 if mode == "full" else (1.0 if mode == "entities_only" else 0.0)
+    # Phase 3: Entity Extraction (80-100%)
+    # This phase is driven by entity_progress (0.0 to 1.0)
+    # If we have entity progress, we assume embedding is done (100% of 60% = 60%, plus 20% base = 80%)
+    if progress.entity_progress and progress.entity_progress > 0:
+        entity_fraction = progress.entity_progress or 0.0
+        return 80.0 + (entity_fraction * 20.0)
 
-    chunk_fraction = progress.chunk_progress or 0.0
-    entity_fraction = progress.entity_progress or 0.0
-
-    total = 0.0
-    if chunk_weight:
-        total += chunk_fraction * chunk_weight
-    if entity_weight:
-        total += entity_fraction * entity_weight
-
-    return max(0.0, min(100.0, total * 100.0))
+    # Fallback/Default
+    return 0.0
 
 
 def _update_queue_positions() -> None:
@@ -253,7 +270,13 @@ async def _process_single_job(file_id: str) -> None:
             else:
                 success = await _run_chunk_job(file_id, staged_doc, progress)
 
-                if success and staged_doc.mode != "chunks_only":
+                # Check for cancellation between phases
+                if progress.cancelled:
+                    logger.info(f"Job {file_id} cancelled between phases")
+                    progress.status = "cancelled"
+                    progress.stage = "cancelled"
+                    success = False
+                elif success and staged_doc.mode != "chunks_only":
                     progress.stage = "entity_extraction"
                     _global_processing_state["current_stage"] = "entity_extraction"
                     if doc_id:
@@ -304,6 +327,13 @@ async def _run_chunk_job(
 ) -> bool:
     """Process chunk extraction/embedding for a staged document."""
 
+    # Check for cancellation before starting
+    if progress.cancelled:
+        logger.info(f"Chunk job cancelled for {file_id}")
+        progress.status = "cancelled"
+        progress.stage = "cancelled"
+        return False
+
     file_path = Path(staged_doc.file_path)
     if not file_path.exists():
         progress.status = "error"
@@ -338,14 +368,35 @@ async def _run_chunk_job(
     if estimated_chunks:
         progress.total_chunks = estimated_chunks
 
-    def _chunk_progress_callback(chunks_processed: int) -> None:
+    def _chunk_progress_callback(
+        chunks_processed: int, message: Optional[str] = None
+    ) -> None:
+        if message:
+            progress.message = message
+            if "classification" in message.lower():
+                progress.stage = "classification"
+            elif "summary" in message.lower() or "abstract" in message.lower():
+                progress.stage = "summarization"
+            elif "embedding" in message.lower():
+                progress.stage = "embedding"
+            elif "chunking" in message.lower():
+                progress.stage = "chunking"
+        
         progress.chunks_processed = chunks_processed
         if progress.total_chunks:
             progress.chunk_progress = min(1.0, chunks_processed / progress.total_chunks)
         else:
-            progress.chunk_progress = 0.0 if chunks_processed == 0 else 0.9
+            if chunks_processed == 0:
+                progress.chunk_progress = 0.0
+                if not message:
+                    progress.message = "Starting"
+                    progress.stage = "Starting"
+            else:
+                progress.chunk_progress = 0.9
         progress.progress_percentage = _calculate_overall_progress(progress)
         _global_processing_state["progress_percentage"] = progress.progress_percentage
+
+    _chunk_progress_callback.is_cancelled = lambda: progress.cancelled
 
     process_fn = partial(
         document_processor.process_file_chunks_only,
@@ -394,6 +445,13 @@ async def _run_entity_job(
 ) -> bool:
     """Run entity extraction for a document and update progress accordingly."""
 
+    # Check for cancellation before starting
+    if progress.cancelled:
+        logger.info(f"Entity job cancelled for {file_id}")
+        progress.status = "cancelled"
+        progress.stage = "cancelled"
+        return False
+
     doc_id = progress.document_id
     if not doc_id:
         progress.error = "Unknown document identifier for entity extraction"
@@ -407,9 +465,14 @@ async def _run_entity_job(
         state: EntityExtractionState, fraction: float, info: Optional[str]
     ) -> None:
         progress.entity_state = state.value
+        progress.stage = state.value  # Update stage for granular UI feedback
         progress.entity_progress = _ENTITY_STAGE_FRACTIONS.get(state, fraction)
+        if info:
+            progress.message = info
         progress.progress_percentage = _calculate_overall_progress(progress)
         _global_processing_state["progress_percentage"] = progress.progress_percentage
+
+    _entity_progress_callback.is_cancelled = lambda: progress.cancelled
 
     entity_fn = partial(
         document_processor.extract_entities_for_document,
@@ -1002,9 +1065,12 @@ async def delete_staged_document(file_id: str):
         # Remove from staged list
         del _staged_documents[file_id]
 
-        # Remove from processing progress if exists
+        # Mark as cancelled if in progress, then remove from tracking
         if file_id in _processing_progress:
-            del _processing_progress[file_id]
+            _processing_progress[file_id].cancelled = True
+            logger.info(f"Cancelling in-progress job for {file_id}")
+            # Don't delete immediately - let the worker see the cancelled flag
+            # The worker will clean up after it detects cancellation
 
         # Remove from processing queue if exists
         async with _queue_lock:

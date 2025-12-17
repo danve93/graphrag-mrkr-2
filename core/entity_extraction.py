@@ -1027,18 +1027,19 @@ Your answer (Y or N):"""
         self,
         chunks: List[Dict[str, Any]],
         max_gleanings: int,
-        document_type: Optional[str] = None
+        document_type: Optional[str] = None,
+        is_cancelled: Optional[Any] = None,
+        progress_callback: Optional[Any] = None
     ) -> Tuple[Dict[str, Entity], Dict[str, List[Relationship]]]:
         """
-        Extract from multiple chunks with gleaning (batch processing).
+        Extract from chunks with gleaning (batch processing).
         
         Args:
-            chunks: List of chunk dicts with 'chunk_id' and 'content'
+            chunks: List of chunk dicts
             max_gleanings: Gleaning passes per chunk
-            document_type: Document type for logging
-        
-        Returns:
-            (all_entities_dict, relationships_by_pair)
+            document_type: Document type
+            is_cancelled: Cancellation check callable
+            progress_callback: Callback(processed_count, total_count)
         """
         logger.info(
             f"Starting gleaning extraction from {len(chunks)} chunks "
@@ -1080,11 +1081,28 @@ Your answer (Y or N):"""
         
         results = []
         for coro in asyncio.as_completed(extraction_tasks):
+            # Check cancellation
+            if is_cancelled and is_cancelled():
+                logger.info("Cancellation detected in extract_from_chunks_with_gleaning")
+                for t in extraction_tasks:
+                    t.cancel()
+                await asyncio.gather(*extraction_tasks, return_exceptions=True)
+                raise asyncio.CancelledError("Gleaning extraction cancelled")
+
             try:
                 res = await coro
                 results.append(res)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"Error in gleaning extraction task: {e}")
+
+            # Update progress
+            if progress_callback:
+                try:
+                    progress_callback(len(results), len(chunks))
+                except Exception as pc_e:
+                    logger.debug(f"Progress callback failed: {pc_e}")
         
         # Consolidate results (same logic as baseline)
         all_entities_list = []
@@ -1125,13 +1143,18 @@ Your answer (Y or N):"""
         return all_entities, relationships_by_pair
 
     async def extract_from_chunks(
-        self, chunks: List[Dict[str, Any]]
+        self, 
+        chunks: List[Dict[str, Any]],
+        is_cancelled: Optional[Any] = None,
+        progress_callback: Optional[Any] = None
     ) -> Tuple[Dict[str, Entity], Dict[str, List[Relationship]]]:
         """
         Extract entities and relationships from multiple chunks.
 
         Args:
             chunks: List of chunk dictionaries with 'chunk_id' and 'content' keys
+            is_cancelled: Optional callable returning True if job is cancelled
+            progress_callback: Callback(processed_count, total_count)
 
         Returns:
             Tuple of (consolidated_entities, relationships_by_entity_pair)
@@ -1176,11 +1199,28 @@ Your answer (Y or N):"""
 
         results = []
         for coro in asyncio.as_completed(extraction_tasks):
+            # Check cancellation
+            if is_cancelled and is_cancelled():
+                logger.info("Cancellation detected in extract_from_chunks")
+                for t in extraction_tasks:
+                    t.cancel()
+                await asyncio.gather(*extraction_tasks, return_exceptions=True)
+                raise asyncio.CancelledError("Entity extraction cancelled")
+
             try:
                 res = await coro
                 results.append(res)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"Error in extraction task: {e}")
+
+            # Update progress
+            if progress_callback:
+                try:
+                    progress_callback(len(results), len(chunks))
+                except Exception as pc_e:
+                    logger.debug(f"Progress callback failed: {pc_e}")
 
         # Consolidate entities and relationships
         all_entities_list = []

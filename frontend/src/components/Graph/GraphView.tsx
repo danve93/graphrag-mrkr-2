@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Info, Network } from 'lucide-react'
+import { Info, Network, Box, Grid2X2 } from 'lucide-react'
 import { Button } from '@mui/material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Loader from '@/components/Utils/Loader'
@@ -25,6 +25,16 @@ const CytoscapeGraph = dynamic(() => import('./CytoscapeGraph'), {
   ),
 })
 
+// Dynamic import for 3D graph (heavier, only load when needed)
+const ThreeGraph = dynamic(() => import('./ThreeGraph'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full w-full items-center justify-center bg-[var(--bg-primary)]">
+      <Loader size={28} label="Loading 3D visualization..." />
+    </div>
+  ),
+})
+
 export default function GraphView() {
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>({
     nodes: [],
@@ -43,6 +53,7 @@ export default function GraphView() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [dimensions, setDimensions] = useState({ width: 600, height: 600 })
   const [expanded, setExpanded] = useState(false)
+  const [show3DView, setShow3DView] = useState(false)
 
   const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set(['filters']))
 
@@ -260,27 +271,63 @@ export default function GraphView() {
             <div className="flex items-center gap-2">
               <Network size={20} className="text-accent-primary" />
               <h2 className="font-display font-bold text-[var(--heading-text)]">Graph Explorer</h2>
-              <span className="text-xs px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">Fullscreen</span>
+              <span className="text-xs px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+                {show3DView ? '3D View' : 'Fullscreen'}
+              </span>
             </div>
-            <button
-              onClick={() => setExpanded(false)}
-              className="small-button bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border-[var(--border)]"
-            >
-              Exit Fullscreen
-            </button>
+            <div className="flex items-center gap-2">
+              {/* 3D/2D Toggle Button */}
+              <button
+                onClick={() => setShow3DView(!show3DView)}
+                className={`small-button flex items-center gap-2 ${show3DView
+                    ? 'bg-[var(--accent-primary)] text-white border-[var(--accent-primary)]'
+                    : 'bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border-[var(--border)]'
+                  }`}
+              >
+                {show3DView ? (
+                  <>
+                    <Grid2X2 size={16} />
+                    <span>2D View</span>
+                  </>
+                ) : (
+                  <>
+                    <Box size={16} />
+                    <span>3D View</span>
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setExpanded(false)
+                  setShow3DView(false)
+                }}
+                className="small-button bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border-[var(--border)]"
+              >
+                Exit Fullscreen
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 relative w-full h-full overflow-hidden">
-            <CytoscapeGraph
-              nodes={graphData.nodes}
-              edges={graphData.edges}
-              backgroundColor={backgroundColorResolved}
-              onGraphUpdate={fetchGraph}
-              onNodeClick={setSelectedNode}
-            />
+            {show3DView ? (
+              <ThreeGraph
+                nodes={graphData.nodes}
+                edges={graphData.edges}
+                onNodeClick={setSelectedNode}
+                gestureEnabled={true}
+              />
+            ) : (
+              <CytoscapeGraph
+                nodes={graphData.nodes}
+                edges={graphData.edges}
+                backgroundColor={backgroundColorResolved}
+                onGraphUpdate={fetchGraph}
+                onNodeClick={setSelectedNode}
+              />
+            )}
 
-            {/* Toolbar in Fullscreen */}
-            <GraphToolbar onFit={() => { }} />
+            {/* Toolbar in Fullscreen (2D only) */}
+            {!show3DView && <GraphToolbar onFit={() => { }} />}
 
             {/* Node Sidebar in Fullscreen */}
             {selectedNode && (

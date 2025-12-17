@@ -123,16 +123,16 @@ export default function DocumentView() {
       const docParam = params.get('doc')
       const chunkParam = params.get('chunk')
       const chunkIdParam = params.get('chunk_id')
+
+      // Only set initial selection if we have a param
       if (docParam) {
-        // Select document and optional chunk from URL
-        if (!selectedDocumentId || selectedDocumentId !== docParam) {
-          selectDocument(docParam)
-        }
+        // Use store action directly
+        selectDocument(docParam)
+
         if (chunkParam) {
           const parsed = Number(chunkParam)
           if (!Number.isNaN(parsed)) {
             // chunk interpreted as index
-            // Use store action directly
             const selectChunk = (useChatStore.getState && (useChatStore.getState() as any).selectDocumentChunk) || null
             if (selectChunk) selectChunk(docParam, parsed)
           }
@@ -144,7 +144,38 @@ export default function DocumentView() {
     } catch (e) {
       // ignore
     }
-  }, [selectDocument, selectedDocumentId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Run ONLY on mount
+
+  // Sync selection to URL
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const params = new URLSearchParams(window.location.search)
+    if (selectedDocumentId) {
+      if (params.get('doc') !== selectedDocumentId) {
+        params.set('doc', selectedDocumentId)
+        // Clear chunk params when changing doc unless specified (we could keep them but usually it doesn't make sense)
+        const currentDocParam = new URLSearchParams(window.location.search).get('doc')
+        if (currentDocParam !== selectedDocumentId) {
+          params.delete('chunk')
+          params.delete('chunk_id')
+        }
+
+        const newUrl = `${window.location.pathname}?${params.toString()}`
+        window.history.replaceState({}, '', newUrl)
+      }
+    } else {
+      // If no document selected, remove the param if it exists
+      if (params.has('doc')) {
+        params.delete('doc')
+        params.delete('chunk')
+        params.delete('chunk_id')
+        const newUrl = window.location.pathname + (params.toString() ? `?${params.toString()}` : '')
+        window.history.replaceState({}, '', newUrl)
+      }
+    }
+  }, [selectedDocumentId])
 
   // Summary-first loading effect
   useEffect(() => {

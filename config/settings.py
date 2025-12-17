@@ -801,32 +801,62 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
     
     # Apply direct parameter mappings
     param_mappings = {
+        # === Content Filtering (Ingestion) ===
+        "enable_content_filtering": "enable_content_filtering",
+        "content_filter_min_length": "content_filter_min_length",
+        "content_filter_unique_ratio": "content_filter_unique_ratio",
+        "content_filter_max_special_char_ratio": "content_filter_max_special_char_ratio",
+        "content_filter_min_alphanumeric_ratio": "content_filter_min_alphanumeric_ratio",
+        "content_filter_enable_conversation": "content_filter_enable_conversation",
+        "content_filter_enable_structured": "content_filter_enable_structured",
+        "content_filter_enable_code": "content_filter_enable_code",
+        # === Temporal Retrieval ===
+        "enable_temporal_filtering": "enable_temporal_filtering",
+        "default_time_decay_weight": "default_time_decay_weight",
+        "temporal_window_days": "temporal_window_days",
+        # === Multi-Stage Retrieval ===
+        "enable_two_stage_retrieval": "enable_two_stage_retrieval",
+        "two_stage_threshold_docs": "two_stage_threshold_docs",
+        "two_stage_multiplier": "two_stage_multiplier",
+        # === Fuzzy Matching ===
+        "enable_fuzzy_matching": "enable_fuzzy_matching",
+        "max_fuzzy_distance": "max_fuzzy_distance",
+        "fuzzy_confidence_threshold": "fuzzy_confidence_threshold",
+        # === Quality Monitoring ===
+        "enable_quality_monitoring": "enable_quality_monitoring",
+        "quality_monitor_window_size": "quality_monitor_window_size",
+        "quality_alert_threshold": "quality_alert_threshold",
+        # === Entity Extraction ===
         "enable_entity_extraction": "enable_entity_extraction",
         "enable_gleaning": "enable_gleaning",
         "max_gleanings": "max_gleanings",
         "entity_extraction_format": "entity_extraction_format",
         "tuple_format_validation": "tuple_format_validation",
-        # Removed legacy tuple_fallback_to_pipe
         "tuple_max_description_length": "tuple_max_description_length",
+        # === Description Enhancement ===
         "enable_description_summarization": "enable_description_summarization",
         "summarization_min_mentions": "summarization_min_mentions",
         "summarization_min_length": "summarization_min_length",
         "summarization_batch_size": "summarization_batch_size",
         "summarization_cache_enabled": "summarization_cache_enabled",
+        # === Graph Persistence ===
         "enable_phase2_networkx": "enable_phase2_networkx",
         "neo4j_unwind_batch_size": "neo4j_unwind_batch_size",
         "max_nodes_per_doc": "max_nodes_per_doc",
         "max_edges_per_doc": "max_edges_per_doc",
         "importance_score_threshold": "importance_score_threshold",
         "strength_threshold": "strength_threshold",
+        # === OCR & Image Processing ===
         "enable_ocr": "enable_ocr",
         "ocr_quality_threshold": "ocr_quality_threshold",
+        # === Performance & Limits ===
         "llm_concurrency": "llm_concurrency",
         "embedding_concurrency": "embedding_concurrency",
         "llm_delay_min": "llm_delay_min",
         "llm_delay_max": "llm_delay_max",
         "embedding_delay_min": "embedding_delay_min",
         "embedding_delay_max": "embedding_delay_max",
+        # === PDF Processing ===
         "use_marker_for_pdf": "use_marker_for_pdf",
         "marker_output_format": "marker_output_format",
         "marker_use_llm": "marker_use_llm",
@@ -834,24 +864,30 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "marker_force_ocr": "marker_force_ocr",
         "marker_strip_existing_ocr": "marker_strip_existing_ocr",
         "marker_pdftext_workers": "marker_pdftext_workers",
-        # Retrieval fusion & ranking
+        "marker_llm_model": "marker_llm_model",
+        # === Retrieval Fusion & Ranking ===
         "enable_rrf": "enable_rrf",
         "rrf_k": "rrf_k",
-        # Lexical search controls
         "enable_chunk_fulltext": "enable_chunk_fulltext",
         "keyword_search_weight": "keyword_search_weight",
-        # Hybrid weights
         "hybrid_chunk_weight": "hybrid_chunk_weight",
         "hybrid_entity_weight": "hybrid_entity_weight",
-        # Reranker controls
+        # === Reranker ===
         "flashrank_enabled": "flashrank_enabled",
         "flashrank_model_name": "flashrank_model_name",
         "flashrank_blend_weight": "flashrank_blend_weight",
         "flashrank_max_candidates": "flashrank_max_candidates",
         "flashrank_batch_size": "flashrank_batch_size",
-        # Query analysis & expansion
+        # === Query Expansion ===
         "enable_query_expansion": "enable_query_expansion",
         "query_expansion_threshold": "query_expansion_threshold",
+        "max_expansions": "max_expansions",
+        "expansion_penalty": "expansion_penalty",
+        "use_llm_expansion": "use_llm_expansion",
+        # === Client-Side Vector Search ===
+        "enable_static_entity_matching": "enable_static_entity_matching",
+        # === Layered Memory System ===
+        "enable_memory_system": "enable_memory_system",
     }
     
     for config_key, settings_attr in param_mappings.items():

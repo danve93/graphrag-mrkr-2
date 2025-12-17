@@ -221,7 +221,9 @@ export default function DatabaseTab() {
                 processing_status: progressMatch.status,
                 processing_stage: progressMatch.stage || doc.processing_stage,
                 processing_progress: progressMatch.progress_percentage,
-                queue_position: progressMatch.queue_position
+                queue_position: progressMatch.queue_position,
+                chunk_progress: progressMatch.chunk_progress,
+                entity_progress: progressMatch.entity_progress
               }
             }
             return freshDoc || doc
@@ -378,7 +380,7 @@ export default function DatabaseTab() {
     const progress = typeof doc.processing_progress === 'number' ? Math.round(doc.processing_progress) : null
 
     if (status === 'processing') {
-      return `Processing${stage ? ` – ${stage}` : ''}${progress !== null ? ` (${progress}%)` : ''}`
+      return null
     }
     if (status === 'queued') {
       return 'Processing queued'
@@ -575,7 +577,7 @@ export default function DatabaseTab() {
                             ? (isStuck ? 'Queue stuck - processing may have crashed' : 'Processing queued')
                             : (doc as any).document_type
                               ? (doc as any).document_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
-                              : 'Unknown type'}
+                              : 'Reading document...'}
                         </p>
                         {statusLabel && status !== 'queued' && status !== 'staged' && (
                           <p className={`text-[11px] mt-1 ${status === 'error' ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}`} style={status === 'processing' ? { color: 'var(--primary-600)' } : undefined}>
@@ -601,7 +603,17 @@ export default function DatabaseTab() {
                       <div className="w-full">
                         <div className="flex justify-between text-[10px] mb-1">
                           <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
-                            {isStuck ? 'Stuck - may need manual refresh' : (doc.processing_stage || 'Processing')}
+                            {isStuck ? 'Stuck - may need manual refresh' : (
+                              <>
+                                {doc.processing_stage || 'Processing'}
+                                {(doc.processing_stage === 'embedding' && (doc as any).chunk_progress > 0) ?
+                                  ` ${Math.round((doc as any).chunk_progress * 100)}%` : ''
+                                }
+                                {(!['classification', 'chunking', 'summarization', 'embedding', 'processing', 'queued'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).entity_progress > 0) ?
+                                  ` ${Math.round((doc as any).entity_progress * 100)}%` : ''
+                                }
+                              </>
+                            )}
                           </span>
                           <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
                             {Math.round(progress)}%
@@ -610,7 +622,7 @@ export default function DatabaseTab() {
                         <div className="h-1.5 w-full rounded-full bg-secondary-200">
                           <div
                             className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : ''}`}
-                            style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--primary-500)' }}
+                            style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--accent-primary)' }}
                           />
                         </div>
                       </div>

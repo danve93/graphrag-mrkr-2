@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom'
 import { Message } from '@/types'
 import { api, API_URL } from '@/lib/api'
 import { Button } from '@mui/material'
-import { MessageSquare } from 'lucide-react'
+import { Chat as ChatIconMui } from '@mui/icons-material'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
 import FollowUpQuestions from './FollowUpQuestions'
@@ -501,7 +501,7 @@ export default function ChatInterface() {
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <MessageSquare size={24} color="#f27a03" />
+            <ChatIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>

@@ -11,7 +11,7 @@
         {
           "key": "enable_content_filtering",
           "label": "Enable Content Filtering",
-          "value": false,
+          "value": true,
           "options": null,
           "min": null,
           "max": null,
@@ -624,9 +624,9 @@
           "key": "entity_extraction_format",
           "label": "Entity Extraction Format",
           "value": "tuple_v1",
-            "options": [
-              "tuple_v1"
-            ],
+          "options": [
+            "tuple_v1"
+          ],
           "min": null,
           "max": null,
           "step": null,
@@ -644,7 +644,6 @@
           "type": "toggle",
           "tooltip": "Enable strict validation of tuple format output structure and field requirements. Recommended for production to ensure data quality."
         },
-
         {
           "key": "tuple_max_description_length",
           "label": "Tuple Max Description Length",

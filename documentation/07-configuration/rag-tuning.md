@@ -1,15 +1,20 @@
 # RAG Tuning
 
-Runtime configuration for retrieval and generation parameters.
+Runtime configuration for retrieval, ingestion, and generation parameters.
 
 ## Overview
 
-RAG tuning allows runtime adjustment of retrieval and generation parameters without restarting the server. Configuration can be set via:
+RAG tuning allows runtime adjustment of parameters **without restarting the server**. Changes take effect immediately on the next operation:
+- **Ingestion**: Settings applied at the start of each document upload
+- **Retrieval**: Settings applied at the start of each chat query
 
-1. **Chat Tuning UI** - Frontend panel for real-time adjustments
-2. **JSON Configuration** - `config/rag_tuning_config.json`
-3. **Per-Request Parameters** - ChatRequest model fields
-4. **Environment Variables** - Default fallbacks
+Configuration can be set via:
+
+1. **RAG Tuning UI** - Frontend panel for ingestion parameters (Content Filtering, Entity Extraction, PDF Processing)
+2. **Chat Tuning UI** - Frontend panel for retrieval parameters (Reranking, Weights, Temperature)
+3. **JSON Configuration** - `config/rag_tuning_config.json` (ingestion) and `config/chat_tuning_config.json` (retrieval)
+4. **Per-Request Parameters** - ChatRequest model fields
+5. **Environment Variables** - Initial defaults (overridden by JSON config at runtime)
 
 ## Configuration File
 
@@ -56,6 +61,40 @@ config/rag_tuning_config.json
 ---
 
 ## Parameters Reference
+
+### Ingestion Parameters
+
+These settings affect document processing and are applied at the start of each upload:
+
+#### enable_content_filtering
+**Type**: `toggle` | **Default**: `true`
+
+Enable heuristic-based filtering of low-quality chunks before embedding.
+
+#### content_filter_min_length
+**Type**: `slider` | **Range**: `10-500` | **Default**: `50`
+
+Minimum chunk length in characters.
+
+#### enable_entity_extraction
+**Type**: `toggle` | **Default**: `true`
+
+Enable LLM-based entity and relationship extraction.
+
+#### enable_gleaning
+**Type**: `toggle` | **Default**: `true`
+
+Enable multi-pass entity extraction for improved quality.
+
+#### use_marker_for_pdf
+**Type**: `toggle` | **Default**: `true`
+
+Use Marker for advanced PDF conversion (better table/equation extraction).
+
+> [!TIP]
+> See all 90+ configurable parameters in `config/rag_tuning_config.json`
+
+---
 
 ### Retrieval Section
 
@@ -396,6 +435,20 @@ Minimal latency, lower cost.
 ---
 
 ## Loading Configuration
+
+### Automatic Runtime Sync
+
+Configuration is automatically synced to backend settings at the start of each operation:
+
+```python
+# Called automatically at start of:
+# - document_processor.process_file() (ingestion)
+# - retriever.retrieve() (queries)
+from config.settings import apply_rag_tuning_overrides, settings
+apply_rag_tuning_overrides(settings)
+```
+
+This reads `config/rag_tuning_config.json` and applies values to the `settings` object. **No restart required.**
 
 ### Python
 

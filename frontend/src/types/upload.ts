@@ -23,6 +23,7 @@ export interface ProcessProgress {
   progress_percentage: number
   entity_state?: string | null
   error?: string
+  message?: string | null
 }
 
 export interface StageDocumentResponse {
