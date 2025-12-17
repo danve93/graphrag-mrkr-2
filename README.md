@@ -1,6 +1,6 @@
 # Amber
 
-<img width="1536" height="1024" alt="ChatGPT Image 17 dic 2025, 13_04_11" src="https://github.com/user-attachments/assets/e53987c0-72e7-47dc-a327-f7b53355fa7b" />
+<img width="1280" height="500" alt="ChatGPT Image 17 dic 2025, 13_04_11" src="https://github.com/user-attachments/assets/e53987c0-72e7-47dc-a327-f7b53355fa7b" />
 A production-ready Graph-Enhanced Retrieval-Augmented Generation (GraphRAG) platform that combines vector similarity search with knowledge graph reasoning to deliver contextual, sourced, and high-quality answers over document collections.
 
 ## Overview
