@@ -4,7 +4,7 @@ Document retrieval node for LangGraph RAG pipeline.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config.settings import settings
 from rag.retriever import DocumentRetriever, RetrievalMode
@@ -242,7 +242,7 @@ def retrieve_documents(
     expansion_depth: Optional[int] = None,
     context_documents: Optional[List[str]] = None,
     embedding_model: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Synchronous wrapper for document retrieval.
 
@@ -263,7 +263,7 @@ def retrieve_documents(
         context_documents: Optional list of document IDs to restrict retrieval scope
 
     Returns:
-        List of relevant document chunks
+        Tuple of (relevant chunks, alternative chunks)
     """
     try:
         allowed_docs = context_documents or []
@@ -308,4 +308,4 @@ def retrieve_documents(
 
     except Exception as e:
         logger.error(f"Error in synchronous retrieval wrapper: {e}")
-        return []
+        return [], []

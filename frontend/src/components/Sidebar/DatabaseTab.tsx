@@ -355,6 +355,27 @@ export default function DatabaseTab() {
     await loadStats()
   }
 
+  const handleCleanupOrphans = async () => {
+    if (!confirm('Clean up orphaned chunks and entities? This will delete data not connected to any document.')) return
+
+    try {
+      const response = await api.cleanupOrphans()
+      const chunksDeleted = response.chunks_deleted || 0
+      const entitiesDeleted = response.entities_deleted || 0
+
+      if (chunksDeleted > 0 || entitiesDeleted > 0) {
+        showToast('success', `Cleaned up ${chunksDeleted} orphaned chunks and ${entitiesDeleted} orphaned entities`)
+      } else {
+        showToast('success', 'No orphaned data found')
+      }
+
+      await loadStats()
+    } catch (error) {
+      console.error('Failed to cleanup orphans:', error)
+      showToast('error', 'Failed to cleanup orphans')
+    }
+  }
+
   const getFilteredDocuments = () => {
     if (!stats?.documents) return []
     if (!searchQuery.trim()) return stats.documents
@@ -449,34 +470,6 @@ export default function DatabaseTab() {
             />
           </label>
         </div>
-
-        {processingSummary?.is_processing && (
-          <div className={`flex items-center gap-3 rounded-lg border dark:border-secondary-700 px-4 py-3 text-sm shadow-sm ${isStuck
-            ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400'
-            : 'border-secondary-200 bg-white dark:bg-secondary-800 text-secondary-700 dark:text-secondary-300'
-            }`}>
-            <span className={`inline-flex h-2 w-2 rounded-full ${isStuck ? 'bg-red-500' : 'animate-pulse'}`} style={!isStuck ? { backgroundColor: 'var(--primary-500)' } : undefined} />
-            <div className="flex-1">
-              {isStuck ? (
-                <>
-                  <p className="font-medium">Processing appears stuck</p>
-                  <p className="text-xs mt-1">No updates for 30+ seconds. Server may have crashed.</p>
-                </>
-              ) : (
-                <p className="font-medium">Processing in progress…</p>
-              )}
-            </div>
-            {isStuck && (
-              <button
-                onClick={handleClearStuckState}
-                className="px-3 py-1 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        )}
-
         {/* Documents List */}
         {stats && stats.documents.length > 0 && (
           <>
@@ -492,6 +485,13 @@ export default function DatabaseTab() {
                     <MagnifyingGlassIcon className="w-4 h-4" />
                   </button>
                 </div>
+                <button
+                  onClick={handleCleanupOrphans}
+                  className="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+                  title="Remove orphaned chunks and entities not connected to any document"
+                >
+                  Cleanup
+                </button>
                 {enableDeleteOps && (
                   <button
                     onClick={handleClearDatabase}

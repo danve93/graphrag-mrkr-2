@@ -27,13 +27,11 @@ ADMIN_ENV = "JOBS_ADMIN_TOKEN"
 SESSION_TTL = 60 * 60 * 8
 
 # In-memory store for admin sessions: {sid: expiry_epoch}
+# In-memory store for admin sessions: {sid: expiry_epoch}
 _admin_sessions: dict[str, float] = {}
 
-def _load_admin_token() -> Optional[str]:
-    return os.environ.get(ADMIN_ENV)
-
 def verify_token(header_auth: Optional[str], require_admin: bool = False) -> str:
-    """Verify an `Authorization: Bearer <token>` header against legacy static tokens."""
+    """Verify an `Authorization: Bearer <token>` header against database API keys."""
     if not header_auth:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     if header_auth.lower().startswith("bearer "):
@@ -41,18 +39,25 @@ def verify_token(header_auth: Optional[str], require_admin: bool = False) -> str
     else:
         token = header_auth.strip()
 
-    admin = _load_admin_token()
+    # Issue #30: Removed static JOBS_ADMIN_TOKEN fallback.
+    # Now validates against persistent API keys in Neo4j.
+    from api.services.api_key_service import api_key_service
+    
+    try:
+        key_info = api_key_service.validate_api_key(token)
+    except Exception as e:
+        logger.error(f"Error validating API key: {e}")
+        # Fail safe
+        raise HTTPException(status_code=401, detail="Token validation failed")
+
+    if not key_info:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     if require_admin:
-        if admin and secrets.compare_digest(token, admin):
-            return token
-        raise HTTPException(status_code=401, detail="Invalid admin token")
-
-    # For now, this legacy function is mostly for admin or job routes.
-    # Regular user auth is handled by get_current_user below.
-    if admin and secrets.compare_digest(token, admin):
-        return token
-    raise HTTPException(status_code=401, detail="Invalid token")
+        if key_info.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+            
+    return token
 
 def ensure_user_token() -> str:
     """Ensure a persistent user token exists for legacy jobs/scripts."""
@@ -159,12 +164,6 @@ async def get_current_user(
     
     if not token:
         return None
-        
-    # Check if it's a legacy static admin token (optional interoperability)
-    admin_token = _load_admin_token()
-    if admin_token and token == admin_token:
-        # Map admin to a special user ID or just let them pass as "admin"
-        return "admin"
     
     # Validate against DB
     user_id = token_service.validate_token(token)

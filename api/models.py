@@ -5,7 +5,7 @@ Pydantic models for API requests and responses.
 from typing import Any, Dict, List, Optional
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from config.settings import settings
 
@@ -388,14 +388,34 @@ class ConversationSession(BaseModel):
     preview: Optional[str] = None
     deleted_at: Optional[str] = None
 
-
 class UpdateHashtagsRequest(BaseModel):
     """Request model for updating document hashtags."""
 
     hashtags: List[str] = Field(
         ...,
-        description="List of hashtags to set for the document"
+        description="List of hashtags to set for the document",
+        max_length=20,  # Issue #10: Maximum 20 hashtags per document
     )
+    
+    @field_validator('hashtags')
+    @classmethod
+    def validate_hashtags(cls, v: List[str]) -> List[str]:
+        """Validate hashtag format and length (Issue #10)."""
+        import re
+        validated = []
+        for tag in v:
+            # Strip leading # if present
+            tag = tag.lstrip('#').strip()
+            if not tag:
+                continue
+            # Max length 50 characters
+            if len(tag) > 50:
+                raise ValueError(f"Hashtag '{tag[:20]}...' exceeds maximum length of 50 characters")
+            # Only alphanumeric, hyphens, underscores
+            if not re.match(r'^[a-zA-Z0-9_-]+$', tag):
+                raise ValueError(f"Hashtag '{tag}' contains invalid characters. Use only letters, numbers, hyphens, underscores.")
+            validated.append(tag)
+        return validated
 
 
 class UpdateMetadataRequest(BaseModel):

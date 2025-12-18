@@ -36,8 +36,13 @@ def route_query_to_categories(
             try:
                 import asyncio
 
-                loop = asyncio.get_event_loop()
-                cached = loop.run_until_complete(routing_cache.get(query)) if loop.is_running() is False else None
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                cached = loop.run_until_complete(routing_cache.get(query)) if not loop.is_running() else None
             except Exception:
                 cached = None
 
@@ -88,7 +93,12 @@ def route_query_to_categories(
                                 "confidence": confidence,
                                 "reasoning": reasoning,
                             }
-                            loop = asyncio.get_event_loop()
+                            try:
+                                loop = asyncio.get_running_loop()
+                            except RuntimeError:
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+
                             if loop.is_running():
                                 asyncio.create_task(routing_cache.set(query, payload))
                             else:

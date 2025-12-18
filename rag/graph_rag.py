@@ -35,8 +35,11 @@ from core.conversation_memory import memory_manager
 logger = logging.getLogger(__name__)
 
 # In-memory TTL cache for routing decisions: query → (category_id, confidence, timestamp)
-ROUTING_CACHE: Dict[str, Tuple[Optional[str], float, float]] = {}
+# Issue #18: Use TTLCache with max size to prevent unbounded growth
+from cachetools import TTLCache
 ROUTING_TTL_SECONDS = 3600.0
+ROUTING_CACHE_MAX_SIZE = getattr(settings, 'routing_cache_max_size', 1000)
+ROUTING_CACHE: TTLCache = TTLCache(maxsize=ROUTING_CACHE_MAX_SIZE, ttl=ROUTING_TTL_SECONDS)
 
 
 class RAGState:
@@ -381,9 +384,10 @@ class GraphRAG:
                         )
                     else:
                         # Fallback to CategoryManager (legacy behavior)
+                        # TTLCache automatically expires entries, no manual timestamp check needed
                         cached = ROUTING_CACHE.get(query_text)
-                        if cached and (time.time() - cached[2]) < ROUTING_TTL_SECONDS:
-                            routing_category_id, routing_confidence, _ = cached
+                        if cached:
+                            routing_category_id, routing_confidence = cached
                             used_cache = True
                             logger.info(
                                 f"Routing cache hit for query; category={routing_category_id} conf={routing_confidence}"
@@ -397,7 +401,8 @@ class GraphRAG:
                             if classifications and classifications[0][1] >= 0.6:
                                 routing_category_id = classifications[0][0]
                                 routing_confidence = classifications[0][1]
-                            ROUTING_CACHE[query_text] = (routing_category_id, routing_confidence, time.time())
+                            # Store without timestamp - TTLCache handles expiration
+                            ROUTING_CACHE[query_text] = (routing_category_id, routing_confidence)
                     
                     if routing_category_id is not None:
                         state["routing_category_id"] = routing_category_id

@@ -397,11 +397,15 @@ def list_user_conversations(
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-def get_conversation(conversation_id: str):
+def get_conversation(
+    conversation_id: str,
+    authenticated_user: str = Depends(get_authenticated_user_id)
+):
     """Get a specific conversation by ID.
 
     Args:
         conversation_id: Conversation identifier
+        authenticated_user: Authenticated user ID from token
 
     Returns:
         Conversation summary
@@ -420,6 +424,9 @@ def get_conversation(conversation_id: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Conversation not found"
             )
+
+        # Verify user can only access their own data
+        verify_user_access(conversation["user_id"], authenticated_user)
 
         return ConversationResponse(**conversation)
 

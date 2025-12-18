@@ -35,7 +35,7 @@ router = APIRouter()
 # In-memory storage for staged documents and processing progress
 # In production, you'd use Redis or a database
 _staged_documents: Dict[str, StagedDocument] = {}
-_processing_progress: Dict[str, ProcessProgress] = {}
+_progress_percentage: Dict[str, ProcessProgress] = {}
 
 _processing_queue: List[str] = []
 _queue_lock = asyncio.Lock()
@@ -67,20 +67,41 @@ _ENTITY_STAGE_FRACTIONS = {
 def _calculate_overall_progress(progress: ProcessProgress) -> float:
     """
     Compute overall progress percentage blending chunk/entity phases.
-    Weights:
-    - Preparation (Classification/Chunking/Summarization): 0-20%
-    - Embedding (Chunk Processing): 20-80%
-    - Entity Extraction: 80-100%
+    
+    Progress Weights (Issue S3 - Refined):
+    - Phase 1: Preparation (0-20%)
+      - Classification: 0-4%
+      - Content Filtering: 4-8%
+      - Chunking: 8-14%
+      - Summarization: 14-20%
+    - Phase 2: Embedding (20-80%)
+      - Driven by chunk_progress (0.0 to 1.0)
+    - Phase 3: Entity Extraction (80-100%)
+      - Driven by entity_progress (0.0 to 1.0)
     """
     stage = (progress.stage or "").lower()
     
-    # Phase 1: Preparation (0-20%)
+    # Phase 1: Preparation (0-20%) with refined sub-stage interpolation
+    # Issue S3: Use fractional progress within sub-stages when available
     if stage == "classification":
-        return 5.0
+        # Classification: 0-4%
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 0.0 + (sub_progress * 4.0) if sub_progress else 2.0
+    
+    if stage == "content_filtering":
+        # Content filtering: 4-8% (Issue S4)
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 4.0 + (sub_progress * 4.0) if sub_progress else 6.0
+    
     if stage == "chunking":
-        return 10.0
+        # Chunking: 8-14%
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 8.0 + (sub_progress * 6.0) if sub_progress else 11.0
+    
     if stage == "summarization":
-        return 15.0
+        # Summarization: 14-20%
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 14.0 + (sub_progress * 6.0) if sub_progress else 17.0
         
     # Phase 2: Embedding (20-80%)
     # This phase is driven by chunk_progress (0.0 to 1.0)
@@ -103,7 +124,7 @@ def _update_queue_positions() -> None:
     """Update queue position hints for pending progress entries."""
 
     for idx, file_id in enumerate(_processing_queue):
-        progress = _processing_progress.get(file_id)
+        progress = _progress_percentage.get(file_id)
         if progress:
             progress.queue_position = idx
 
@@ -121,12 +142,84 @@ def _mark_document_status(doc_id: str, status: str, stage: str, progress_value: 
             {
                 "processing_status": status,
                 "processing_stage": stage,
-                "processing_progress": progress_value,
+                "progress_percentage": progress_value,
                 "processing_updated_at": time.time(),
             },
         )
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.debug("Failed to update processing metadata for %s: %s", doc_id, exc)
+
+
+def restore_processing_state() -> int:
+    """
+    Restore processing state from Neo4j on startup (Issue #2).
+    
+    Reloads any documents that were staged or in-progress during a previous
+    shutdown back into the in-memory queue for processing.
+    
+    Returns:
+        Number of documents restored to the queue.
+    """
+    try:
+        staged_docs = graph_db.get_staged_documents()
+        if not staged_docs:
+            logger.info("No staged documents to restore from database")
+            return 0
+
+        restored_count = 0
+        for doc in staged_docs:
+            doc_id = doc.get("id")
+            if not doc_id:
+                continue
+
+            file_id = doc_id  # Use doc_id as file_id for consistency
+
+            # Skip if already in memory
+            if file_id in _staged_documents:
+                continue
+
+            # Recreate StagedDocument from persisted data
+            staged_doc = StagedDocument(
+                file_id=file_id,
+                filename=doc.get("original_filename") or doc.get("filename") or "unknown",
+                file_path=doc.get("file_path") or "",
+                file_size=0,  # Not stored in graph, will be recalculated
+                mime_type=doc.get("mime_type") or "application/octet-stream",
+                hash=doc_id,  # Use doc_id as hash since original hash isn't stored
+                hashtags=doc.get("hashtags") or [],
+            )
+            _staged_documents[file_id] = staged_doc
+
+            # Recreate ProcessProgress from persisted data
+            status = doc.get("processing_status", "staged")
+            stage = doc.get("processing_stage", "queued")
+            progress = doc.get("progress_percentage", 0.0)
+
+            _progress_percentage[file_id] = ProcessProgress(
+                file_id=file_id,
+                status=status if status in ["pending", "processing"] else "pending",
+                stage=stage,
+                progress_percentage=progress,
+                message=f"Restored from previous session ({stage})",
+            )
+
+            # Add to processing queue if not completed
+            if status not in ["complete", "completed", "failed"]:
+                if file_id not in _processing_queue:
+                    _processing_queue.append(file_id)
+
+            restored_count += 1
+            logger.info(f"Restored staged document: {file_id} (status={status}, stage={stage})")
+
+        if restored_count > 0:
+            _update_queue_positions()
+            logger.info(f"Restored {restored_count} documents to processing queue")
+
+        return restored_count
+
+    except Exception as e:
+        logger.error(f"Failed to restore processing state: {e}")
+        return 0
 
 
 async def _ensure_worker_running() -> None:
@@ -139,8 +232,75 @@ async def _ensure_worker_running() -> None:
         _processing_worker = loop.create_task(_processing_worker_loop())
 
 
+def cleanup_orphaned_staged_files() -> int:
+    """
+    Remove files in data/staged_uploads that are not referenced in the database.
+    Returns the count of deleted files.
+    """
+    if not getattr(settings, "enable_stale_job_cleanup", True):
+        logger.info("Stale job cleanup disabled by configuration.")
+        return 0
+
+    try:
+        staging_dir = Path("data/staged_uploads")
+        if not staging_dir.exists():
+            return 0
+
+        # Get all Document file paths from Neo4j
+        # Use a list of paths directly from properties
+        with graph_db.session_scope() as session:
+            result = session.run("MATCH (d:Document) WHERE d.file_path IS NOT NULL RETURN d.file_path as path")
+            registered_paths = {record["path"] for record in result}
+
+        count = 0
+        now = time.time()
+        # Issue #13: 1 hour grace period to prevent deleting active uploads 
+        # that haven't been committed to DB yet
+        GRACE_PERIOD_SECONDS = 3600
+
+        for file_path in staging_dir.iterdir():
+            if file_path.is_file():
+                # Normalize path for comparison (Neo4j paths are strings)
+                if str(file_path) not in registered_paths:
+                    # Check modification time
+                    mtime = file_path.stat().st_mtime
+                    if (now - mtime) < GRACE_PERIOD_SECONDS:
+                        logger.debug(f"Skipping potential orphan {file_path.name}: too recent ({int(now-mtime)}s)")
+                        continue
+
+                    logger.warning("Deleting orphaned staged file: %s", file_path)
+                    try:
+                        file_path.unlink()
+                        count += 1
+                    except Exception as e:
+                        logger.error("Failed to delete orphaned file %s: %s", file_path, e)
+        
+        if count > 0:
+            logger.info("Cleaned up %d orphaned staged files", count)
+        return count
+    except Exception as e:
+        logger.error("Error during orphaned file cleanup: %s", e)
+        return 0
+
+
 async def _processing_worker_loop() -> None:
-    """Continuously drain the processing queue in FIFO order."""
+    """Continuously drain the processing queue in FIFO order.
+    
+    Design Note (Issue #5 - Race Condition Handling):
+    This worker implements a single-worker, FIFO processing model. The design
+    intentionally reads the queue head inside _queue_lock but processes the job
+    outside of it (to allow new items to be queued during processing).
+    
+    The _processing_lock ensures only one job runs at a time. The single-worker
+    assumption is critical: if multiple workers were started, they could race
+    to process the same job. This is enforced by _ensure_worker_running().
+    
+    If multi-worker support is ever needed, convert to atomic pop-and-process
+    or use a proper distributed queue (Redis, etc).
+    """
+    # Issue #5: Verify single-worker invariant
+    global _processing_worker
+    assert _processing_worker is not None, "Worker loop running without registration"
 
     while True:
         await _queue_event.wait()
@@ -153,6 +313,9 @@ async def _processing_worker_loop() -> None:
                 file_id = _processing_queue[0]
 
             await _process_single_job(file_id)
+
+        if not _queue_event.is_set():
+            break
 
         if not _queue_event.is_set():
             break
@@ -197,7 +360,7 @@ async def _process_single_job(file_id: str) -> None:
 
     async with _processing_lock:
         staged_doc = _staged_documents.get(file_id)
-        progress = _processing_progress.get(file_id)
+        progress = _progress_percentage.get(file_id)
 
         if staged_doc is None:
             async with _queue_lock:
@@ -226,7 +389,7 @@ async def _process_single_job(file_id: str) -> None:
                 progress_percentage=0.0,
                 entity_state=None,
             )
-            _processing_progress[file_id] = progress
+            _progress_percentage[file_id] = progress
 
         async with _queue_lock:
             if _processing_queue and _processing_queue[0] == file_id:
@@ -517,7 +680,7 @@ async def _cleanup_progress_entry(file_id: str, delay: float = 5.0) -> None:
 
     try:
         await asyncio.sleep(delay)
-        _processing_progress.pop(file_id, None)
+        _progress_percentage.pop(file_id, None)
     except Exception:  # pragma: no cover - defensive
         pass
 
@@ -531,8 +694,8 @@ async def _enqueue_processing_jobs(file_ids: List[str]) -> List[str]:
         for file_id in file_ids:
             staged_doc = _staged_documents[file_id]
 
-            if file_id not in _processing_progress:
-                _processing_progress[file_id] = ProcessProgress(
+            if file_id not in _progress_percentage:
+                _progress_percentage[file_id] = ProcessProgress(
                     file_id=file_id,
                     document_id=staged_doc.document_id,
                     filename=staged_doc.filename,
@@ -548,7 +711,7 @@ async def _enqueue_processing_jobs(file_ids: List[str]) -> List[str]:
                     entity_state=None,
                 )
             else:
-                progress = _processing_progress[file_id]
+                progress = _progress_percentage[file_id]
                 progress.status = "queued"
                 progress.stage = "queued"
                 progress.mode = staged_doc.mode
@@ -591,7 +754,7 @@ def _is_document_processing(document_id: Optional[str]) -> bool:
     if not document_id:
         return False
 
-    for progress in _processing_progress.values():
+    for progress in _progress_percentage.values():
         if (
             progress.document_id == document_id
             and progress.status in {"queued", "processing"}
@@ -658,7 +821,7 @@ async def get_database_stats():
             doc_id = doc.get("document_id")
             progress_match = None
 
-            for progress in _processing_progress.values():
+            for progress in _progress_percentage.values():
                 if progress.document_id == doc_id:
                     progress_match = progress
                     break
@@ -666,16 +829,28 @@ async def get_database_stats():
             if progress_match:
                 doc["processing_status"] = progress_match.status
                 doc["processing_stage"] = progress_match.stage
-                doc["processing_progress"] = progress_match.progress_percentage
+                doc["progress_percentage"] = progress_match.progress_percentage
                 doc["queue_position"] = progress_match.queue_position
             else:
-                doc.setdefault("processing_status", doc.get("processing_status", "idle"))
-                doc.setdefault("processing_stage", doc.get("processing_stage", "idle"))
-                doc.setdefault("processing_progress", doc.get("processing_progress", 0.0))
+                # Check if Neo4j has live processing data (from background threads)
+                # that isn't in the in-memory queue (e.g., from DocumentProcessor.update_document)
+                neo4j_status = doc.get("processing_status")
+                neo4j_stage = doc.get("processing_stage")
+                neo4j_progress = doc.get("processing_progress")
+                
+                if neo4j_status == "processing" and neo4j_progress is not None:
+                    # Use Neo4j values directly - background thread is updating the DB
+                    doc["processing_status"] = neo4j_status
+                    doc["processing_stage"] = neo4j_stage or "unknown"
+                    doc["progress_percentage"] = neo4j_progress
+                else:
+                    doc.setdefault("processing_status", neo4j_status or "idle")
+                    doc.setdefault("processing_stage", neo4j_stage or "idle")
+                    doc.setdefault("progress_percentage", neo4j_progress or 0.0)
 
         active_progress = [
             progress
-            for progress in _processing_progress.values()
+            for progress in _progress_percentage.values()
             if progress.status in {"queued", "processing"}
         ]
 
@@ -737,7 +912,7 @@ async def upload_document(file: UploadFile = File(...)):
             f.write(content)
 
         # Process the file in a thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             executor = get_blocking_executor()
             result = await loop.run_in_executor(
@@ -838,7 +1013,26 @@ async def delete_document(document_id: str):
         )
     
     try:
+        # Issue #6 Fix: Retrieve file_path before deletion to clean up physical file
+        file_path_to_delete = None
+        try:
+            file_info = graph_db.get_document_file_info(document_id)
+            file_path_to_delete = file_info.get("file_path")
+        except Exception as e:
+            logger.warning(f"Could not retrieve file_path for document {document_id}: {e}")
+
         graph_db.delete_document(document_id)
+
+        # Delete physical file if it exists
+        if file_path_to_delete:
+            try:
+                file_path = Path(file_path_to_delete)
+                if file_path.exists():
+                    file_path.unlink()
+                    logger.info(f"Deleted physical file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete physical file {file_path_to_delete}: {e}")
+
         try:
             get_response_cache().clear()
             try:
@@ -858,6 +1052,36 @@ async def delete_document(document_id: str):
         logger.error(f"Failed to delete document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/cleanup-orphans")
+async def cleanup_orphans():
+    """
+    Manually trigger cleanup of orphaned chunks and entities.
+    
+    Orphaned chunks are chunks that are not connected to any Document node
+    via a HAS_CHUNK relationship. This can happen if a document was deleted
+    improperly or if there was a processing failure.
+    
+    Returns:
+        Dict with counts: {"chunks_deleted": N, "entities_deleted": M}
+    """
+    try:
+        # Use grace_period=0 for manual cleanup to delete all orphans immediately
+        result = graph_db.cleanup_orphaned_chunks(grace_period_minutes=0)
+        
+        logger.info(
+            f"Manual orphan cleanup: deleted {result.get('chunks_deleted', 0)} chunks "
+            f"and {result.get('entities_deleted', 0)} entities"
+        )
+        
+        return {
+            "status": "success",
+            "chunks_deleted": result.get("chunks_deleted", 0),
+            "entities_deleted": result.get("entities_deleted", 0),
+        }
+    except Exception as e:
+        logger.error(f"Failed to cleanup orphans: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/clear")
 async def clear_database():
@@ -875,6 +1099,24 @@ async def clear_database():
     
     try:
         graph_db.clear_database()
+
+        # Issue #6 Fix: Purge staged_uploads directory
+        try:
+            staged_uploads_dir = Path("data/staged_uploads")
+            if staged_uploads_dir.exists():
+                import shutil
+                for item in staged_uploads_dir.iterdir():
+                    try:
+                        if item.is_file():
+                            item.unlink()
+                        elif item.is_dir():
+                            shutil.rmtree(item)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove {item}: {e}")
+                logger.info("Purged staged_uploads directory after clear_database")
+        except Exception as e:
+            logger.warning(f"Failed to purge staged_uploads: {e}")
+
         try:
             get_response_cache().clear()
             try:
@@ -969,7 +1211,7 @@ async def stage_document(file: UploadFile = File(...)):
         metadata["original_filename"] = filename
         metadata["processing_status"] = "staged"
         metadata["processing_stage"] = "staged"
-        metadata["processing_progress"] = 0.0
+        metadata["progress_percentage"] = 0.0
         metadata["processing_updated_at"] = time.time()
 
         try:
@@ -1066,8 +1308,8 @@ async def delete_staged_document(file_id: str):
         del _staged_documents[file_id]
 
         # Mark as cancelled if in progress, then remove from tracking
-        if file_id in _processing_progress:
-            _processing_progress[file_id].cancelled = True
+        if file_id in _progress_percentage:
+            _progress_percentage[file_id].cancelled = True
             logger.info(f"Cancelling in-progress job for {file_id}")
             # Don't delete immediately - let the worker see the cancelled flag
             # The worker will clean up after it detects cancellation
@@ -1128,7 +1370,7 @@ async def process_documents(request: ProcessDocumentsRequest):
 
 
 @router.get("/progress/{file_id}")
-async def get_processing_progress(file_id: str):
+async def get_progress_percentage(file_id: str):
     """
     Get processing progress for a specific file.
 
@@ -1138,21 +1380,21 @@ async def get_processing_progress(file_id: str):
     Returns:
         Processing progress
     """
-    if file_id not in _processing_progress:
+    if file_id not in _progress_percentage:
         raise HTTPException(status_code=404, detail="Progress not found")
 
-    return _processing_progress[file_id]
+    return _progress_percentage[file_id]
 
 
 @router.get("/progress")
-async def get_all_processing_progress():
+async def get_all_progress_percentage():
     """
     Get processing progress for all files.
 
     Returns:
         List of processing progress
     """
-    progress_list = list(_processing_progress.values())
+    progress_list = list(_progress_percentage.values())
     pending_progress = [
         progress
         for progress in progress_list
@@ -1284,8 +1526,8 @@ async def _process_documents_task(file_ids: List[str]):
 
             if not file_path.exists():
                 logger.error(f"File not found: {file_path}")
-                _processing_progress[file_id].status = "error"
-                _processing_progress[file_id].error = "File not found"
+                _progress_percentage[file_id].status = "error"
+                _progress_percentage[file_id].error = "File not found"
                 continue
 
             # Estimate total chunks first
@@ -1293,8 +1535,8 @@ async def _process_documents_task(file_ids: List[str]):
             
             # Create a progress callback
             def progress_callback(chunks_processed: int):
-                if file_id in _processing_progress:
-                    progress = _processing_progress[file_id]
+                if file_id in _progress_percentage:
+                    progress = _progress_percentage[file_id]
                     progress.chunks_processed = chunks_processed
                     if progress.total_chunks > 0:
                         progress.progress_percentage = (
@@ -1325,7 +1567,7 @@ async def _process_documents_task(file_ids: List[str]):
                     temp_chunks = document_chunker.chunk_text(
                         content, f"temp_{file_id}"
                     )
-                    _processing_progress[file_id].total_chunks = len(temp_chunks)
+                    _progress_percentage[file_id].total_chunks = len(temp_chunks)
                     logger.info(
                         f"Estimated {len(temp_chunks)} chunks for {staged_doc.filename}"
                     )
@@ -1361,14 +1603,14 @@ async def _process_documents_task(file_ids: List[str]):
                         result = {"status": "error", "error": str(e2)}
 
             if result and result.get("status") == "success":
-                _processing_progress[file_id].status = "completed"
-                _processing_progress[file_id].chunks_processed = result.get(
+                _progress_percentage[file_id].status = "completed"
+                _progress_percentage[file_id].chunks_processed = result.get(
                     "chunks_created", 0
                 )
-                _processing_progress[file_id].total_chunks = result.get(
+                _progress_percentage[file_id].total_chunks = result.get(
                     "chunks_created", 0
                 )
-                _processing_progress[file_id].progress_percentage = 100.0
+                _progress_percentage[file_id].progress_percentage = 100.0
 
                 # Remove from staged documents
                 del _staged_documents[file_id]
@@ -1382,18 +1624,18 @@ async def _process_documents_task(file_ids: List[str]):
                 )
             else:
                 error_msg = result.get("error", "Processing failed") if result else "Processing failed"
-                _processing_progress[file_id].status = "error"
-                _processing_progress[file_id].error = error_msg
+                _progress_percentage[file_id].status = "error"
+                _progress_percentage[file_id].error = error_msg
                 logger.error(f"Failed to process {staged_doc.filename}: {error_msg}")
 
         except Exception as e:
             logger.error(f"Error processing file {file_id}: {e}")
-            if file_id in _processing_progress:
-                _processing_progress[file_id].status = "error"
-                _processing_progress[file_id].error = str(e)
+            if file_id in _progress_percentage:
+                _progress_percentage[file_id].status = "error"
+                _progress_percentage[file_id].error = str(e)
 
     # Clean up completed/error progress after a delay
     await asyncio.sleep(5)
-    for file_id in list(_processing_progress.keys()):
-        if _processing_progress[file_id].status in ["completed", "error"]:
-            del _processing_progress[file_id]
+    for file_id in list(_progress_percentage.keys()):
+        if _progress_percentage[file_id].status in ["completed", "error"]:
+            del _progress_percentage[file_id]

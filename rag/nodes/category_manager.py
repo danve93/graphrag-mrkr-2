@@ -306,7 +306,6 @@ Return your response as JSON in this exact format:
         except Exception as e:
             logger.exception(f"Failed to update category {category_id}: {e}")
             raise
-            raise Exception(f"Failed to create category: {name}")
     
     async def approve_category(self, category_id: str) -> bool:
         """

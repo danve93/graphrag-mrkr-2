@@ -395,7 +395,7 @@ async def update_category(category_id: str, update: CategoryUpdate):
         manager = CategoryManager()
         updated = await manager.update_category(
             category_id,
-            {k: v for k, v in update.dict().items() if v is not None}
+            {k: v for k, v in update.model_dump().items() if v is not None}
         )
         if not updated:
             raise HTTPException(status_code=404, detail="Category not found")

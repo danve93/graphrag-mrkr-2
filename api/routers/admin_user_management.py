@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
 
 from api.auth import require_admin_cookie
-from api.auth import create_admin_session, invalidate_admin_session, _load_admin_token, validate_admin_session
+from api.auth import create_admin_session, invalidate_admin_session, validate_admin_session
 from fastapi import Response, status, Cookie
 from config.settings import settings
 # Conversation sharing service removed; endpoints will return safe empty
@@ -46,12 +46,11 @@ async def admin_ping(request: Request) -> dict:
     Lightweight admin health/auth check.
 
     This endpoint is intentionally public so the frontend can call it before
-    the operator has entered an admin token. It returns whether an admin token
     is configured on the server and whether the current request is authenticated
     (via `admin_session` cookie or `admin-token` header).
     """
-    # Indicate whether admin token is configured on the server
-    token_configured = bool(_load_admin_token())
+    # Static admin token is deprecated and removed (Issue #30)
+    token_configured = False
 
     # Check for cookie session validity
     has_cookie = False
@@ -139,10 +138,19 @@ async def admin_login(payload: Dict[str, str], response: Response, request: Requ
         except Exception:
             masked_pw = '****'
     logger.debug("Admin login attempt from %s (password masked=%s)", client_host or 'unknown', masked_pw)
-    stored = _load_admin_token()
-    if not stored:
-        raise HTTPException(status_code=500, detail="Admin token not configured")
-    if not password or not secrets.compare_digest(password, stored):
+    
+    # Issue #30: Validate against API Key Service instead of static token
+    from api.services.api_key_service import api_key_service
+    is_valid = False
+    try:
+        if password:
+            key_info = api_key_service.validate_api_key(password)
+            if key_info and key_info.get("role") == "admin":
+                is_valid = True
+    except Exception as e:
+        logger.error(f"Error validating admin login: {e}")
+
+    if not is_valid:
         logger.debug("Admin login failed from %s (password masked=%s)", client_host or 'unknown', masked_pw)
         raise HTTPException(status_code=403, detail="Invalid credentials")
 
@@ -179,7 +187,12 @@ async def admin_logout(response: Response, admin_session: Optional[str] = Cookie
     """Invalidate admin session and clear cookie."""
     if admin_session:
         invalidate_admin_session(admin_session)
-    response.delete_cookie("admin_session")
+    response.delete_cookie(
+        "admin_session",
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https"
+    )
     return {"status": "ok"}
 
 

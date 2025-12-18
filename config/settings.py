@@ -91,11 +91,7 @@ class Settings(BaseSettings):
     )
     skip_entity_embeddings: bool = Field(
         default=False,
-        description="Skip entity embedding generation entirely (set SKIP_ENTITY_EMBEDDINGS=1 to store empty embeddings)",
-    )
-    skip_entity_embeddings: bool = Field(
-        default=False,
-        description="Skip generating embeddings for entities (use SKIP_ENTITY_EMBEDDINGS=1 to bypass during tests)",
+        description="Skip entity embedding generation entirely (set SKIP_ENTITY_EMBEDDINGS=1 to bypass during tests or bulk ingestion)",
     )
 
     # Document Processing Configuration
@@ -171,6 +167,9 @@ class Settings(BaseSettings):
     )
     content_filter_enable_code: bool = Field(
         default=True, description="Enable code quality filtering"
+    )
+    content_filtering_llm_model: str = Field(
+        default="gpt-4o-mini", description="LLM model for content filtering analysis"
     )
 
     # Temporal Graph Configuration
@@ -284,6 +283,19 @@ class Settings(BaseSettings):
     hybrid_entity_weight: float = Field(
         default=0.4, description="Weight for entity-filtered results"
     )
+    
+    # Path Scoring Weights (Issue #9: Extracted from magic numbers)
+    # Used in multi-hop reasoning to compute final path scores
+    path_score_alpha: float = Field(
+        default=0.6, description="Weight for path score from graph edges"
+    )
+    path_score_beta: float = Field(
+        default=0.3, description="Weight for query similarity to path content"
+    )
+    path_score_gamma: float = Field(
+        default=0.1, description="Weight for max chunk similarity in path"
+    )
+    
     enable_graph_expansion: bool = Field(
         default=True, description="Enable graph expansion"
     )
@@ -307,6 +319,24 @@ class Settings(BaseSettings):
     )
     max_expansion_depth: int = Field(
         default=2, description="Maximum depth for graph traversal"
+    )
+    
+    # Entity Healing Configuration (Issue #15)
+    heal_description_max_chars: int = Field(
+        default=500,
+        description="Maximum characters for entity description in heal prompts (default raised from 300)"
+    )
+    
+    # Centralized Retry Configuration (Issue #17)
+    # Used by embeddings, entity_extraction, llm, and singletons
+    retry_max_attempts: int = Field(
+        default=5, description="Maximum retry attempts for API calls"
+    )
+    retry_base_delay: float = Field(
+        default=2.0, description="Base delay in seconds for exponential backoff"
+    )
+    retry_max_delay: float = Field(
+        default=120.0, description="Maximum delay between retries"
     )
 
     # Graph Clustering Configuration
@@ -389,16 +419,6 @@ class Settings(BaseSettings):
     flashrank_batch_size: int = Field(
         default=32,
         description="Batch size for reranker calls (where applicable)",
-    )
-
-    # Query Analysis & Expansion
-    enable_query_expansion: bool = Field(
-        default=False,
-        description="Enable automatic query expansion for sparse results",
-    )
-    query_expansion_threshold: int = Field(
-        default=3,
-        description="Trigger expansion when initial results < threshold",
     )
 
     # Caching Configuration
@@ -657,10 +677,29 @@ class Settings(BaseSettings):
         description="Phase version tag for node metadata"
     )
 
+    enable_stale_job_cleanup: bool = Field(
+        default=True,
+        description="Whether to mark documents in 'processing' status as 'failed' on startup. Disable in distributed setups."
+    )
+
+    # Orphan Cleanup Configuration
+    enable_orphan_cleanup_on_startup: bool = Field(
+        default=True,
+        description="Enable automatic cleanup of orphaned chunks (not connected to any Document) on startup"
+    )
+    orphan_cleanup_grace_period_minutes: int = Field(
+        default=5,
+        description="Grace period in minutes - only delete orphans created more than this many minutes ago"
+    )
+
     # Phase 3: Tuple-Delimited Output Format Configuration
     entity_extraction_format: str = Field(
         default="tuple_v1",
         description="Entity extraction output format (tuple_v1=tuple-delimited)"
+    )
+    entity_extraction_llm_model: str = Field(
+        default="gpt-4o-mini",
+        description="LLM model for entity extraction"
     )
     tuple_format_validation: bool = Field(
         default=True,
@@ -680,6 +719,10 @@ class Settings(BaseSettings):
     enable_description_summarization: bool = Field(
         default=True,
         description="Enable LLM-based description summarization (reduces verbosity by 50-70% per Microsoft GraphRAG)"
+    )
+    description_summarization_llm_model: str = Field(
+        default="gpt-4o-mini",
+        description="LLM model for description summarization"
     )
     summarization_min_mentions: int = Field(
         default=3,
@@ -746,6 +789,19 @@ class Settings(BaseSettings):
         description="API key for Marker LLM service from environment (MARKER_LLM_API_KEY or OPENAI_API_KEY). Never store in config files."
     )
 
+    # Issue #35: Configurable regex patterns for technical query detection
+    technical_term_patterns: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "snake_case": r'\b[a-z]+_[a-z_]+\b',
+            "tech_id": r'\b[A-Z]{2,}-\d+\b',
+            "config_key": r'\b[A-Z][A-Z_]{2,}\b|\b[a-z]+[A-Z][a-zA-Z]+\b',
+            "error_code": r'\b(ERROR|WARN|INFO|DEBUG|FATAL|Exception|Error)\b|\b0x[0-9a-fA-F]+\b|\b[A-Z]+_[A-Z]+\b',
+            "file_ext": r'\b\w+\.(conf|json|yaml|yml|xml|py|js|ts|java|go|rs|c|cpp|h|hpp|sql|sh|bat|ps1|ini|env|properties)\b',
+            "file_path": r'/\w+/[\w/\.]+'
+        },
+        description="Regex patterns for detecting technical terms in queries"
+    )
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
@@ -787,6 +843,36 @@ def load_rag_tuning_config() -> Dict[str, Any]:
         logger.error(f"Failed to load RAG tuning config: {e}, using defaults")
         return {}
 
+
+# Issue S6: Consolidated chat tuning config loader
+# Use this instead of duplicating logic in chat.py and other files
+def load_chat_tuning_config() -> Dict[str, Any]:
+    """
+    Load chat tuning configuration from JSON file.
+    
+    This is the central utility for loading chat_tuning_config.json.
+    DO NOT duplicate this logic in other files - import from here.
+    
+    Returns a flat dictionary of parameter values.
+    Falls back to empty dict if file doesn't exist or has errors.
+    """
+    config_path = Path(__file__).parent / "chat_tuning_config.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        
+        # Flatten parameters for easy access
+        values = {}
+        for param in config.get("parameters", []):
+            values[param["key"]] = param["value"]
+        
+        return values
+    except FileNotFoundError:
+        logger.debug(f"Chat tuning config not found at {config_path}")
+        return {}
+    except Exception as e:
+        logger.warning(f"Failed to load chat tuning config: {e}")
+        return {}
 
 def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
     """
@@ -872,7 +958,7 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "keyword_search_weight": "keyword_search_weight",
         "hybrid_chunk_weight": "hybrid_chunk_weight",
         "hybrid_entity_weight": "hybrid_entity_weight",
-        # === Reranker ===
+        "enable_stale_job_cleanup": "enable_stale_job_cleanup",
         "flashrank_enabled": "flashrank_enabled",
         "flashrank_model_name": "flashrank_model_name",
         "flashrank_blend_weight": "flashrank_blend_weight",
@@ -886,8 +972,19 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "use_llm_expansion": "use_llm_expansion",
         # === Client-Side Vector Search ===
         "enable_static_entity_matching": "enable_static_entity_matching",
+        "static_matching_min_similarity": "static_matching_min_similarity",
         # === Layered Memory System ===
         "enable_memory_system": "enable_memory_system",
+        "memory_max_facts": "memory_max_facts",
+        "memory_max_conversations": "memory_max_conversations",
+        "memory_min_fact_importance": "memory_min_fact_importance",
+        # === LLM Overrides (Issue S2) ===
+        "content_filtering_llm_model": "content_filtering_llm_model",
+        "entity_extraction_llm_model": "entity_extraction_llm_model",
+        "description_enhancement_llm_model": "description_summarization_llm_model",
+        "pdf_processing_llm_model": "marker_llm_model",
+        # === Technical Query Detection (Issue #35) ===
+        "technical_term_patterns": "technical_term_patterns",
     }
     
     for config_key, settings_attr in param_mappings.items():
@@ -896,6 +993,22 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
                 setattr(settings_instance, settings_attr, rag_config[config_key])
             except Exception as e:
                 logger.warning(f"Failed to apply RAG config override for {settings_attr}: {e}")
+    
+    # Issue S7: Propagate default_llm_model to provider-specific settings
+    # This ensures the UI model selection overrides all provider defaults
+    default_model = rag_config.get("default_llm_model")
+    if default_model:
+        provider_model_fields = [
+            "openai_model", "anthropic_model", "gemini_model", 
+            "ollama_model", "azure_openai_model"
+        ]
+        for field in provider_model_fields:
+            if hasattr(settings_instance, field):
+                try:
+                    setattr(settings_instance, field, default_model)
+                except Exception as e:
+                    logger.debug(f"Could not set {field} to {default_model}: {e}")
+        logger.info(f"Applied default LLM model override: {default_model}")
     
     logger.info("Applied RAG tuning configuration overrides")
 

@@ -249,6 +249,16 @@ export const api = {
     return response.json()
   },
 
+  async cleanupOrphans(): Promise<{ status: string; chunks_deleted: number; entities_deleted: number }> {
+    const response = await fetchWithAuth(`${API_URL}/api/database/cleanup-orphans`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
   async reprocessDocumentChunks(documentId: string) {
     const response = await fetchWithAuth(
       `${API_URL}/api/database/documents/${documentId}/process/chunks`,

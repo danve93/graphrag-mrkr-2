@@ -341,22 +341,6 @@ def clear_response_cache() -> None:
     except Exception:
         logger.warning("Failed to clear response cache")
 
-    with _response_lock:
-        if _response_cache is not None:
-            return _response_cache
-
-        maxsize = settings.response_cache_size
-        ttl = settings.response_cache_ttl
-
-        _response_cache = CacheService(
-            name="responses",
-            ttl=ttl,
-            max_size=maxsize,
-            use_disk=True
-        )
-        logger.info(f"Initialized response cache (size={maxsize}, ttl={ttl}s)")
-
-        return _response_cache
 
 
 def _get_key_lock(key: str) -> threading.Lock:
@@ -709,3 +693,60 @@ def cleanup_singletons():
                     _background_executor = None
     except Exception:
         logger.exception("Error during executor cleanup")
+
+
+def reconfigure_singletons() -> None:
+    """
+    Reconfigure singletons when settings change at runtime (Issue S5).
+    
+    Call this function when UI settings are updated to ensure caches
+    and managers pick up new TTL, concurrency, or model settings without
+    requiring a full backend restart.
+    
+    This function:
+    1. Clears all caches (entity_label, embedding, retrieval, response)
+    2. Forces re-initialization with updated settings on next access
+    3. Does NOT restart the Neo4j driver or executors (expensive operations)
+    
+    Usage:
+        from core.singletons import reconfigure_singletons
+        reconfigure_singletons()  # After settings update
+    """
+    global _entity_label_cache, _embedding_cache, _retrieval_cache, _response_cache
+    
+    logger.info("Reconfiguring singletons due to settings change...")
+    
+    # Clear and reset all caches (they will be recreated with new settings)
+    with _entity_label_lock:
+        if _entity_label_cache is not None:
+            _entity_label_cache.clear()
+            _entity_label_cache = None
+            logger.info("Entity label cache reset for reconfiguration")
+    
+    with _embedding_lock:
+        if _embedding_cache is not None:
+            _embedding_cache.clear()
+            _embedding_cache = None
+            logger.info("Embedding cache reset for reconfiguration")
+    
+    with _retrieval_lock:
+        if _retrieval_cache is not None:
+            _retrieval_cache.clear()
+            _retrieval_cache = None
+            logger.info("Retrieval cache reset for reconfiguration")
+    
+    with _response_lock:
+        if _response_cache is not None:
+            _response_cache.clear()
+            _response_cache = None
+            logger.info("Response cache reset for reconfiguration")
+    
+    # Re-apply settings from config file
+    try:
+        from config.settings import apply_rag_tuning_overrides, settings
+        apply_rag_tuning_overrides(settings)
+        logger.info("RAG tuning overrides re-applied")
+    except Exception as e:
+        logger.warning(f"Failed to re-apply RAG tuning overrides: {e}")
+    
+    logger.info("Singleton reconfiguration complete - caches will reinitialize on next access")

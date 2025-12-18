@@ -3,6 +3,7 @@ Multi-format document processor for the RAG pipeline.
 """
 
 import asyncio
+import nest_asyncio
 import hashlib
 import logging
 import threading
@@ -88,12 +89,17 @@ class DocumentProcessor:
         # Cleanup any stale jobs from previous runs
         if not SHUTTING_DOWN:
             self._cleanup_stale_jobs()
+            self._cleanup_orphaned_chunks()
 
     def _cleanup_stale_jobs(self):
         """Mark documents that were extracting during a previous shutdown as failed."""
+        if not settings.enable_stale_job_cleanup:
+            logger.info("Stale job cleanup disabled via configuration.")
+            return
+
         try:
             # Query for documents stuck in processing
-            stuck_docs = graph_db.get_documents_by_status("processing")
+            stuck_docs = graph_db.get_documents_by_processing_status("processing")
             if not stuck_docs:
                 return
                 
@@ -131,6 +137,27 @@ class DocumentProcessor:
                 
         except Exception as e:
             logger.error(f"Failed to cleanup stale jobs: {e}")
+
+    def _cleanup_orphaned_chunks(self):
+        """Clean up orphaned chunks (not connected to any Document) on startup."""
+        if not settings.enable_orphan_cleanup_on_startup:
+            logger.info("Orphan cleanup on startup disabled via configuration.")
+            return
+        
+        try:
+            grace_period = settings.orphan_cleanup_grace_period_minutes
+            result = graph_db.cleanup_orphaned_chunks(grace_period_minutes=grace_period)
+            
+            chunks_deleted = result.get("chunks_deleted", 0)
+            entities_deleted = result.get("entities_deleted", 0)
+            
+            if chunks_deleted > 0 or entities_deleted > 0:
+                logger.info(
+                    f"Startup orphan cleanup: deleted {chunks_deleted} orphaned chunks "
+                    f"and {entities_deleted} orphaned entities (grace period: {grace_period} min)"
+                )
+        except Exception as e:
+            logger.error(f"Failed to cleanup orphaned chunks: {e}")
 
     def compute_document_id(self, file_path: Path) -> str:
         """Compute the deterministic document id for a given file path."""
@@ -222,8 +249,19 @@ class DocumentProcessor:
         relationship_dict,
         created_entities: int,
         created_relationships: int,
+        parse_errors: int = 0,
     ) -> Dict[str, Any]:
-        """Create a lightweight metrics payload for monitoring extraction quality."""
+        """Create a lightweight metrics payload for monitoring extraction quality.
+        
+        Args:
+            doc_id: Document ID
+            chunks_for_extraction: List of chunks processed
+            entity_dict: Dictionary of extracted entities
+            relationship_dict: Dictionary of extracted relationships
+            created_entities: Count of entities created
+            created_relationships: Count of relationships created
+            parse_errors: Count of parse failures during extraction (Issue #4)
+        """
 
         total_chunks = len(chunks_for_extraction)
         referenced_chunks = {
@@ -252,6 +290,7 @@ class DocumentProcessor:
             if total_chunks
             else 0.0,
             "unique_chunks_with_entities": len(referenced_chunks),
+            "parse_errors": parse_errors,  # Issue #4: Track extraction failures
         }
 
         logger.info(
@@ -349,7 +388,7 @@ class DocumentProcessor:
                 )
 
             try:
-                created_entities, created_relationships = asyncio.run(
+                created_entities, created_relationships = self._run_async(
                     _run_async_creation()
                 )
             except RuntimeError:
@@ -584,6 +623,24 @@ class DocumentProcessor:
                 categories = [getattr(settings, "classification_default_category", "general")]
             keywords = []
             return {"categories": categories[:2], "confidence": 0.5, "keywords": keywords, "difficulty": "intermediate"}
+
+    def _run_async(self, coro):
+        """Helper to run a coroutine from a synchronous context safely."""
+        try:
+            return asyncio.run(coro)
+        except RuntimeError as e:
+            msg = str(e).lower()
+            if "already running" in msg or "running event loop" in msg:
+                try:
+                    import nest_asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        nest_asyncio.apply(loop)
+                        return loop.run_until_complete(coro)
+                    return loop.run_until_complete(coro)
+                except Exception:
+                    raise e
+            raise e
 
     async def process_file_async(
         self,
@@ -822,27 +879,13 @@ class DocumentProcessor:
         # Check if Phase 2 is enabled
         if settings.enable_phase2_networkx:
             try:
-                loop = asyncio.get_event_loop()
-                try:
-                    executor = get_blocking_executor()
-                    metrics = await loop.run_in_executor(
-                        executor,
-                        lambda: asyncio.run(self._persist_with_entity_graph(
-                            entity_dict, relationship_dict, doc_id_local
-                        ))
-                    )
-                except RuntimeError as e:
-                    logger.warning(f"Blocking executor unavailable for Phase 2 persistence: {e}.")
-                    if SHUTTING_DOWN:
-                        logger.info("Process shutting down; aborting Phase 2 persistence")
-                        raise
-                    executor = get_blocking_executor()
-                    metrics = await loop.run_in_executor(
-                        executor,
-                        lambda: asyncio.run(self._persist_with_entity_graph(
-                            entity_dict, relationship_dict, doc_id_local
-                        ))
-                    )
+                # Issue #12 Fix: Removed nested asyncio.run and run_in_executor.
+                # Since we are already in an async method, we should await directly.
+                # CPU-intensive graph building is handled internally if needed,
+                # but nested loops are dangerous and inefficient.
+                metrics = await self._persist_with_entity_graph(
+                    entity_dict, relationship_dict, doc_id_local
+                )
                 return (metrics["entities_unique"], metrics["relationships_unique"])
             except Exception as e:
                 logger.error(f"Phase 2 failed, falling back to Phase 1: {e}")
@@ -1213,23 +1256,9 @@ class DocumentProcessor:
                 {"processing_stage": "embedding", "processing_progress": 75.0},
             )
 
-            try:
-                # Use asyncio.run for a synchronous wrapper
-                processed_chunks = asyncio.run(
-                    self.process_file_async(chunks, doc_id, progress_callback)
-                )
-            except RuntimeError:
-                # If an event loop is already running, get it and run until complete
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Create a new task and wait for it
-                    processed_chunks = loop.run_until_complete(
-                        self.process_file_async(chunks, doc_id, progress_callback)
-                    )
-                else:
-                    processed_chunks = loop.run_until_complete(
-                        self.process_file_async(chunks, doc_id, progress_callback)
-                    )
+            processed_chunks = self._run_async(
+                self.process_file_async(chunks, doc_id, progress_callback)
+            )
 
             # After chunk processing finishes, schedule entity extraction in background (if enabled)
             entity_count = 0
@@ -1274,7 +1303,7 @@ class DocumentProcessor:
                     try:
                         try:
                             if use_gleaning:
-                                entity_dict, relationship_dict = asyncio.run(
+                                entity_dict, relationship_dict = self._run_async(
                                     extractor.extract_from_chunks_with_gleaning(
                                         chunks_for_extraction,
                                         max_gleanings=max_gleanings,
@@ -1282,7 +1311,7 @@ class DocumentProcessor:
                                     )
                                 )
                             else:
-                                entity_dict, relationship_dict = asyncio.run(
+                                entity_dict, relationship_dict = self._run_async(
                                     extractor.extract_from_chunks(chunks_for_extraction)
                                 )
                         except RuntimeError:
@@ -1383,9 +1412,6 @@ class DocumentProcessor:
                             )
                         # Invalidate caches for this document so frontends see fresh values
                         try:
-                            from core.singletons import get_response_cache
-                            from core.cache_metrics import cache_metrics as _cache_metrics
-
                             cache = get_response_cache()
                             for key in (f"document_summary:{doc_id}", f"document_metadata:{doc_id}"):
                                 try:
@@ -1393,7 +1419,11 @@ class DocumentProcessor:
                                         del cache[key]
                                 except Exception:
                                     pass
-                            _cache_metrics.record_response_invalidation()
+                            try:
+                                from core.cache_metrics import cache_metrics as _cache_metrics
+                                _cache_metrics.record_response_invalidation()
+                            except Exception:
+                                pass
                         except Exception:
                             pass
                         logger.info(
@@ -1409,292 +1439,8 @@ class DocumentProcessor:
                             sync_e,
                         )
                 else:
-
-                    # Start background thread to perform entity extraction without blocking
-                    def _background_entity_worker(doc_id_local, chunks_local):
-                        operation_id = None
-                        try:
-                            # Start tracking this operation
-                            filename = (
-                                original_filename if original_filename else file_path.name
-                            )
-                            operation_id = self._start_entity_operation(
-                                doc_id_local, filename
-                            )
-
-                            logger.info(
-                                f"Background entity extraction started for document {doc_id_local} (operation: {operation_id})"
-                            )
-
-                            # Phase 1: LLM extraction (with optional gleaning)
-                            use_gleaning, max_gleanings = self._get_gleaning_config(document_type=None)
-                            
-                            if use_gleaning:
-                                self._update_entity_operation(
-                                    operation_id,
-                                    EntityExtractionState.LLM_EXTRACTION,
-                                    f"Running gleaning entity extraction ({max_gleanings} passes)",
-                                )
-                            else:
-                                self._update_entity_operation(
-                                    operation_id,
-                                    EntityExtractionState.LLM_EXTRACTION,
-                                    "Running LLM entity extraction",
-                                )
-                            
-                            # Explicitly update document stage so UI shows "Entity Extraction" instead of stuck at Embedding
-                            try:
-                                graph_db.create_document_node(
-                                    doc_id_local,
-                                    {"processing_stage": "entity_extraction"},
-                                )
-                            except Exception as db_e:
-                                logger.debug(f"Failed to update document stage: {db_e}")
-                            
-                            try:
-                                # Check for cancellation via callback
-                                is_cancelled = None
-                                if progress_callback and hasattr(progress_callback, 'is_cancelled'):
-                                    is_cancelled = progress_callback.is_cancelled
-
-                                # Define granularity callback for progress updates
-                                def extraction_progress_callback(processed, total):
-                                    if total == 0:
-                                        return
-                                    
-                                    # Update operation status with granular info
-                                    msg = f"Running LLM entity extraction ({processed}/{total} chunks)"
-                                    if use_gleaning:
-                                        msg = f"Running gleaning entity extraction ({max_gleanings} passes) - ({processed}/{total} chunks)"
-                                    
-                                    self._update_entity_operation(
-                                        operation_id,
-                                        EntityExtractionState.LLM_EXTRACTION,
-                                        msg,
-                                    )
-
-                                    # Update overall document progress
-                                    # Map extraction progress (0-100%) to pipeline phase (75-95%)
-                                    # 75% is where we start (embedding done), 95% is where we end (before post-processing)
-                                    base_progress = 75.0
-                                    phase_range = 20.0
-                                    current_percentage = (processed / total) * 100
-                                    mapped_progress = base_progress + (current_percentage / 100 * phase_range)
-                                    
-                                    try:
-                                        graph_db.create_document_node(
-                                            doc_id_local,
-                                            {"processing_progress": min(mapped_progress, 95.0)},
-                                        )
-                                    except Exception as db_e:
-                                        logger.debug(f"Failed to update progress in DB: {db_e}")
-
-                                if use_gleaning:
-                                    entity_dict, relationship_dict = asyncio.run(
-                                        extractor.extract_from_chunks_with_gleaning(
-                                            chunks_local,
-                                            max_gleanings=max_gleanings,
-                                            document_type=None,
-                                            is_cancelled=is_cancelled,
-                                            progress_callback=extraction_progress_callback
-                                        )
-                                    )
-                                else:
-                                    entity_dict, relationship_dict = asyncio.run(
-                                        extractor.extract_from_chunks(
-                                            chunks_local, 
-                                            is_cancelled=is_cancelled,
-                                            progress_callback=extraction_progress_callback
-                                        )
-                                    )
-                            except Exception as e:
-                                logger.error(
-                                    f"Entity extractor failed in background for {doc_id_local}: {e}"
-                                )
-                                self._update_entity_operation(
-                                    operation_id,
-                                    EntityExtractionState.ERROR,
-                                    error_message=f"LLM extraction failed: {str(e)}",
-                                )
-                                # Mark document as failed so it doesn't stay stuck in processing
-                                try:
-                                    graph_db.create_document_node(
-                                        doc_id_local,
-                                        {
-                                            "processing_status": "failed",
-                                            "error": f"Entity extraction failed: {str(e)}"
-                                        },
-                                    )
-                                except Exception as db_e:
-                                    logger.error(f"Failed to mark document as failed: {db_e}")
-                                return
-
-                            # Phase 2/3: Embedding generation, database operations, and metrics
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.EMBEDDING_GENERATION,
-                                f"Generating embeddings for {len(entity_dict)} entities",
-                            )
-
-                            (
-                                created_entities,
-                                created_relationships,
-                                metrics,
-                            ) = self._persist_extraction_results(
-                                doc_id_local, chunks_local, entity_dict, relationship_dict
-                            )
-
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.DATABASE_OPERATIONS,
-                                f"Creating {metrics.get('relationships_requested', 0)} relationships",
-                            )
-
-                            # Optionally create entity similarities for this document
-                            try:
-                                graph_db.create_entity_similarities(doc_id_local)
-                            except Exception as e:
-                                logger.debug(
-                                    f"Failed to create entity similarities for {doc_id_local}: {e}"
-                                )
-
-                            # Phase 4: Validation
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.VALIDATION,
-                                "Validating entity embeddings",
-                            )
-
-                            # Validate entity embeddings after processing
-                            try:
-                                validation_results = graph_db.validate_entity_embeddings(
-                                    doc_id_local
-                                )
-                                if not validation_results["validation_passed"]:
-                                    logger.warning(
-                                        f"Document {doc_id_local} has {validation_results['invalid_embeddings']} invalid entity embeddings"
-                                    )
-                                    # Optionally fix invalid embeddings
-                                    invalid_entity_ids = [
-                                        entity["entity_id"]
-                                        for entity in validation_results[
-                                            "invalid_entity_details"
-                                        ]
-                                    ]
-                                    if invalid_entity_ids:
-                                        logger.info(
-                                            f"Attempting to fix {len(invalid_entity_ids)} invalid entity embeddings..."
-                                        )
-                                        fix_results = graph_db.fix_invalid_embeddings(
-                                            entity_ids=invalid_entity_ids
-                                        )
-                                        logger.info(
-                                            f"Fixed {fix_results['entities_fixed']} entity embeddings"
-                                        )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to validate entity embeddings for document {doc_id_local}: {e}"
-                                )
-
-                            # Run document-scoped repair and update precomputed summary in background path as well
-                            try:
-                                repair_stats = graph_db.repair_contains_entity_relationships_for_document(doc_id_local)
-                                logger.info(
-                                    "Background post-ingest CONTAINS_ENTITY repair for %s: created=%s (before=%s after=%s)",
-                                    doc_id_local,
-                                    repair_stats.get("created"),
-                                    repair_stats.get("before"),
-                                    repair_stats.get("after"),
-                                )
-                            except Exception as e:
-                                logger.debug(
-                                    "Failed to run background CONTAINS_ENTITY repair for %s: %s",
-                                    doc_id_local,
-                                    e,
-                                )
-
-                            graph_db.create_document_node(
-                                doc_id_local,
-                                {"processing_stage": "post_processing", "processing_progress": 95.0},
-                            )
-                            try:
-                                if getattr(settings, "enable_document_summaries", True):
-                                    stats = graph_db.update_document_precomputed_summary(doc_id_local)
-                                    logger.info(
-                                        "Background updated precomputed document summary for %s: %s",
-                                        doc_id_local,
-                                        stats,
-                                    )
-                                    try:
-                                        preview_stats = graph_db.update_document_preview(doc_id_local)
-                                        logger.info(
-                                            "Background updated document preview for %s: %s",
-                                            doc_id_local,
-                                            preview_stats,
-                                        )
-                                    except Exception as e:
-                                        logger.debug("Failed to update background document preview for %s: %s", doc_id_local, e)
-                            except Exception as e:
-                                logger.debug(
-                                    "Failed to update precomputed document summary in background for %s: %s",
-                                    doc_id_local,
-                                    e,
-                                )
-                            # Invalidate caches for this document so frontends see fresh values
-                            try:
-                                from core.singletons import get_response_cache
-                                from core.cache_metrics import cache_metrics as _cache_metrics
-
-                                cache = get_response_cache()
-                                for key in (f"document_summary:{doc_id_local}", f"document_metadata:{doc_id_local}"):
-                                    try:
-                                        if key in cache:
-                                            del cache[key]
-                                    except Exception:
-                                        pass
-                                _cache_metrics.record_response_invalidation()
-                            except Exception:
-                                pass
-
-                            logger.info(
-                                f"Background entity extraction finished for {doc_id_local}: {created_entities} entities, {created_relationships} relationships"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Unhandled error in background entity worker for {doc_id_local}: {e}"
-                            )
-                            if operation_id:
-                                self._update_entity_operation(
-                                    operation_id,
-                                    EntityExtractionState.ERROR,
-                                    error_message=f"Unhandled error: {str(e)}",
-                                )
-                        finally:
-                            # Complete the operation tracking
-                            if operation_id:
-                                self._complete_entity_operation(operation_id)
-
-                            # Remove this thread from the tracking list when finished
-                            try:
-                                with self._bg_lock:
-                                    current = threading.current_thread()
-                                    if current in self._bg_entity_threads:
-                                        self._bg_entity_threads.remove(current)
-                            except Exception:
-                                pass
-
-                    # Start thread and track it so the UI can detect background work
-                    if SHUTTING_DOWN:
-                        logger.info("Skipping background entity extraction for %s: shutting down", doc_id)
-                    else:
-                        t = threading.Thread(
-                            target=_background_entity_worker,
-                            args=(doc_id, chunks_for_extraction),
-                            daemon=True,
-                        )
-                        with self._bg_lock:
-                            self._bg_entity_threads.append(t)
-                        t.start()
+                    # Start background entity extraction in a separate thread
+                    self._start_background_extraction(doc_id, chunks_for_extraction, original_filename)
 
             # Create similarity relationships between chunks
             try:
@@ -1750,12 +1496,6 @@ class DocumentProcessor:
             try:
                 cache = get_response_cache()
                 cache.clear()
-                try:
-                    from core.cache_metrics import cache_metrics
-
-                    cache_metrics.record_response_invalidation()
-                except Exception:
-                    pass
                 logger.info("Cleared response cache after processing document: %s", doc_id)
             except Exception as e:
                 logger.warning("Failed to clear response cache after processing: %s", e)
@@ -1791,7 +1531,7 @@ class DocumentProcessor:
                 "processing_stage": "error",
             }
 
-    async def update_document(
+    def update_document(
         self,
         doc_id: str,
         file_path: Path,
@@ -1800,31 +1540,6 @@ class DocumentProcessor:
     ) -> Dict[str, Any]:
         """
         Update a document incrementally, preserving unchanged chunks.
-        
-        This method enables efficient document updates by:
-        1. Validating that chunking parameters haven't changed
-        2. Computing content hashes for new chunks
-        3. Comparing with existing chunk hashes
-        4. Only processing new/modified chunks (avoiding re-embedding unchanged content)
-        5. Properly cleaning up removed chunks and their entities
-        
-        Args:
-            doc_id: ID of the existing document to update
-            file_path: Path to the new version of the file
-            original_filename: Optional original filename
-            progress_callback: Optional callback for progress updates
-            
-        Returns:
-            Dict with update statistics:
-                - status: "success" or "error"
-                - unchanged_chunks: Number of chunks that were kept
-                - added_chunks: Number of new chunks added
-                - removed_chunks: Number of old chunks removed
-                - entities_removed: Number of orphaned entities cleaned up
-                
-        Raises:
-            ValueError: If chunking parameters have changed since initial ingestion
-            FileNotFoundError: If the file doesn't exist
         """
         try:
             start_time = time.time()
@@ -1836,9 +1551,6 @@ class DocumentProcessor:
                     "document_id": doc_id,
                 }
             
-            # 1. Validate chunking parameters
-            stored_params = graph_db.get_document_chunking_params(doc_id)
-
             # Update processing status immediately
             graph_db.create_document_node(
                 doc_id,
@@ -1846,59 +1558,75 @@ class DocumentProcessor:
             )
             
             if progress_callback:
-                progress_callback(5, message="Processing update...")
+                try:
+                    progress_callback(5, message="Starting incremental update...")
+                except TypeError:
+                    progress_callback(5)
 
-            if stored_params is None:
-                # Document exists but was ingested before we stored chunking params
-                # Allow update but warn about potential issues
-                logger.warning(
-                    f"Document {doc_id} has no stored chunking params - "
-                    "this may be a legacy document. Proceeding with update."
+            # Copy file to background-safe location immediately
+            import shutil
+            suffix = Path(file_path).suffix
+            bg_safe_path = Path(file_path).parent / f"bg_full_upd_{doc_id}_{int(time.time())}{suffix}"
+            shutil.copy(file_path, bg_safe_path)
+
+            # Launch EVERYTHING in background: conversion, diffing, embedding, extraction
+            t = threading.Thread(
+                target=self._background_full_update_worker_impl,
+                args=(doc_id, bg_safe_path, original_filename, start_time),
+                daemon=True
+            )
+            with self._bg_lock:
+                self._bg_entity_threads.append(t)
+            t.start()
+            
+            # Return immediately to unblock the UI / API
+            return {
+                "status": "processing",
+                "document_id": doc_id,
+                "message": "Update initiated successfully and is running in the background."
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to initiate update for document {doc_id}: {e}", exc_info=True)
+            graph_db.create_document_node(
+                doc_id,
+                {"processing_status": "error", "processing_error": str(e)}
+            )
+            return {"status": "error", "error": str(e)}
+
+    def _background_full_update_worker_impl(
+        self,
+        doc_id: str,
+        file_path: Path,
+        original_filename: Optional[str],
+        start_time: float
+    ):
+        """Complete background worker for handling the entire document update lifecycle."""
+        try:
+            # 1. Validate chunking parameters
+            stored_params = graph_db.get_document_chunking_params(doc_id)
+            if (
+                stored_params and (
+                    stored_params.get("chunk_size_used") != settings.chunk_size or
+                    stored_params.get("chunk_overlap_used") != settings.chunk_overlap
                 )
-            elif (
-                stored_params["chunk_size_used"] != settings.chunk_size or
-                stored_params["chunk_overlap_used"] != settings.chunk_overlap
             ):
-                error_msg = (
-                    f"Chunking parameters have changed since document was ingested. "
-                    f"Stored: chunk_size={stored_params['chunk_size_used']}, "
-                    f"chunk_overlap={stored_params['chunk_overlap_used']}. "
-                    f"Current: chunk_size={settings.chunk_size}, "
-                    f"chunk_overlap={settings.chunk_overlap}. "
-                    f"Options: (1) Delete and re-upload the document, or "
-                    f"(2) Reindex the entire corpus with new parameters first."
-                )
-                logger.error(error_msg)
-                return {
-                    "status": "error",
-                    "error": "chunking_params_changed",
-                    "message": error_msg,
-                    "stored_params": stored_params,
-                    "current_params": {
-                        "chunk_size": settings.chunk_size,
-                        "chunk_overlap": settings.chunk_overlap,
-                    },
-                    "document_id": doc_id,
-                }
-            
-            
-            # 2. Convert and chunk the new document
+                raise ValueError("Chunking parameters have changed; incremental update not possible.")
+
+            # 2. Conversion Phase
+            graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_stage": "conversion", "processing_progress": 5.0})
             conversion_result = self.converter.convert(file_path, original_filename)
             if not conversion_result or not conversion_result.get("content"):
-                return {
-                    "status": "error",
-                    "error": "No content extracted from file",
-                    "document_id": doc_id,
-                }
+                raise ValueError("No content extracted from file")
             
             content = conversion_result.get("content", "")
             new_chunks = document_chunker.chunk_text(content, doc_id)
-            
-            # 3. Get existing chunk hashes
+
+            # 3. Diffing Phase
+            graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_stage": "chunking", "processing_progress": 15.0})
             existing_hashes = graph_db.get_chunk_hashes_for_document(doc_id)
             existing_hash_set = set(existing_hashes.keys())
             
-            # 4. Compute new chunk hashes and diff
             new_hash_map = {}
             for chunk in new_chunks:
                 chunk_hash = chunk.get("metadata", {}).get("content_hash", "")
@@ -1909,30 +1637,17 @@ class DocumentProcessor:
             unchanged_hashes = existing_hash_set & new_hash_set
             removed_hashes = existing_hash_set - new_hash_set
             added_hashes = new_hash_set - existing_hash_set
-            
-            logger.info(
-                f"Document {doc_id} update diff: "
-                f"{len(unchanged_hashes)} unchanged, "
-                f"{len(added_hashes)} added, "
-                f"{len(removed_hashes)} removed"
-            )
-            
-            # 5. Delete removed chunks with entity cleanup
-            cleanup_stats = {"entities_deleted": 0, "relationships_cleaned": 0}
+
+            # 4. Deletion Phase
             if removed_hashes:
                 chunk_ids_to_delete = [existing_hashes[h] for h in removed_hashes]
-                cleanup_stats = graph_db.delete_chunks_with_entity_cleanup(chunk_ids_to_delete)
-                logger.info(
-                    f"Removed {cleanup_stats['chunks_deleted']} chunks, "
-                    f"{cleanup_stats['entities_deleted']} orphaned entities"
-                )
-            
-            # 6. Add new chunks (embed and store)
+                graph_db.delete_chunks_with_entity_cleanup(chunk_ids_to_delete)
+
+            # 5. Embedding Phase
             chunks_to_add = [new_hash_map[h] for h in added_hashes]
-            added_chunk_count = 0
+            added_chunk_count = len(added_hashes)
             
             if chunks_to_add:
-                # Annotate chunk metadata
                 for idx, chunk in enumerate(chunks_to_add, start=1):
                     chunk_metadata = chunk.get("metadata", {}) or {}
                     chunk_metadata.update({
@@ -1940,268 +1655,190 @@ class DocumentProcessor:
                         "chunk_number": idx,
                     })
                     chunk["metadata"] = chunk_metadata
-                
-                # Process chunks asynchronously
-                graph_db.create_document_node(
-                    doc_id,
-                    {"processing_stage": "embedding", "processing_progress": 20.0}
-                )
-                
-                # Wrap progress callback to adjust range
+
+                graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_stage": "embedding", "processing_progress": 20.0})
+
                 def update_progress_callback(processed_count):
-                    # Progress for this stage: 20% -> 75%
                     total = len(chunks_to_add)
                     if total > 0:
                         progress = 20.0 + (processed_count / total * 55.0)
-                        graph_db.create_document_node(doc_id, {"processing_progress": progress})
-                        if progress_callback:
-                            try:
-                                progress_callback(processed_count, message=f"Embedding new content ({processed_count}/{total})")
-                            except TypeError:
-                                progress_callback(processed_count)
+                        graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_progress": progress, "processing_stage": "embedding"})
 
-                try:
-                    # Use asyncio.run for a synchronous wrapper
-                    processed = asyncio.run(
-                        self.process_file_async(chunks_to_add, doc_id, update_progress_callback)
-                    )
-                except RuntimeError:
-                    # If an event loop is already running
-                    loop = asyncio.get_event_loop()
-                    processed = loop.run_until_complete(
-                        self.process_file_async(chunks_to_add, doc_id, update_progress_callback)
-                    )
+                processed_chunks = self._run_async(self.process_file_async(chunks_to_add, doc_id, update_progress_callback))
                 
-                added_chunk_count = len(processed)
-                
-                logger.info(f"Added {added_chunk_count} new chunks for document {doc_id}")
-            
-            # 7. Update document metadata
-            metadata = self._extract_metadata(file_path, original_filename)
-            metadata.update(conversion_result.get("metadata", {}))
-            metadata["modified_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            
-            # Trigger entity extraction for new chunks if enabled
-            if added_chunk_count > 0 and getattr(settings, "enable_entity_extraction", True):
-                if self.entity_extractor is None:
-                    logger.info("Initializing entity extractor for background update processing...")
-                    self.entity_extractor = EntityExtractor()
-                
-                # Prepare chunks for extraction (preferring the processed ones that have embeddings)
-                chunks_for_extraction = self._prepare_chunks_for_extraction(
-                    doc_id, 
-                    processed if 'processed' in locals() else chunks_to_add
-                )
-                
-                # Update status
-                graph_db.create_document_node(
-                    doc_id,
-                    {"processing_stage": "entity_extraction", "processing_progress": 75.0}
-                )
-                
-                # Start background extraction using the same logic as process_file
-                if SHUTTING_DOWN:
-                    logger.info("Skipping background entity extraction for update of %s: shutting down", doc_id)
+                # 6. Extraction Phase
+                if added_chunk_count > 0 and getattr(settings, "enable_entity_extraction", True):
+                    chunks_for_extraction = self._prepare_chunks_for_extraction(doc_id, processed_chunks)
+                    graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_stage": "entity_extraction", "processing_progress": 75.0})
+                    self._background_entity_worker_impl(doc_id, chunks_for_extraction, original_filename)
                 else:
-                    def _background_update_worker(doc_id_local, chunks_local):
-                        # Reusing the background worker logic would be ideal, but for now we'll inline a simplified version
-                        # or call a shared method if one existed. Given the size of _background_entity_worker in process_file,
-                        # we should ideally refactor it out?
-                        # For this fix, I will copy the minimal necessary parts to start the operation which will
-                        # use the standard _background_entity_worker logic if I can call it, but `process_file` defines it locally.
-                        # Wait! I can just use `threading.Thread` to call a new method `_run_background_extraction` 
-                        # if I refactor `process_file` or I can just inline the call here.
-                        
-                        # Better approach: Call a new helper method that contains the extraction logic to avoid duplication.
-                        # But to avoid touching `process_file` too much, I will replicate the core startup logic here,
-                        # OR better, since I am in `EXECUTION`, I will refactor `process_file` to use a shared method `_run_extraction_pipeline`.
-                        
-                        # Actually, looking at `process_file`, the worker is defined locally capturing `progress_callback`.
-                        # I will define `_background_update_worker` here with similar logic.
-                        
-                        operation_id = None
-                        try:
-                            # Start tracking
-                            filename = original_filename if original_filename else file_path.name
-                            operation_id = self._start_entity_operation(doc_id_local, filename)
-                            
-                            self._update_entity_operation(
-                                operation_id,
-                                EntityExtractionState.STARTING,
-                                "Starting background extraction for updated content"
-                            )
-                            
-                            logger.info(f"Background extraction started for update of {doc_id_local}")
-                            
-                            # Phase 1: Extraction
-                            use_gleaning, max_gleanings = self._get_gleaning_config()
-                            
-                            if use_gleaning:
-                                self._update_entity_operation(operation_id, EntityExtractionState.LLM_EXTRACTION, f"Gleaning ({max_gleanings} passes)")
-                            else:
-                                self._update_entity_operation(operation_id, EntityExtractionState.LLM_EXTRACTION, "LLM extraction")
+                    self._finalize_document_update(doc_id, file_path, original_filename, conversion_result.get("metadata", {}))
+            else:
+                self._finalize_document_update(doc_id, file_path, original_filename, conversion_result.get("metadata", {}))
 
-                            # Callback for extraction progress
-                            def internal_progress(processed, total):
-                                if total == 0: return
-                                
-                                # 75% -> 95%
-                                base = 75.0
-                                range_val = 20.0
-                                current_pct = (processed / total) * 100
-                                mapped = base + (current_pct / 100 * range_val)
-                                
-                                try:
-                                    graph_db.create_document_node(doc_id_local, {"processing_progress": min(mapped, 95.0)})
-                                except Exception:
-                                    pass
-                                    
-                                msg = f"Extracting entities ({processed}/{total})"
-                                self._update_entity_operation(operation_id, EntityExtractionState.LLM_EXTRACTION, msg)
-                                
-                            extractor = self.entity_extractor
-                            try:
-                                if use_gleaning:
-                                    entity_dict, relationship_dict = asyncio.run(
-                                        extractor.extract_from_chunks_with_gleaning(
-                                            chunks_local,
-                                            max_gleanings=max_gleanings,
-                                            progress_callback=internal_progress
-                                        )
-                                    )
-                                else:
-                                    entity_dict, relationship_dict = asyncio.run(
-                                        extractor.extract_from_chunks(
-                                            chunks_local,
-                                            progress_callback=internal_progress
-                                        )
-                                    )
-                            except Exception as e:
-                                logger.error(f"Extraction failed for update: {e}")
-                                self._update_entity_operation(operation_id, EntityExtractionState.ERROR, str(e))
-                                return
-
-                            # Phase 2: Embeddings & Persist
-                            self._update_entity_operation(operation_id, EntityExtractionState.EMBEDDING_GENERATION, "Generating embeddings")
-                            
-                            created_ents, created_rels, _ = self._persist_extraction_results(
-                                doc_id_local, chunks_local, entity_dict, relationship_dict
-                            )
-                            
-                            self._update_entity_operation(operation_id, EntityExtractionState.DATABASE_OPERATIONS, f"Created {created_ents} entities, {created_rels} rels")
-                            
-                            # Phase 3: Validation & Cleanup
-                            graph_db.create_entity_similarities(doc_id_local)
-                            graph_db.validate_entity_embeddings(doc_id_local)
-                            graph_db.repair_contains_entity_relationships_for_document(doc_id_local)
-                            
-                            # Finalize
-                            metadata_update = {
-                                "processing_status": "completed",
-                                "processing_stage": "completed",
-                                "processing_progress": 100.0
-                            }
-                            graph_db.create_document_node(doc_id_local, metadata_update)
-                            
-                            # Refresh summaries
-                            if getattr(settings, "enable_document_summaries", True):
-                                graph_db.update_document_precomputed_summary(doc_id_local)
-                                graph_db.update_document_preview(doc_id_local)
-                                
-                            # Clear cache
-                            try:
-                                from core.singletons import get_response_cache
-                                cache = get_response_cache()
-                                for key in (f"document_summary:{doc_id_local}", f"document_metadata:{doc_id_local}"):
-                                    if key in cache: del cache[key]
-                            except Exception:
-                                pass
-                                
-                            logger.info(f"Update extraction finished for {doc_id_local}")
-                            
-                        except Exception as e:
-                            logger.error(f"Background update worker failed: {e}")
-                            if operation_id:
-                                self._update_entity_operation(operation_id, EntityExtractionState.ERROR, str(e))
-                            # Set error status on doc if it failed completely? 
-                            # Maybe not, the file update itself succeeded (chunks are there).
-                            # Just warn.
-                        finally:
-                            if operation_id:
-                                self._complete_entity_operation(operation_id)
-                            
-                            # Remove thread from tracking
-                            try:
-                                with self._bg_lock:
-                                    curr = threading.current_thread()
-                                    if curr in self._bg_entity_threads:
-                                        self._bg_entity_threads.remove(curr)
-                            except Exception:
-                                pass
-
-                    # Launch thread
-                    t = threading.Thread(
-                        target=_background_update_worker,
-                        args=(doc_id, chunks_for_extraction),
-                        daemon=True
-                    )
-                    with self._bg_lock:
-                        self._bg_entity_threads.append(t)
-                    t.start()
-                    
-                    # Return early, don't set to completed immediately if we started extraction!
-                    # The background thread will set to completed 100%.
-                    # But we need to return the result of the function now.
-                    # We should probably set status to "processing" in metadata updates below instead of "completed".
-            
-            # 7. Update document metadata (adjusted)
-            graph_db.create_document_node(doc_id, metadata)
-            
-            # If we didn't start extraction (no new chunks or disabled), we mark as complete now.
-            # If we DID start extraction, we let the thread finish it.
-            if not (added_chunk_count > 0 and getattr(settings, "enable_entity_extraction", True)):
-                graph_db.create_document_node(doc_id, {
-                    "processing_status": "completed",
-                    "processing_stage": "completed",
-                    "processing_progress": 100.0
-                })
-
-            # 8. Rebuild chunk similarities for added chunks if enabled
+            # 7. Similarities
             if added_chunk_count > 0 and getattr(settings, 'create_chunk_similarities', True):
                 try:
                     graph_db.create_chunk_similarities(doc_id)
-                except Exception as e:
-                    logger.warning(f"Failed to rebuild chunk similarities: {e}")
+                except Exception: pass
+
+            logger.info(f"Background update completed for {doc_id} in {time.time() - start_time:.2f}s")
+
+        except Exception as e:
+            logger.error(f"Background full update failed for {doc_id}: {e}", exc_info=True)
+            graph_db.create_document_node(doc_id, {"processing_status": "error", "processing_error": str(e)})
+        finally:
+            if file_path.exists():
+                try: file_path.unlink()
+                except Exception: pass
+            with self._bg_lock:
+                curr = threading.current_thread()
+                if curr in self._bg_entity_threads: self._bg_entity_threads.remove(curr)
+
+    def _finalize_document_update(self, doc_id, file_path, original_filename, conversion_metadata):
+        """Helper to mark document as completed."""
+        metadata = self._extract_metadata(file_path, original_filename)
+        metadata.update(conversion_metadata)
+        metadata.update({
+            "processing_status": "completed",
+            "processing_stage": "completed",
+            "processing_progress": 100.0,
+            "modified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        })
+        graph_db.create_document_node(doc_id, metadata)
+        
+        # Reset global processing state to stop frontend polling
+        try:
+            from api.routers.database import _global_processing_state
+            if _global_processing_state.get("current_document_id") == doc_id:
+                _global_processing_state["is_processing"] = False
+                _global_processing_state["current_document_id"] = None
+                _global_processing_state["current_filename"] = None
+                _global_processing_state["current_stage"] = None
+                _global_processing_state["progress_percentage"] = 0.0
+        except ImportError:
+            pass  # Gracefully handle if import fails
+
+    def _background_update_worker_impl(
+        self,
+        doc_id: str,
+        chunks_to_add: List[Dict[str, Any]],
+        file_path: Path,
+        original_filename: Optional[str],
+        conversion_metadata: Dict[str, Any],
+        unchanged_hashes: set,
+    ):
+        # NOTE: This method is now legacy and replaced by _background_full_update_worker_impl
+        # but kept for backward compatibility if any other call site exists.
+        pass
+
+    def _start_background_extraction(self, doc_id, chunks_for_extraction, original_filename):
+        """Start background entity extraction in a separate thread."""
+        t = threading.Thread(
+            target=self._background_entity_worker_impl,
+            args=(doc_id, chunks_for_extraction, original_filename),
+            daemon=True
+        )
+        with self._bg_lock:
+            self._bg_entity_threads.append(t)
+        t.start()
+
+    def _background_entity_worker_impl(self, doc_id_local, chunks_local, original_filename: Optional[str] = None):
+        """Internal helper for background entity extraction."""
+        operation_id = None
+        try:
+            # Get extractor instance (initializing if needed)
+            if self.entity_extractor is None:
+                self.entity_extractor = EntityExtractor()
+            extractor = self.entity_extractor
+
+            # Start tracking
+            filename = original_filename if original_filename else doc_id_local
+            operation_id = self._start_entity_operation(doc_id_local, filename)
             
-            elapsed_time = time.time() - start_time
+            self._update_entity_operation(
+                operation_id,
+                EntityExtractionState.STARTING,
+                "Starting background entity extraction"
+            )
+
+            use_gleaning, max_gleanings = self._get_gleaning_config()
             
-            result = {
-                "status": "success",
-                "document_id": doc_id,
-                "file_path": str(file_path),
-                "unchanged_chunks": len(unchanged_hashes),
-                "added_chunks": added_chunk_count,
-                "removed_chunks": cleanup_stats.get("chunks_deleted", len(removed_hashes)),
-                "entities_removed": cleanup_stats.get("entities_deleted", 0),
-                "relationships_cleaned": cleanup_stats.get("relationships_cleaned", 0),
-                "processing_time": round(elapsed_time, 2),
-            }
-            
-            logger.info(
-                f"Document {doc_id} updated successfully in {elapsed_time:.2f}s: "
-                f"{result['unchanged_chunks']} kept, {result['added_chunks']} added, "
-                f"{result['removed_chunks']} removed"
+            # Define granularity callback
+            def extraction_progress_callback(processed, total):
+                if total == 0: return
+                msg = f"Extracting entities ({processed}/{total} chunks)"
+                if use_gleaning:
+                    msg = f"Gleaning extraction ({max_gleanings} passes) - ({processed}/{total} chunks)"
+                
+                self._update_entity_operation(operation_id, EntityExtractionState.LLM_EXTRACTION, msg)
+                
+                # Map 75-95%
+                progress = 75.0 + ((processed / total) * 20.0)
+                try:
+                    graph_db.create_document_node(doc_id_local, {"processing_progress": min(progress, 95.0)})
+                except Exception: pass
+
+            # Run extraction
+            try:
+                if use_gleaning:
+                    entity_dict, relationship_dict = self._run_async(
+                        extractor.extract_from_chunks_with_gleaning(
+                            chunks_local, max_gleanings=max_gleanings, progress_callback=extraction_progress_callback
+                        )
+                    )
+                else:
+                    entity_dict, relationship_dict = self._run_async(
+                        extractor.extract_from_chunks(
+                            chunks_local, progress_callback=extraction_progress_callback
+                        )
+                    )
+            except Exception as e:
+                logger.error(f"Extraction failed for {doc_id_local}: {e}")
+                self._update_entity_operation(operation_id, EntityExtractionState.ERROR, str(e))
+                return
+
+            # Persist
+            self._update_entity_operation(operation_id, EntityExtractionState.EMBEDDING_GENERATION, "Generating embeddings")
+            created_ents, created_rels, _ = self._persist_extraction_results(
+                doc_id_local, chunks_local, entity_dict, relationship_dict
             )
             
-            return result
+            # Validation & Repair
+            self._update_entity_operation(operation_id, EntityExtractionState.VALIDATION, "Validating results")
+            graph_db.create_entity_similarities(doc_id_local)
+            graph_db.validate_entity_embeddings(doc_id_local)
+            graph_db.repair_contains_entity_relationships_for_document(doc_id_local)
             
+            # Finalize
+            graph_db.create_document_node(doc_id_local, {
+                "processing_status": "completed",
+                "processing_stage": "completed",
+                "processing_progress": 100.0
+            })
+            
+            # Cache cleanup
+            try:
+                from core.singletons import get_response_cache
+                cache = get_response_cache()
+                for key in (f"document_summary:{doc_id_local}", f"document_metadata:{doc_id_local}"):
+                    if key in cache: del cache[key]
+            except Exception: pass
+            
+            logger.info(f"Background extraction finished for {doc_id_local}")
+
         except Exception as e:
-            logger.error(f"Failed to update document {doc_id}: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "error": str(e),
-                "document_id": doc_id,
-            }
+            logger.error(f"Background worker failed for {doc_id_local}: {e}")
+            if operation_id:
+                self._update_entity_operation(operation_id, EntityExtractionState.ERROR, str(e))
+        finally:
+            if operation_id:
+                self._complete_entity_operation(operation_id)
+            with self._bg_lock:
+                curr = threading.current_thread()
+                if curr in self._bg_entity_threads:
+                    self._bg_entity_threads.remove(curr)
+
 
     def is_entity_extraction_running(self) -> bool:
         """
@@ -2554,24 +2191,9 @@ class DocumentProcessor:
                 except TypeError:
                     progress_callback(0)
 
-            try:
-                # Use asyncio.run for a synchronous wrapper
-                processed_chunks = asyncio.run(
-                    self.process_file_async(chunks, doc_id, progress_callback)
-                )
-            except RuntimeError:
-                # If an event loop is already running, get it and run until complete
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Create a new task and wait for it
-                    processed_chunks = loop.run_until_complete(
-                        self.process_file_async(chunks, doc_id, progress_callback)
-                    )
-                else:
-                    processed_chunks = loop.run_until_complete(
-                        self.process_file_async(chunks, doc_id, progress_callback)
-                    )
-
+            processed_chunks = self._run_async(
+                self.process_file_async(chunks, doc_id, progress_callback)
+            )
             # Create similarity relationships between chunks
             try:
                 relationships_created = graph_db.create_chunk_similarities(doc_id)
@@ -2746,7 +2368,7 @@ class DocumentProcessor:
             if progress_callback and hasattr(progress_callback, 'is_cancelled'):
                 is_cancelled = progress_callback.is_cancelled
 
-            entity_dict, relationship_dict = asyncio.run(
+            entity_dict, relationship_dict = self._run_async(
                 extractor.extract_from_chunks(chunks_for_extraction, is_cancelled=is_cancelled)
             )
 
@@ -2958,7 +2580,7 @@ class DocumentProcessor:
                             EntityExtractionState.LLM_EXTRACTION,
                             "Running LLM entity extraction",
                         )
-                        entity_dict, relationship_dict = asyncio.run(
+                        entity_dict, relationship_dict = self._run_async(
                             extractor.extract_from_chunks(chunks_for_extraction)
                         )
 
@@ -3256,7 +2878,7 @@ class DocumentProcessor:
                                 EntityExtractionState.LLM_EXTRACTION,
                                 "Running LLM entity extraction",
                             )
-                            entity_dict, relationship_dict = asyncio.run(
+                            entity_dict, relationship_dict = self._run_async(
                                 extractor.extract_from_chunks(chunks_for_extraction)
                             )
 

@@ -636,12 +636,12 @@ class GraphDB:
 SOURCE ENTITY:
 - Name: {source_name}
 - Type: {source_type}
-- Description: {source_description[:300] if source_description else 'No description'}
+- Description: {source_description[:settings.heal_description_max_chars] if source_description else 'No description'}
 
 TARGET ENTITY:
 - Name: {target_name}
 - Type: {target_type}
-- Description: {target_description[:300] if target_description else 'No description'}
+- Description: {target_description[:settings.heal_description_max_chars] if target_description else 'No description'}
 
 Should these entities have a direct relationship in a knowledge graph?
 Consider: Are they related concepts, processes, components, or have meaningful semantic connection?
@@ -696,18 +696,20 @@ Reply with ONLY one of:
             List of node IDs that are orphans.
         """
         with self.session_scope() as session:
-            # Find entities with no RELATED_TO relationships to other entities
-            # These are truly isolated nodes in the knowledge graph
+            # Find entities with few connections (micro-clusters or isolated nodes)
+            # Use variable length path to estimate component size
+            # Issue #16: Expanded to find nodes in small disconnected components
             result = session.run(
                 """
                 MATCH (e:Entity)
-                WHERE NOT (e)-[:RELATED_TO]-(:Entity)
+                WHERE COUNT { (e)-[:RELATED_TO*1..6]-(:Entity) } < ($min_cluster_size - 1)
                 RETURN e.id as id
-                """
+                """,
+                min_cluster_size=min_cluster_size
             )
             
             orphan_ids = [record["id"] for record in result]
-            logger.info(f"Found {len(orphan_ids)} orphan nodes")
+            logger.info(f"Found {len(orphan_ids)} orphan/micro-cluster nodes (size < {min_cluster_size})")
             return orphan_ids
 
     def update_document_summary(
@@ -767,11 +769,11 @@ Reply with ONLY one of:
             # Looking at create_document_node: SET d += $metadata
             # so we are storing them at root level or mixed in.
             
-            # Use same += operator to merge/update
+            # Use same += operator to merge/update (Issue #14 fix)
             session.run(
                 """
                 MATCH (d:Document {id: $doc_id})
-                SET d.metadata = $metadata
+                SET d += $metadata
                 """,
                 doc_id=doc_id,
                 metadata=metadata,
@@ -1893,6 +1895,83 @@ Reply with ONLY one of:
             logger.info(
                 f"Deleted document {doc_id} and cleaned up {len(chunk_ids)} chunks and related entities"
             )
+
+    def cleanup_orphaned_chunks(self, grace_period_minutes: int = 5) -> Dict[str, int]:
+        """
+        Delete chunks not connected to any Document via HAS_CHUNK relationship.
+        
+        Also cleans up entities that become orphaned as a result.
+        
+        Args:
+            grace_period_minutes: Only delete chunks created more than X minutes ago.
+                                  Set to 0 to delete all orphans immediately.
+                                  
+        Returns:
+            Dict with counts: {"chunks_deleted": N, "entities_deleted": M}
+        """
+        try:
+            with self.session_scope() as session:
+                # Calculate the cutoff timestamp
+                from datetime import datetime, timedelta, timezone
+                cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=grace_period_minutes)
+                cutoff_iso = cutoff_time.isoformat()
+                
+                # 1. Find orphaned chunks (not connected to any Document)
+                # that were created before the grace period
+                if grace_period_minutes > 0:
+                    # Only delete chunks older than grace period
+                    result = session.run("""
+                        MATCH (c:Chunk)
+                        WHERE NOT ((:Document)-[:HAS_CHUNK]->(c))
+                          AND (c.created_at IS NULL OR c.created_at < $cutoff)
+                        WITH c
+                        OPTIONAL MATCH (c)-[r:CONTAINS_ENTITY]->(e:Entity)
+                        WITH c, collect(r) as rels, collect(e.id) as entity_ids
+                        FOREACH (r IN rels | DELETE r)
+                        DETACH DELETE c
+                        RETURN count(DISTINCT c) as chunks_deleted, entity_ids
+                    """, cutoff=cutoff_iso)
+                else:
+                    # Delete all orphans regardless of age
+                    result = session.run("""
+                        MATCH (c:Chunk)
+                        WHERE NOT ((:Document)-[:HAS_CHUNK]->(c))
+                        WITH c
+                        OPTIONAL MATCH (c)-[r:CONTAINS_ENTITY]->(e:Entity)
+                        WITH c, collect(r) as rels, collect(e.id) as entity_ids
+                        FOREACH (r IN rels | DELETE r)
+                        DETACH DELETE c
+                        RETURN count(DISTINCT c) as chunks_deleted, entity_ids
+                    """)
+                
+                record = result.single()
+                chunks_deleted = record["chunks_deleted"] if record else 0
+                
+                # 2. Clean up orphaned entities (no source_chunks and no CONTAINS_ENTITY relationships)
+                result = session.run("""
+                    MATCH (e:Entity)
+                    WHERE (coalesce(e.source_chunks, []) = [] OR e.source_chunks IS NULL)
+                      AND NOT (()-[:CONTAINS_ENTITY]->(e))
+                    DETACH DELETE e
+                    RETURN count(e) as deleted
+                """)
+                entity_record = result.single()
+                entities_deleted = entity_record["deleted"] if entity_record else 0
+                
+                if chunks_deleted > 0 or entities_deleted > 0:
+                    logger.info(
+                        f"Orphan cleanup: deleted {chunks_deleted} chunks and {entities_deleted} entities "
+                        f"(grace period: {grace_period_minutes} minutes)"
+                    )
+                
+                return {
+                    "chunks_deleted": chunks_deleted,
+                    "entities_deleted": entities_deleted
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to cleanup orphaned chunks: {e}")
+            return {"chunks_deleted": 0, "entities_deleted": 0, "error": str(e)}
 
     # ========== Incremental Document Update Methods ==========
 
@@ -4471,6 +4550,11 @@ Reply with ONLY one of:
                 "summary",
                 "document_type",
                 "hashtags",
+                "processing_status",
+                "processing_stage",
+                "processing_progress",
+                "processing_error",
+                "error",
             }
 
             metadata = {
@@ -4491,6 +4575,10 @@ Reply with ONLY one of:
                 "summary": doc_data.get("summary"),
                 "document_type": doc_data.get("document_type"),
                 "hashtags": doc_data.get("hashtags", []),
+                "processing_status": doc_data.get("processing_status"),
+                "processing_stage": doc_data.get("processing_stage"),
+                "processing_progress": doc_data.get("processing_progress"),
+                "processing_error": doc_data.get("processing_error") or doc_data.get("error"),
                 "chunks": chunks,
                 "entities": entities,
                 "quality_scores": doc_data.get("quality_scores"),
@@ -5004,6 +5092,111 @@ Reply with ONLY one of:
                     "metadata": result["metadata"] or {},
                 }
             return {}
+
+    # ============================================================
+    # Persistent Processing State (Issue #2)
+    # ============================================================
+
+    def get_staged_documents(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve all documents marked as staged (awaiting or in processing).
+        
+        Returns:
+            List of staged document records with id, filename, file_path, 
+            processing_status, processing_stage, processing_progress.
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document)
+                WHERE d.staged = true OR d.processing_status IN ['staged', 'processing', 'queued']
+                RETURN d.id as id,
+                       d.filename as filename,
+                       coalesce(d.original_filename, d.filename) as original_filename,
+                       d.file_path as file_path,
+                       d.mime_type as mime_type,
+                       coalesce(d.processing_status, 'staged') as processing_status,
+                       coalesce(d.processing_stage, 'queued') as processing_stage,
+                       coalesce(d.processing_progress, 0.0) as processing_progress,
+                       d.created_at as created_at,
+                       d.hashtags as hashtags
+                ORDER BY d.created_at ASC
+                """
+            )
+            return [record.data() for record in result]
+
+    def update_processing_state(
+        self,
+        doc_id: str,
+        processing_status: Optional[str] = None,
+        processing_stage: Optional[str] = None,
+        processing_progress: Optional[float] = None,
+        error: Optional[str] = None,
+        staged: Optional[bool] = None
+    ) -> None:
+        """
+        Update processing state fields on a Document node.
+        
+        Args:
+            doc_id: Document ID
+            processing_status: Status like 'staged', 'processing', 'complete', 'failed'
+            processing_stage: Stage like 'queued', 'classification', 'embedding', etc.
+            processing_progress: 0.0 to 100.0
+            error: Error message if failed
+            staged: Whether document is still staged (not fully processed)
+        """
+        updates = {}
+        if processing_status is not None:
+            updates["processing_status"] = processing_status
+        if processing_stage is not None:
+            updates["processing_stage"] = processing_stage
+        if processing_progress is not None:
+            updates["processing_progress"] = processing_progress
+        if error is not None:
+            updates["error"] = error
+        if staged is not None:
+            updates["staged"] = staged
+
+        if not updates:
+            return
+
+        with self.session_scope() as session:
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                SET d += $updates
+                """,
+                doc_id=doc_id,
+                updates=updates,
+            )
+
+    def get_documents_by_processing_status(self, status: str) -> List[Dict[str, Any]]:
+        """
+        Query documents by processing status.
+        
+        Args:
+            status: 'staged', 'processing', 'complete', 'failed', etc.
+            
+        Returns:
+            List of matching document records.
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document)
+                WHERE d.processing_status = $status
+                RETURN d.id as id,
+                       d.filename as filename,
+                       d.file_path as file_path,
+                       d.processing_stage as processing_stage,
+                       d.processing_progress as processing_progress,
+                       d.error as error,
+                       d.created_at as created_at
+                ORDER BY d.created_at ASC
+                """,
+                status=status,
+            )
+            return [record.data() for record in result]
 
     def clear_database(self) -> None:
         """Clear all data from the database."""

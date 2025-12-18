@@ -550,8 +550,18 @@ async def update_document_content(
             temp_path = Path(tmp.name)
         
         try:
+            # Import global processing state to trigger frontend polling
+            from api.routers.database import _global_processing_state
+            
+            # Set processing state to trigger frontend polling
+            _global_processing_state["is_processing"] = True
+            _global_processing_state["current_document_id"] = document_id
+            _global_processing_state["current_filename"] = file.filename
+            _global_processing_state["current_stage"] = "conversion"
+            _global_processing_state["progress_percentage"] = 5.0
+            
             # Call the incremental update method
-            result = await document_processor.update_document(
+            result = document_processor.update_document(
                 doc_id=document_id,
                 file_path=temp_path,
                 original_filename=file.filename,
@@ -582,7 +592,8 @@ async def update_document_content(
             
             return {
                 "document_id": document_id,
-                "status": "success",
+                "status": result.get("status", "success"),
+                "message": result.get("message", "Processing incremental update"),
                 "changes": {
                     "unchanged_chunks": result.get("unchanged_chunks", 0),
                     "added_chunks": result.get("added_chunks", 0),

@@ -443,7 +443,7 @@ Answer with JSON format:
         result = llm_manager.generate_response(
             prompt=detection_prompt,
             system_message=system_message,
-            temperature=1.0,
+            temperature=0.3,  # Issue #23: Lower temperature for deterministic JSON parsing
             max_tokens=150,
         )
 
@@ -673,34 +673,38 @@ def _detect_technical_query(query_lower: str) -> Dict[str, Any]:
         return technical_info
 
     # Pattern 1: Database-style identifiers (snake_case with underscores)
-    # Examples: user_accounts, order_items, customer_data
-    snake_case_pattern = r'\b[a-z]+_[a-z_]+\b'
-    snake_case_matches = re.findall(snake_case_pattern, query_lower)
+    if "snake_case" in settings.technical_term_patterns:
+        snake_case_matches = re.findall(settings.technical_term_patterns["snake_case"], query_lower)
+    else:
+        snake_case_matches = []
 
-    # Pattern 2: Technical IDs (PREFIX-NUMBER format)
-    # Examples: PROJ-123, TICKET-456, AUTH-789
-    tech_id_pattern = r'\b[A-Z]{2,}-\d+\b'
-    tech_id_matches = re.findall(tech_id_pattern, query_lower.upper())
+    # Pattern 2: Technical IDs
+    # Note: query_lower is converted to upper to match ID patterns commonly defined in uppercase
+    if "tech_id" in settings.technical_term_patterns:
+        tech_id_matches = re.findall(settings.technical_term_patterns["tech_id"], query_lower.upper())
+    else:
+        tech_id_matches = []
 
-    # Pattern 3: Configuration keys (SCREAMING_SNAKE_CASE or camelCase)
-    # Examples: MAX_CONNECTIONS, apiKey, DATABASE_URL
-    config_pattern = r'\b[A-Z][A-Z_]{2,}\b|\b[a-z]+[A-Z][a-zA-Z]+\b'
-    config_matches = re.findall(config_pattern, query_lower.upper())
+    # Pattern 3: Configuration keys
+    if "config_key" in settings.technical_term_patterns:
+        config_matches = re.findall(settings.technical_term_patterns["config_key"], query_lower)
+    else:
+        config_matches = []
 
     # Pattern 4: Error codes
-    # Examples: ERROR_404, ECONNREFUSED, ERR_CONNECTION_REFUSED
-    error_pattern = r'\b(error|err)[_\-]?[a-z0-9_]+\b'
-    error_matches = re.findall(error_pattern, query_lower)
-
-    # Pattern 5: File paths/extensions
-    # Examples: config.yml, nginx.conf, /etc/hosts
-    # File extensions
-    file_ext_pattern = r'\b\w+\.(yml|yaml|json|conf|config|ini|xml|properties)\b'
-    # Absolute paths (must have at least 2 segments: /etc/hosts, /var/log/app.log)
-    file_path_pattern = r'/\w+/[\w/\.]+'
-    file_ext_matches = re.findall(file_ext_pattern, query_lower)
-    file_path_matches = re.findall(file_path_pattern, query_lower)
-    file_matches = file_ext_matches + file_path_matches
+    if "error_code" in settings.technical_term_patterns:
+        error_matches = re.findall(settings.technical_term_patterns["error_code"], query_lower, re.IGNORECASE)
+    else:
+        error_matches = []
+    
+    # Pattern 5: File extensions
+    # Pattern 5: File extensions and paths
+    file_matches = []
+    if "file_ext" in settings.technical_term_patterns:
+        file_matches.extend(re.findall(settings.technical_term_patterns["file_ext"], query_lower))
+    
+    if "file_path" in settings.technical_term_patterns:
+        file_matches.extend(re.findall(settings.technical_term_patterns["file_path"], query_lower))
 
     # Calculate confidence based on number of technical patterns found
     total_matches = (

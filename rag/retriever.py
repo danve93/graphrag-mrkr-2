@@ -658,9 +658,11 @@ class DocumentRetriever:
                         )
                         max_chunk_similarity = max(max_chunk_similarity, chunk_sim)
 
-                # Compute final path score with configurable weights
+                # Compute final path score with configurable weights (Issue #9)
                 # alpha * path_score_from_edges + beta * query_similarity + gamma * max_chunk_sim
-                alpha, beta, gamma = 0.6, 0.3, 0.1
+                alpha = settings.path_score_alpha
+                beta = settings.path_score_beta
+                gamma = settings.path_score_gamma
                 final_score = (
                     alpha * path.score
                     + beta * path_query_similarity
@@ -749,6 +751,9 @@ class DocumentRetriever:
             - Hit: Return cached results (TTL: 60s)
             - Miss: Perform retrieval, cache, return
         """
+        # Issue #8: Clear stale metadata from previous requests to prevent memory leak
+        self.last_retrieval_metadata = None
+        
         # Use contextualized query if provided, otherwise use original
         search_query = contextualized_query or query
         

@@ -271,6 +271,9 @@ async def stream_response_generator(
             "content": str(e),
         }
         yield f"data: {json.dumps(error_data)}\n\n"
+    finally:
+        # SSE cleanup (Issue #29): Ensure proper cleanup even on client disconnect
+        logger.debug(f"SSE stream ended for session {session_id}, message {message_id}")
 
 
 async def _prepare_chat_context(

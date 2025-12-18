@@ -9,10 +9,60 @@ from typing import Any, Dict, Optional
 import httpx
 import openai
 import requests
+from openai.resources.chat.completions import Completions
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# --- Global OpenAI Monkey Patch for max_tokens vs max_completion_tokens ---
+_original_openai_chat_create = Completions.create
+
+def _patched_openai_chat_create(self, *args, **kwargs):
+    """
+    Global patch to handle the max_tokens vs max_completion_tokens compatibility
+    across all callers (including third-party libraries like Marker).
+    """
+    model = kwargs.get("model", "")
+    max_tokens = kwargs.get("max_tokens")
+    max_completion_tokens = kwargs.get("max_completion_tokens")
+    
+    # Logic to switch between max_tokens and max_completion_tokens for modern models
+    if max_tokens is not None and max_completion_tokens is None:
+        # Check if it's a modern model that prefers max_completion_tokens
+        is_modern = not (
+            model.startswith("gpt-3.5") or 
+            (model.startswith("gpt-4") and "turbo" not in model and "gpt-4o" not in model)
+        )
+        if is_modern:
+            params = {k: v for k, v in kwargs.items()}
+            params["max_completion_tokens"] = params.pop("max_tokens")
+            try:
+                return _original_openai_chat_create(self, *args, **params)
+            except Exception as e:
+                # Fallback if the first attempt failed due to the param
+                if "max_completion_tokens" in str(e).lower() or "unsupported_parameter" in str(e).lower():
+                    logger.debug(f"Retrying with max_tokens for {model} after max_completion_tokens failed")
+                    return _original_openai_chat_create(self, *args, **kwargs)
+                raise
+    
+    # Default behavior for non-problematic combinations or if both/none are set
+    try:
+        return _original_openai_chat_create(self, *args, **kwargs)
+    except Exception as e:
+        status_code = getattr(e, 'status_code', None)
+        if status_code == 400 and ("max_tokens" in str(e).lower() or "max_completion_tokens" in str(e).lower()):
+             params = {k: v for k, v in kwargs.items()}
+             if "max_completion_tokens" in params:
+                 params["max_tokens"] = params.pop("max_completion_tokens")
+             elif "max_tokens" in params:
+                 params["max_completion_tokens"] = params.pop("max_tokens")
+             logger.debug(f"Global patch: Retrying {model} with alternative token parameter due to error: {e}")
+             return _original_openai_chat_create(self, *args, **params)
+        raise
+
+Completions.create = _patched_openai_chat_create
+# --- End of Global Patch ---
 
 # Configure OpenAI client
 openai.api_key = settings.openai_api_key
@@ -175,27 +225,18 @@ class LLMManager:
         for attempt in range(max_retries):
             try:
                 model_name = str(model_override or self.model)
-                use_old_param = (
-                    model_name.startswith("gpt-3.5") or 
-                    (model_name.startswith("gpt-4") and "turbo" not in model_name and "gpt-4o" not in model_name)
-                )
-                
                 temp = self._normalize_temperature(model_name, temperature)
-                if use_old_param:
-                    response = openai.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temp,
-                        max_tokens=max_tokens,
-                    )
-                else:
-                    response = openai.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temp,
-                        max_completion_tokens=max_tokens,
-                    )
+                
+                # Thanks to the global monkey patch, we can use a simpler call here
+                # but we'll stick to a robust default choice.
+                response = openai.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temp,
+                    max_completion_tokens=max_tokens,
+                )
                 return response.choices[0].message.content or ""
+
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt)
@@ -250,32 +291,18 @@ class LLMManager:
 
         for attempt in range(max_retries):
             try:
-                # Use max_completion_tokens for newer models (gpt-4o, gpt-4-turbo, o1, etc.)
-                # For safety, use max_completion_tokens for unknown models too
                 model_name = str(model_override or self.model)
-                # Only use old max_tokens for legacy models (gpt-3.5, gpt-4 non-turbo)
-                use_old_param = (
-                    model_name.startswith("gpt-3.5") or 
-                    (model_name.startswith("gpt-4") and "turbo" not in model_name and "gpt-4o" not in model_name)
-                )
-                
                 temp = self._normalize_temperature(model_name, temperature)
-                if use_old_param:
-                    response = openai.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temp,
-                        max_tokens=max_tokens,
-                    )
-                else:
-                    # Use max_completion_tokens for all newer/unknown models
-                    response = openai.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temp,
-                        max_completion_tokens=max_tokens,
-                    )
+                
+                # Simplified thanks to global monkey patch
+                response = openai.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temp,
+                    max_completion_tokens=max_tokens,
+                )
                 return response.choices[0].message.content or ""
+
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt)
@@ -311,7 +338,6 @@ class LLMManager:
                 else:
                     logger.error(f"LLM call failed after {max_retries} attempts: {e}")
                     raise
-        # Should not reach here, but return empty string as a safe fallback
         return ""
 
     def _generate_ollama_response_with_history(

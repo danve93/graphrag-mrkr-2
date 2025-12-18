@@ -65,6 +65,25 @@ async def lifespan(app: FastAPI):
     try:
         driver = get_graph_db_driver()
         logger.info("Neo4j connection pool initialized successfully")
+        
+        # Phase 1 Remediation: Cleanup orphaned staged files on startup
+        try:
+            from api.routers.database import cleanup_orphaned_staged_files
+            count = cleanup_orphaned_staged_files()
+            if count > 0:
+                logger.info(f"Startup cleanup: Removed {count} orphaned staged files")
+        except Exception as e:
+            logger.error(f"Failed to perform orphaned file cleanup: {e}")
+
+        # Issue #2: Restore processing state from Neo4j
+        try:
+            from api.routers.database import restore_processing_state
+            restored = restore_processing_state()
+            if restored > 0:
+                logger.info(f"Startup recovery: Restored {restored} documents to processing queue")
+        except Exception as e:
+            logger.error(f"Failed to restore processing state: {e}")
+            
     except Exception as e:
         logger.error(f"Failed to initialize Neo4j connection pool: {e}")
         # Continue startup for graceful degradation
@@ -157,7 +176,67 @@ async def prewarm_status():
 @app.exception_handler(ServiceUnavailable)
 async def neo4j_service_unavailable_handler(request: Request, exc: ServiceUnavailable):
     logger.error("Graph DB unavailable (global handler): %s", exc)
-    return JSONResponse(status_code=503, content={"detail": "Graph database unavailable"})
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "error",
+            "error": "database_unavailable",
+            "message": "Graph database unavailable",
+            "detail": str(exc),
+        },
+    )
+
+
+from fastapi.exceptions import RequestValidationError
+from fastapi import HTTPException
+
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """Standardize HTTP exception responses."""
+    error_code = "app_error"
+    message = str(exc.detail)
+    detail = None
+
+    if isinstance(exc.detail, dict):
+        error_code = exc.detail.get("error", "app_error")
+        message = exc.detail.get("message", str(exc.detail))
+        detail = exc.detail
+    elif isinstance(exc.detail, str):
+        # Infer code from status if it's just a string detail
+        if exc.status_code == 404:
+            error_code = "not_found"
+        elif exc.status_code == 401:
+            error_code = "unauthorized"
+        elif exc.status_code == 403:
+            error_code = "forbidden"
+        elif exc.status_code == 400:
+            error_code = "bad_request"
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": "error",
+            "error": error_code,
+            "message": message,
+            "detail": detail,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Standardize validation error responses."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "error",
+            "error": "validation_error",
+            "message": "Invalid request parameters",
+            "detail": exc.errors(),
+        },
+    )
 
 # Configure CORS
 app.add_middleware(
