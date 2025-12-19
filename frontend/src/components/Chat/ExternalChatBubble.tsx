@@ -9,6 +9,19 @@ import { api } from '@/lib/api'
 import SourcesList from './SourcesList'
 import { FeedbackButtons } from './FeedbackButtons'
 
+// Helper to generate UUID that works in non-HTTPS contexts
+function generateUUID(): string {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID()
+    }
+    // Fallback for environments where crypto.randomUUID is not available
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0
+        const v = c === 'x' ? r : (r & 0x3) | 0x8
+        return v.toString(16)
+    })
+}
+
 interface MessageData {
     message_id: string
     role: 'user' | 'assistant'
@@ -28,6 +41,17 @@ export default function ExternalChatBubble() {
     const [sending, setSending] = useState(false)
     const [sharing, setSharing] = useState(false)
     const [isShared, setIsShared] = useState(false)
+    const [chatTuningParams, setChatTuningParams] = useState({
+        chunk_weight: 0.6,
+        entity_weight: 0.4,
+        path_weight: 0.6,
+        max_hops: 2,
+        beam_size: 8,
+        graph_expansion_depth: 2,
+        restrict_to_context: true,
+        llm_model: undefined as string | undefined,
+        embedding_model: undefined as string | undefined,
+    })
     const messagesEndRef = useRef<HTMLDivElement>(null)
 
     const scrollToBottom = () => {
@@ -37,6 +61,33 @@ export default function ExternalChatBubble() {
     useEffect(() => {
         scrollToBottom()
     }, [messages])
+
+    // Fetch chat tuning parameters on mount (M3.5 External View Parity)
+    useEffect(() => {
+        const fetchChatTuningConfig = async () => {
+            try {
+                const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                const response = await fetch(`${API_URL}/api/chat-tuning/config/values`)
+                if (response.ok) {
+                    const values = await response.json()
+                    setChatTuningParams((prev) => ({
+                        chunk_weight: values.chunk_weight ?? prev.chunk_weight,
+                        entity_weight: values.entity_weight ?? prev.entity_weight,
+                        path_weight: values.path_weight ?? prev.path_weight,
+                        max_hops: values.max_hops ?? prev.max_hops,
+                        beam_size: values.beam_size ?? prev.beam_size,
+                        graph_expansion_depth: values.graph_expansion_depth ?? prev.graph_expansion_depth,
+                        restrict_to_context: values.restrict_to_context ?? prev.restrict_to_context,
+                        llm_model: values.llm_model ?? prev.llm_model,
+                        embedding_model: values.embedding_model ?? prev.embedding_model,
+                    }))
+                }
+            } catch (error) {
+                console.error('Failed to fetch chat tuning config:', error)
+            }
+        }
+        fetchChatTuningConfig()
+    }, [])
 
     const handleToggleShare = async () => {
         const currentSessionId = useChatStore.getState().sessionId
@@ -68,7 +119,7 @@ export default function ExternalChatBubble() {
         setSending(true)
 
         // Add user message immediately
-        const userMsgId = crypto.randomUUID()
+        const userMsgId = generateUUID()
         const userMsg: MessageData = {
             message_id: userMsgId,
             role: 'user' as const,
@@ -78,7 +129,7 @@ export default function ExternalChatBubble() {
         addMessage(userMsg)
 
         // Add placeholder assistant message with streaming state
-        const assistantMsgId = crypto.randomUUID()
+        const assistantMsgId = generateUUID()
         const assistantMsg: MessageData = {
             message_id: assistantMsgId,
             role: 'assistant' as const,
@@ -91,7 +142,17 @@ export default function ExternalChatBubble() {
         try {
             const response = await api.sendMessage({
                 message: content,
-                session_id: useChatStore.getState().sessionId
+                session_id: useChatStore.getState().sessionId,
+                stream: true,
+                chunk_weight: chatTuningParams.chunk_weight,
+                entity_weight: chatTuningParams.entity_weight,
+                path_weight: chatTuningParams.path_weight,
+                max_hops: chatTuningParams.max_hops,
+                beam_size: chatTuningParams.beam_size,
+                graph_expansion_depth: chatTuningParams.graph_expansion_depth,
+                restrict_to_context: chatTuningParams.restrict_to_context,
+                llm_model: chatTuningParams.llm_model,
+                embedding_model: chatTuningParams.embedding_model,
             })
 
             if (!response.body) throw new Error('No response body')
@@ -184,10 +245,10 @@ export default function ExternalChatBubble() {
                         onClick={handleToggleShare}
                         disabled={!sessionId || sharing}
                         className={`p-1.5 rounded-full transition-all border-2 ${!sessionId
-                                ? 'opacity-40 cursor-not-allowed border-[#f27a03]/40 text-[#f27a03]/40'
-                                : isShared
-                                    ? 'bg-[#f27a03] border-[#f27a03] text-white hover:bg-orange-600 hover:border-orange-600'
-                                    : 'border-[#f27a03] text-[#f27a03] hover:bg-orange-50 dark:hover:bg-orange-900/20'
+                            ? 'opacity-40 cursor-not-allowed border-[#f27a03]/40 text-[#f27a03]/40'
+                            : isShared
+                                ? 'bg-[#f27a03] border-[#f27a03] text-white hover:bg-orange-600 hover:border-orange-600'
+                                : 'border-[#f27a03] text-[#f27a03] hover:bg-orange-50 dark:hover:bg-orange-900/20'
                             }`}
                         title={!sessionId ? "Start chatting to enable sharing" : isShared ? "Click to unshare" : "Share with Admin"}
                     >

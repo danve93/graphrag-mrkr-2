@@ -7,9 +7,12 @@ Leiden community detection for entity clustering and semantic grouping.
 The clustering component uses the Leiden algorithm to detect communities of related entities in the knowledge graph. Entities connected by strong relationships are grouped into semantic clusters (communities) with distinct identifiers and optional LLM-generated summaries. Clusters are visualized with unique colors in the frontend and can be filtered independently.
 
 **Location**: `core/graph_clustering.py`, `core/community_summarizer.py`
-**Algorithm**: Leiden community detection (via NetworkX or igraph)
+**Algorithm**: Leiden community detection (via **igraph**, not Neo4j GDS)
 **Persistence**: `community_id` property on Entity nodes
 **Visualization**: Color-coded communities in GraphView
+
+> [!IMPORTANT]
+> **v2.1.0 Migration**: Replaced Neo4j GDS dependency with `igraph` library for improved stability and portability. The Neo4j GDS plugin is no longer required for clustering functionality (Issue #33).
 
 ## Architecture
 

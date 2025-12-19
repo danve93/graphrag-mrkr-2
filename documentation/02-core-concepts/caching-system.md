@@ -8,6 +8,12 @@ Amber implements a robust caching system using a unified `CacheService`. This se
 
 By enabling disk persistence for expensive operations (like embeddings), the system survives container restarts, significantly reducing API costs and reprocessing time.
 
+> [!NOTE]
+> **v2.1.0 Memory Leak Fixes** (Issues #8, #18, #20):
+> - **Routing Cache Bounds**: Added size limits to prevent unbounded growth in query routing cache
+> - **Adaptive Router Feedback**: Added bounds to feedback history to prevent memory accumulation
+> - **Retrieval Metadata Cleanup**: Fixed metadata retention in singletons that was leaking memory over time
+
 ## Cache Architecture
 
 ```

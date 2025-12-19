@@ -54,7 +54,32 @@ This will:
 - Start backend API server
 - Start frontend web server
 
-### 4. Verify Deployment
+### 4. Generate Admin Key
+
+> [!IMPORTANT]
+> Since v2.1.0, static admin tokens have been removed for security reasons. You must manually generate the first admin key for initial login.
+
+**Generate the key:**
+```bash
+docker compose exec backend python scripts/generate_admin_key.py
+```
+
+**Output example:**
+```
+Generated admin API key: sk-1234567890abcdef...
+This key has been saved to the database.
+Please save this key securely - it will not be shown again.
+```
+
+**Security notes:**
+- Copy and save the generated key (starts with `sk-...`) immediately
+- This key is required to log in to the admin panel and authenticate API requests
+- Keys are now SHA-256 hashed in the database (not stored in plaintext)
+- Each user can have only one active API key (tenant isolation)
+- Additional keys can be generated from the admin panel after initial login
+
+### 5. Verify Deployment
+
 
 **Check container status**:
 ```bash

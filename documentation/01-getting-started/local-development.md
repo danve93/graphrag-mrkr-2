@@ -136,6 +136,26 @@ ENABLE_ENTITY_EXTRACTION=true
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
+### 6. Generate Admin Key
+
+> [!IMPORTANT]
+> Since v2.1.0, authentication requires database-backed API keys. Generate the first admin key before starting the application.
+
+**In a separate terminal** (with backend and Neo4j running):
+```bash
+source .venv/bin/activate
+python scripts/generate_admin_key.py
+```
+
+**Output example:**
+```
+Generated admin API key: sk-1234567890abcdef...
+This key has been saved to the database.
+Please save this key securely - it will not be shown again.
+```
+
+Save this key securely - you'll need it to log in to the admin panel.
+
 ## Running the Application
 
 ### Start Services

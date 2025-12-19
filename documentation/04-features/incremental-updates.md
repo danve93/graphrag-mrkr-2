@@ -11,6 +11,13 @@ When large documents need updates, reprocessing the entire document is wasteful.
 - **Clean up removed chunks** and orphaned entities
 - **Maintain graph integrity** after updates
 
+> [!NOTE]
+> **v2.1.1 Improvements:**
+> - **Fixed Progress Reporting**: Progress bars no longer get stuck at 5% during updates
+> - **Integration with Global Processing State**: Updates now trigger frontend polling for real-time progress
+> - **Comprehensive Status Updates**: All update phases (conversion, diffing, embedding, entity extraction) now report `processing_status: "processing"`
+> - **Neo4j Fallback**: Database stats endpoint includes processing status for background updates
+
 ## How It Works
 
 ```mermaid

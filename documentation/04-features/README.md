@@ -37,6 +37,7 @@ Advanced features and capabilities of the Amber platform.
 - [Entity Clustering](04-features/community-detection.md) - Leiden community detection
 - [Document Classification](04-features/document-upload.md) - Auto-labeling rules
 - [Gleaning](04-features/entity-reasoning.md) - Multi-pass entity extraction
+- [Orphan Cleanup](04-features/orphan-cleanup.md) - Automatic removal of disconnected chunks and entities
 
 ### Monitoring & Caching
 - [Routing Metrics](04-features/routing-metrics.md) - Performance tracking

@@ -83,7 +83,9 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 | **Chat Tuning** | Runtime controls for model selection and retrieval parameters |
 | **Document Classification** | Rule-based and LLM-based automatic labeling |
 | **Incremental Updates** | Content-hash diffing for efficient document updates (only changed chunks reprocessed) |
+| **Automatic Orphan Cleanup** | Startup cleanup of disconnected chunks/entities with configurable grace period |
 | **Multi-Layer Caching** | Persistent embedding/response cache (disk), in-memory entity/retrieval cache |
+| **Secure API Key Management** | SHA-256 hashed API keys with tenant isolation and database-backed authentication |
 | **External User Integration** | API key authentication with minimal chat interface |
 | **SSE Streaming** | Real-time token streaming (20-50ms per token) |
 
@@ -103,6 +105,15 @@ docker compose logs -f
 # Rebuild after changes
 docker compose up -d --build
 ```
+
+**First Time Setup (Important):**
+Since v2.1.0, admin keys are no longer set via environment variables. You must generate the first admin key manually:
+
+```bash
+# Generate admin key for the first login
+docker compose exec backend python scripts/generate_admin_key.py
+```
+Copy the generated key (starts with `sk-...`) and use it to log in.
 
 Access the application:
 - Frontend: http://localhost:3000
@@ -129,6 +140,12 @@ cp .env.example .env
 python api/main.py
 ```
 
+**Generate Admin Key:**
+In a separate terminal, while the backend and Neo4j are running:
+```bash
+python scripts/generate_admin_key.py
+```
+
 **Frontend:**
 
 ```bash
@@ -137,6 +154,45 @@ npm install
 cp .env.local.example .env.local
 npm run dev
 ```
+
+### Recent Updates
+
+#### v2.1.1 (December 2024)
+
+**Bug Fixes:**
+- **Orphaned Chunks Resolution**: Fixed RAG retrieval returning 0 results due to orphaned chunks not connected to documents
+- **Document Update Progress**: Fixed progress bar stuck at 5% during document updates with proper status reporting
+- **UI Cleanup**: Removed redundant "Processing in progress..." banner from Database panel
+
+**New Features:**
+- **Automatic Orphan Cleanup**: Startup cleanup of orphaned chunks and entities with configurable grace period
+  - Configure via `ENABLE_ORPHAN_CLEANUP_ON_STARTUP` (default: true)
+  - Grace period via `ORPHAN_CLEANUP_GRACE_PERIOD_MINUTES` (default: 5 minutes)
+- **Manual Cleanup API**: New `POST /api/database/cleanup-orphans` endpoint for on-demand cleanup
+- **Cleanup UI Button**: Added "Cleanup" button in Database panel toolbar with confirmation dialog
+
+#### v2.1.0 (December 2024)
+
+**Major Security Improvements:**
+- **Static Admin Token Removed**: Authentication now strictly enforces database-backed API keys (no more `JOBS_ADMIN_TOKEN`)
+- **API Key Hashing**: Implemented SHA-256 hashing for secure API key storage
+- **Tenant Isolation**: Enforced one active API key per user
+- **Session Security**: Configured `Secure` and `HttpOnly` flags for admin cookies
+- **Access Control**: Fixed broken access control on conversation endpoints
+
+**Stability & Reliability:**
+- **Persistent Processing State**: Refactored in-memory state to persist in Neo4j (prevents data loss on restart)
+- **Community Detection**: Replaced Neo4j GDS dependency with `igraph` for better stability
+- **Settings Synchronization**: Full alignment of RAG tuning parameters, LLM overrides, and static matching thresholds
+- **Memory Leak Fixes**: Added bounds to routing cache and adaptive router feedback history
+
+**Logic & Correctness:**
+- **Progress Calculation**: Fixed "jumping" progress bars with proper stage interpolation
+- **Metadata Merging**: Changed to map merging instead of complete overwrite
+- **Orphan Detection**: Improved algorithm for detecting disconnected components
+- **Async Improvements**: Fixed unsafe `asyncio.run()` nesting
+
+50+ issues addressed from the December 2024 audit. See [`CHANGELOG.md`](./CHANGELOG.md) for complete details.
 
 ## GraphRAG Pipeline
 
@@ -283,6 +339,7 @@ ENABLE_ADAPTIVE_ROUTING=true
 | `POST /api/database/upload` | Upload and ingest document |
 | `PUT /api/documents/{id}` | Incremental update (only changed chunks reprocessed) |
 | `DELETE /api/database/documents/{id}` | Delete document |
+| `POST /api/database/cleanup-orphans` | Manual cleanup of orphaned chunks and entities |
 
 ### Configuration
 
@@ -290,8 +347,10 @@ ENABLE_ADAPTIVE_ROUTING=true
 |----------|-------------|
 | `GET /api/chat-tuning/config/values` | Current retrieval tuning values |
 | `GET /api/rag-tuning/config/values` | Current ingestion tuning values |
-| `GET /api/database/stats` | Database statistics |
+| `GET /api/database/stats` | Database statistics (includes orphan counts) |
 | `GET /api/database/cache-stats` | Cache performance metrics |
+
+**Note:** Admin endpoints now support pagination via `limit` and `offset` query parameters (v2.1.0).
 
 ### Structured Queries
 

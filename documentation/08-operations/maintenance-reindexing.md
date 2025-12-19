@@ -45,6 +45,19 @@ manager.retrieval_cache.clear()
 curl -X DELETE "http://localhost:8000/api/database/clear?confirm=yes"
 ```
 
+## Orphan Cleanup (Maintenance)
+
+Removes disconnected chunks and entities that are no longer linked to any document.
+
+**Automatic:** Runs on backend startup (configurable via `ENABLE_ORPHAN_CLEANUP_ON_STARTUP`).
+
+**Manual Trigger:**
+```bash
+curl -X POST http://localhost:8000/api/database/cleanup-orphans
+```
+
+Or use the **"Cleanup"** button in the Database & Ontology UI panel.
+
 ## Job Management
 
 ```bash

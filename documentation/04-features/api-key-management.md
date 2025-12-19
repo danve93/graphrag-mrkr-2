@@ -2,7 +2,14 @@
 
 ## Overview
 
-API Key Management allows administrators to create, manage, and revoke API keys for external applications and integrations. API keys enable secure, programmatic access to Amber's chat functionality without requiring user credentials.
+API Key Management provides secure, database-backed authentication for administrators and external applications. API keys enable programmatic access to Amber's chat functionality without requiring user credentials.
+
+> [!IMPORTANT]
+> **Security Improvements in v2.1.0:**
+> - **SHA-256 Hashing**: API keys are now hashed before storage (no plaintext keys in database)
+> - **Tenant Isolation**: Each user can have only one active API key at a time
+> - **No Static Tokens**: The insecure `JOBS_ADMIN_TOKEN` fallback has been removed
+> - **Database-Backed Authentication**: All API keys must be generated via `scripts/generate_admin_key.py` or the admin UI
 
 ## Access
 
@@ -11,6 +18,7 @@ API Key Management allows administrators to create, manage, and revoke API keys 
 **Location**: 
 - Main UI: Chat Tuning → API Keys (sidebar navigation)
 - Direct views: `adminApiKeys` active view
+- Initial Setup: `scripts/generate_admin_key.py` for first admin key
 
 ## Features
 
@@ -18,7 +26,9 @@ API Key Management allows administrators to create, manage, and revoke API keys 
 - Generate new API keys with custom names/descriptions
 - Assign role to key: `external` (standard) or `admin`
 - One-time display of full key (never shown again)
-- Key format: UUID-based secure tokens
+- Key format: `sk-` prefix with UUID-based secure tokens
+- **SHA-256 hashed** before storage in Neo4j
+- **Automatic revocation** of previous active key for the same user (tenant isolation)
 
 ### List API Keys
 - View all active API keys
@@ -54,12 +64,25 @@ Location: `api/services/api_key_service.py`
 
 ```python
 class ApiKeyService:
-    def create_api_key(self, name: str, role: str, metadata: dict):
-        """Create new API key and store in Neo4j"""
-        key = str(uuid.uuid4())
+    def create_api_key(self, name: str, role: str, user_id: str, metadata: dict):
+        """Create new API key and store SHA-256 hash in Neo4j
+        
+        Security improvements (v2.1.0):
+        - Keys are hashed with SHA-256 before storage
+        - Only one active key per user (tenant isolation)
+        - Previous active key is automatically revoked
+        """
+        # Generate key with sk- prefix
+        key = f"sk-{uuid.uuid4()}"
         key_hash = hashlib.sha256(key.encode()).hexdigest()
         
-        # Store in Neo4j
+        # Revoke previous active key for this user (tenant isolation)
+        db.run("""
+            MATCH (u:User {id: $user_id})-[:HAS_API_KEY]->(old:ApiKey {is_active: true})
+            SET old.is_active = false
+        """, user_id=user_id)
+        
+        # Store hashed key in Neo4j
         query = """
         CREATE (k:ApiKey {
             id: $key_id,
@@ -70,15 +93,23 @@ class ApiKeyService:
             is_active: true,
             metadata: $metadata_str
         })
+        WITH k
+        MATCH (u:User {id: $user_id})
+        CREATE (u)-[:HAS_API_KEY]->(k)
         RETURN k
         """
         
         return {"key": key, "id": key_id, ...}  # Full key returned ONCE
     
     def validate_api_key(self, key: str):
-        """Validate key and return key info"""
+        """Validate key by comparing SHA-256 hashes"""
         key_hash = hashlib.sha256(key.encode()).hexdigest()
         # Query Neo4j for active key with matching hash
+        result = db.run("""
+            MATCH (k:ApiKey {key_hash: $key_hash, is_active: true})
+            RETURN k
+        """, key_hash=key_hash)
+        return result.single() if result else None
 ```
 
 ### API Endpoints
@@ -116,11 +147,13 @@ Content-Type: application/json
 Response:
 {
     "id": "uuid",
-    "key": "full-uuid-key-ONLY-SHOWN-ONCE",
+    "key": "sk-full-uuid-key-ONLY-SHOWN-ONCE",  # Note: sk- prefix added in v2.1.0
     "name": "Mobile App Integration",
     "role": "external",
     "created_at": "2024-01-15T10:30:00Z"
 }
+
+Note: If user already has an active API key, it will be automatically revoked (tenant isolation).
 ```
 
 #### Revoke API Key
@@ -151,7 +184,17 @@ Response:
 
 **Relationships**:
 ```cypher
-(:User)-[:AUTHENTICATED_WITH]->(:ApiKey)
+(:User)-[:HAS_API_KEY]->(:ApiKey)
+```
+
+**Indexes** (v2.1.0):
+```cypher
+// Fast lookup by hash for authentication
+CREATE INDEX api_key_hash IF NOT EXISTS FOR (k:ApiKey) ON (k.key_hash);
+
+// Enforce one active key per user
+CREATE CONSTRAINT api_key_user_unique IF NOT EXISTS 
+FOR ()-[r:HAS_API_KEY]->() REQUIRE r IS UNIQUE;
 ```
 
 ## Frontend Implementation
@@ -255,6 +298,34 @@ await fetch('http://amber-host/api/chat/query', {
 - Monitor for 403 errors (revoked/invalid keys)
 - Track which integrations are using which keys
 - Set up alerts for unusual activity patterns
+- **v2.1.0**: Orphaned API keys are automatically cleaned up on startup
+
+## Initial Setup (v2.1.0+)
+
+### Generating the First Admin Key
+
+> [!WARNING]
+> The static `JOBS_ADMIN_TOKEN` environment variable has been removed for security. You must manually generate the first admin key.
+
+**For Docker deployments:**
+```bash
+docker compose exec backend python scripts/generate_admin_key.py
+```
+
+**For local development:**
+```bash
+source .venv/bin/activate
+python scripts/generate_admin_key.py
+```
+
+**Output:**
+```
+Generated admin API key: sk-1234567890abcdef...
+This key has been saved to the database.
+Please save this key securely - it will not be shown again.
+```
+
+Save this key immediately - it's required to log in to the admin panel. Additional keys can be generated from the UI after initial login.
 
 ## Troubleshooting
 
