@@ -125,6 +125,8 @@ async def admin_login(payload: Dict[str, str], response: Response, request: Requ
     Request body: {"password": "<admin-token>"}
     """
     password = payload.get("password") if isinstance(payload, dict) else None
+    if password:
+        password = password.strip()
     client_host = None
     try:
         client_host = request.client.host if request.client else None
@@ -151,7 +153,7 @@ async def admin_login(payload: Dict[str, str], response: Response, request: Requ
         logger.error(f"Error validating admin login: {e}")
 
     if not is_valid:
-        logger.debug("Admin login failed from %s (password masked=%s)", client_host or 'unknown', masked_pw)
+        logger.info("Admin login failed from %s (password masked=%s)", client_host or 'unknown', masked_pw)
         raise HTTPException(status_code=403, detail="Invalid credentials")
 
     sid = create_admin_session()

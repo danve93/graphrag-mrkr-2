@@ -78,6 +78,7 @@ services:
       - "8000:8000" # FastAPI port
     volumes:
       - ./data:/app/data # Mount data directory for file uploads
+      - ./:/app # Mount source code for development (hot reload)
     networks:
       - graphrag_network
     depends_on:

@@ -157,6 +157,8 @@ def restore_processing_state() -> int:
     Reloads any documents that were staged or in-progress during a previous
     shutdown back into the in-memory queue for processing.
     
+    Also recovers direct uploads by scanning data/staged_uploads for files.
+    
     Returns:
         Number of documents restored to the queue.
     """
@@ -165,6 +167,19 @@ def restore_processing_state() -> int:
         if not staged_docs:
             logger.info("No staged documents to restore from database")
             return 0
+
+        # Build a map of files in staged_uploads for recovery
+        staged_uploads_dir = Path("data/staged_uploads")
+        staged_files_by_id = {}
+        if staged_uploads_dir.exists():
+            for f in staged_uploads_dir.iterdir():
+                if f.is_file():
+                    # Files are named: {file_id}_{filename}
+                    # Try to extract doc_id from the path
+                    parts = f.name.split("_", 1)
+                    if len(parts) >= 1:
+                        potential_id = parts[0]
+                        staged_files_by_id[potential_id] = str(f)
 
         restored_count = 0
         for doc in staged_docs:
@@ -178,11 +193,29 @@ def restore_processing_state() -> int:
             if file_id in _staged_documents:
                 continue
 
+            # Get file path - try persisted path first, then scan staged_uploads
+            file_path = doc.get("file_path") or ""
+            if not file_path or not Path(file_path).exists():
+                # Try to recover from staged_uploads
+                recovered_path = staged_files_by_id.get(doc_id)
+                if recovered_path and Path(recovered_path).exists():
+                    logger.info(f"Recovered file path for {doc_id} from staged_uploads: {recovered_path}")
+                    file_path = recovered_path
+                    # Update the document node with corrected path
+                    try:
+                        graph_db.create_document_node(doc_id, {"file_path": file_path})
+                    except Exception:
+                        pass
+                else:
+                    # No file available - skip (will be handled by _cleanup_stale_jobs)
+                    logger.debug(f"Skipping restore for {doc_id}: no file path available")
+                    continue
+
             # Recreate StagedDocument from persisted data
             staged_doc = StagedDocument(
                 file_id=file_id,
                 filename=doc.get("original_filename") or doc.get("filename") or "unknown",
-                file_path=doc.get("file_path") or "",
+                file_path=file_path,
                 file_size=0,  # Not stored in graph, will be recalculated
                 mime_type=doc.get("mime_type") or "application/octet-stream",
                 hash=doc_id,  # Use doc_id as hash since original hash isn't stored
@@ -632,6 +665,13 @@ async def _run_entity_job(
         progress.entity_progress = _ENTITY_STAGE_FRACTIONS.get(state, fraction)
         if info:
             progress.message = info
+            # Parse chunk counts from info message like "Extracting entities (123/456 chunks)"
+            # or "Gleaning extraction (2 passes) - (123/456 chunks)"
+            import re
+            match = re.search(r'\((\d+)/(\d+)\s*(?:chunks)?\)', info)
+            if match:
+                progress.chunks_processed = int(match.group(1))
+                progress.total_chunks = int(match.group(2))
         progress.progress_percentage = _calculate_overall_progress(progress)
         _global_processing_state["progress_percentage"] = progress.progress_percentage
 

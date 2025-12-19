@@ -116,7 +116,8 @@ async def get_document_summary(document_id: str):
                            d.precomputed_chunk_count AS pre_chunks,
                            d.precomputed_entity_count AS pre_entities,
                            d.precomputed_community_count AS pre_communities,
-                           d.precomputed_similarity_count AS pre_similarities
+                           d.precomputed_similarity_count AS pre_similarities,
+                           d.precomputed_summary_updated_at AS pre_updated_at
                                , d.precomputed_top_communities_json AS top_comm_json,
                                d.precomputed_top_similarities_json AS top_sims_json
                     """,
@@ -126,105 +127,110 @@ async def get_document_summary(document_id: str):
                 if not rec:
                     raise HTTPException(status_code=404, detail="Document not found")
 
-                # If precomputed values exist (not null), use them; otherwise fall back
+                # If precomputed values exist (not null), use them; otherwise compute missing ones
                 pre_chunks = rec.get("pre_chunks")
                 pre_entities = rec.get("pre_entities")
                 pre_communities = rec.get("pre_communities")
                 pre_similarities = rec.get("pre_similarities")
+                pre_updated_at = rec.get("pre_updated_at")
 
-                if (
-                    pre_chunks is not None
-                    or pre_entities is not None
-                    or pre_communities is not None
-                    or pre_similarities is not None
-                ):
-                    # Try to parse precomputed preview JSON fields when present
-                    top_communities = None
-                    top_similarities = None
-                    try:
-                        top_communities = json.loads(rec.get("top_comm_json")) if rec.get("top_comm_json") else None
-                    except Exception:
-                        top_communities = None
-                    try:
-                        top_similarities = json.loads(rec.get("top_sims_json")) if rec.get("top_sims_json") else None
-                    except Exception:
-                        top_similarities = None
+                # Guard against legacy/stale precomputed fields that were never computed by
+                # `update_document_precomputed_summary()` (they may exist without an updated_at).
+                # In that case, treat them as missing and recompute from relationships.
+                if pre_updated_at is None:
+                    pre_chunks = None
+                    pre_entities = None
+                    pre_communities = None
+                    pre_similarities = None
 
-                    resp = {
-                        "id": rec["id"],
-                        "filename": rec["filename"],
-                        "original_filename": rec["original_filename"],
-                        "mime_type": rec["mime_type"],
-                        "size_bytes": rec["size_bytes"],
-                        "created_at": rec["created_at"],
-                        "link": rec["link"],
-                        "uploader": rec["uploader"],
-                        "stats": {
-                            "chunks": int(pre_chunks or 0),
-                            "entities": int(pre_entities or 0),
-                            "communities": int(pre_communities or 0),
-                            "similarities": int(pre_similarities or 0),
-                        },
-                        "previews": {
-                            "top_communities": top_communities,
-                            "top_similarities": top_similarities,
-                        },
-                    }
-                else:
-                    # Fall back to the original aggregation query when precomputed not present
-                    full = session.run(
+                # Initialize stats with precomputed values or None
+                chunks_count = pre_chunks
+                entities_count = pre_entities
+                communities_count = pre_communities
+                similarities_count = pre_similarities
+
+                # Compute any missing stats individually
+                needs_chunks = chunks_count is None
+                needs_entities = entities_count is None
+                needs_communities = communities_count is None
+                needs_similarities = similarities_count is None
+
+                if needs_chunks or needs_entities or needs_communities:
+                    # Run aggregation query for missing chunk/entity/community stats
+                    agg_result = session.run(
                         """
                         MATCH (d:Document {id: $document_id})
                         OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
                         OPTIONAL MATCH (c)-[:CONTAINS_ENTITY]->(e:Entity)
-                        WITH d, 
-                             count(DISTINCT c) AS chunk_count,
-                             count(DISTINCT e) AS entity_count,
-                             count(DISTINCT e.community_id) AS community_count
-                        OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c1:Chunk)-[s:SIMILAR_TO]-(c2:Chunk)
-                        WHERE (d)-[:HAS_CHUNK]->(c2) AND c1.id < c2.id
                         RETURN 
-                            d.id AS id,
-                            d.filename AS filename,
-                            d.original_filename AS original_filename,
-                            d.mime_type AS mime_type,
-                            d.size_bytes AS size_bytes,
-                            d.created_at AS created_at,
-                            d.link AS link,
-                            d.uploader AS uploader,
-                            chunk_count,
-                            entity_count,
-                            community_count,
-                            count(DISTINCT s) AS similarity_count
+                            count(DISTINCT c) AS chunk_count,
+                            count(DISTINCT e) AS entity_count,
+                            count(DISTINCT e.community_id) AS community_count
                         """,
                         document_id=document_id,
                     ).single()
+                    
+                    if agg_result:
+                        if needs_chunks:
+                            chunks_count = agg_result["chunk_count"] or 0
+                        if needs_entities:
+                            entities_count = agg_result["entity_count"] or 0
+                        if needs_communities:
+                            communities_count = agg_result["community_count"] or 0
 
-                    if not full:
-                        raise HTTPException(status_code=404, detail="Document not found")
+                if needs_similarities:
+                    # Run separate query for similarities (more expensive)
+                    sim_result = session.run(
+                        """
+                        MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c1:Chunk)-[s:SIMILAR_TO]-(c2:Chunk)
+                        WHERE (d)-[:HAS_CHUNK]->(c2) AND c1.id < c2.id
+                        RETURN count(DISTINCT s) AS similarity_count
+                        """,
+                        document_id=document_id,
+                    ).single()
+                    
+                    if sim_result:
+                        similarities_count = sim_result["similarity_count"] or 0
 
-                    resp = {
-                        "id": full["id"],
-                        "filename": full["filename"],
-                        "original_filename": full["original_filename"],
-                        "mime_type": full["mime_type"],
-                        "size_bytes": full["size_bytes"],
-                        "created_at": full["created_at"],
-                        "link": full["link"],
-                        "uploader": full["uploader"],
-                        "stats": {
-                            "chunks": full["chunk_count"],
-                            "entities": full["entity_count"],
-                            "communities": full["community_count"],
-                            "similarities": full["similarity_count"],
-                        },
-                    }
+                # Parse precomputed preview JSON fields when present
+                top_communities = None
+                top_similarities = None
+                try:
+                    top_communities = json.loads(rec.get("top_comm_json")) if rec.get("top_comm_json") else None
+                except Exception:
+                    top_communities = None
+                try:
+                    top_similarities = json.loads(rec.get("top_sims_json")) if rec.get("top_sims_json") else None
+                except Exception:
+                    top_similarities = None
+
+                resp = {
+                    "id": rec["id"],
+                    "filename": rec["filename"],
+                    "original_filename": rec["original_filename"],
+                    "mime_type": rec["mime_type"],
+                    "size_bytes": rec["size_bytes"],
+                    "created_at": rec["created_at"],
+                    "link": rec["link"],
+                    "uploader": rec["uploader"],
+                    "stats": {
+                        "chunks": int(chunks_count or 0),
+                        "entities": int(entities_count or 0),
+                        "communities": int(communities_count or 0),
+                        "similarities": int(similarities_count or 0),
+                    },
+                    "previews": {
+                        "top_communities": top_communities,
+                        "top_similarities": top_similarities,
+                    },
+                }
+
 
             # Populate cache for next callers
             try:
                 if getattr(settings, "enable_caching", True) and getattr(settings, "enable_document_summaries", True):
                     cache_ttl = getattr(settings, "document_summary_ttl", 300)
-                    cache[cache_key] = resp
+                    cache.set(cache_key, resp, ttl=cache_ttl)
             except Exception:
                 pass
 

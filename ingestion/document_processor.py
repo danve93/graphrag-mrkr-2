@@ -92,7 +92,13 @@ class DocumentProcessor:
             self._cleanup_orphaned_chunks()
 
     def _cleanup_stale_jobs(self):
-        """Mark documents that were extracting during a previous shutdown as failed."""
+        """Resume or fail documents stuck in processing from previous shutdown.
+        
+        Smart resume logic:
+        - If chunks exist + entities exist -> mark completed (already done)
+        - If chunks exist but no entities -> resume entity extraction
+        - If no chunks -> re-queue via restore_processing_state or mark failed
+        """
         if not settings.enable_stale_job_cleanup:
             logger.info("Stale job cleanup disabled via configuration.")
             return
@@ -102,38 +108,125 @@ class DocumentProcessor:
             stuck_docs = graph_db.get_documents_by_processing_status("processing")
             if not stuck_docs:
                 return
-                
-            count = 0
+            
+            resumed_count = 0
+            failed_count = 0
+            completed_count = 0
+            
             for doc in stuck_docs:
-                # We can't know for sure if it was *actually* running on this instance,
-                # but if we are starting up and find docs in 'processing', it's likely they are stuck.
-                # However, in a distributed setup with multiple replicas, this is risky.
-                # But document_processor is currently designed as a singleton per backend instance?
-                # For now, let's just log and mark them as failed to be safe for the single-instance case.
-                
-                # Double check progress to guess if it was interrupted
-                # If last updated was long ago? We don't have timestamp easily here without query.
-                
                 doc_id = doc.get("id")
                 if not doc_id: 
                     continue
-                    
-                logger.warning(f"Found stale document in processing state: {doc_id}. Marking as failed.")
+                
+                stage = doc.get("processing_stage", "unknown")
+                filename = doc.get("original_filename") or doc.get("filename") or "unknown"
+                
                 try:
-                    graph_db.create_document_node(
-                        doc_id, 
-                        {
-                            "processing_status": "failed",
-                            "error": "Processing interrupted (e.g., service restart)",
-                            "processing_stage": "failed"
-                        }
-                    )
-                    count += 1
+                    # Check what state the document is in
+                    chunk_count = graph_db.get_document_chunk_count(doc_id)
+                    entity_count = graph_db.get_document_entity_count(doc_id) if chunk_count > 0 else 0
+                    
+                    if chunk_count > 0 and entity_count > 0:
+                        # Already has chunks and entities - just mark as completed
+                        logger.info(
+                            f"Stale doc {doc_id} already complete ({chunk_count} chunks, {entity_count} entities). Marking completed."
+                        )
+                        graph_db.create_document_node(
+                            doc_id,
+                            {
+                                "processing_status": "completed",
+                                "processing_stage": "completed",
+                                "processing_progress": 100.0,
+                                "processing_error": None,
+                            },
+                        )
+                        completed_count += 1
+                        
+                    elif chunk_count > 0:
+                        # Has chunks but no entities - resume entity extraction
+                        if settings.enable_entity_extraction:
+                            logger.info(
+                                f"Resuming entity extraction for stale doc {doc_id} ({chunk_count} chunks, interrupted at {stage})"
+                            )
+                            # Get chunks for extraction
+                            chunks_for_extraction = self._prepare_chunks_for_extraction(doc_id)
+                            if chunks_for_extraction:
+                                graph_db.create_document_node(
+                                    doc_id,
+                                    {
+                                        "processing_status": "processing",
+                                        "processing_stage": "entity_extraction",
+                                        "processing_progress": 75.0,
+                                    },
+                                )
+                                self._start_background_extraction(doc_id, chunks_for_extraction, filename)
+                                resumed_count += 1
+                            else:
+                                # No chunks to process - mark completed
+                                logger.warning(f"No chunks found for resume of {doc_id}, marking completed")
+                                graph_db.create_document_node(
+                                    doc_id,
+                                    {
+                                        "processing_status": "completed",
+                                        "processing_stage": "completed",
+                                        "processing_progress": 100.0,
+                                    },
+                                )
+                                completed_count += 1
+                        else:
+                            # Entity extraction disabled - mark as completed
+                            logger.info(f"Entity extraction disabled, marking stale doc {doc_id} as completed")
+                            graph_db.create_document_node(
+                                doc_id,
+                                {
+                                    "processing_status": "completed",
+                                    "processing_stage": "completed",
+                                    "processing_progress": 100.0,
+                                },
+                            )
+                            completed_count += 1
+                    else:
+                        # No chunks - needs full reprocessing or mark as failed
+                        # Check if file still exists for potential re-queue
+                        file_path = doc.get("file_path")
+                        if file_path and Path(file_path).exists():
+                            logger.info(
+                                f"Stale doc {doc_id} has no chunks but file exists. Will be re-queued by restore_processing_state."
+                            )
+                            # Leave status as-is for restore_processing_state to pick up
+                        else:
+                            logger.warning(
+                                f"Stale doc {doc_id} has no chunks and no file. Marking as failed."
+                            )
+                            graph_db.create_document_node(
+                                doc_id, 
+                                {
+                                    "processing_status": "failed",
+                                    "processing_error": "Processing interrupted and file no longer available. Please re-upload.",
+                                    "processing_stage": "failed",
+                                }
+                            )
+                            failed_count += 1
+                            
                 except Exception as e:
-                    logger.error(f"Failed to cleanup stale document {doc_id}: {e}")
+                    logger.error(f"Failed to process stale document {doc_id}: {e}")
+                    try:
+                        graph_db.create_document_node(
+                            doc_id,
+                            {
+                                "processing_status": "failed",
+                                "processing_error": f"Recovery failed: {str(e)}",
+                                "processing_stage": "failed",
+                            },
+                        )
+                        failed_count += 1
+                    except Exception:
+                        pass
             
-            if count > 0:
-                logger.info(f"Cleaned up {count} stale processing jobs")
+            if resumed_count > 0 or failed_count > 0 or completed_count > 0:
+                logger.info(
+                    f"Stale job recovery: {resumed_count} resumed, {completed_count} marked completed, {failed_count} failed"
+                )
                 
         except Exception as e:
             logger.error(f"Failed to cleanup stale jobs: {e}")
@@ -1415,8 +1508,7 @@ class DocumentProcessor:
                             cache = get_response_cache()
                             for key in (f"document_summary:{doc_id}", f"document_metadata:{doc_id}"):
                                 try:
-                                    if key in cache:
-                                        del cache[key]
+                                    cache.delete(key)
                                 except Exception:
                                     pass
                             try:
@@ -1441,6 +1533,8 @@ class DocumentProcessor:
                 else:
                     # Start background entity extraction in a separate thread
                     self._start_background_extraction(doc_id, chunks_for_extraction, original_filename)
+                    # Flag that background extraction is running - don't mark as completed yet
+                    _bg_extraction_started = True
 
             # Create similarity relationships between chunks
             try:
@@ -1454,6 +1548,19 @@ class DocumentProcessor:
                 )
                 relationships_created = 0
 
+            # Determine final status based on whether background extraction is running
+            # If background extraction started, keep status as 'processing' - worker will set 'completed'
+            if should_extract_entities and not getattr(settings, "sync_entity_embeddings", False):
+                # Background extraction is running - don't mark as completed yet
+                final_status = "processing"
+                final_stage = "entity_extraction"
+                final_progress = 75.0  # Embedding done, entity extraction in progress
+            else:
+                # Sync extraction completed or no extraction needed
+                final_status = "completed"
+                final_stage = "completed"
+                final_progress = 100.0
+
             result = {
                 "document_id": doc_id,
                 "file_path": str(file_path),
@@ -1463,16 +1570,16 @@ class DocumentProcessor:
                 "similarity_relationships_created": relationships_created,
                 "metadata": metadata,
                 "status": "success",
-                "processing_status": "completed",
-                "processing_stage": "completed",
+                "processing_status": final_status,
+                "processing_stage": final_stage,
             }
 
             graph_db.create_document_node(
                 doc_id,
                 {
-                    "processing_status": "completed",
-                    "processing_stage": "completed",
-                    "processing_progress": 100.0,
+                    "processing_status": final_status,
+                    "processing_stage": final_stage,
+                    "processing_progress": final_progress,
                     "processing_error": None,
                 },
             )
@@ -1706,6 +1813,29 @@ class DocumentProcessor:
             "modified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         })
         graph_db.create_document_node(doc_id, metadata)
+
+        # Keep the single-document summary stats consistent after incremental updates
+        # (e.g., chunk removals without a follow-up entity extraction).
+        try:
+            if getattr(settings, "enable_document_summaries", True):
+                graph_db.update_document_precomputed_summary(doc_id)
+                try:
+                    graph_db.update_document_preview(doc_id)
+                except Exception:
+                    pass
+        except Exception:
+            logger.debug(
+                "Failed to update precomputed document summary for %s after update",
+                doc_id,
+                exc_info=True,
+            )
+
+        try:
+            cache = get_response_cache()
+            cache.delete(f"document_summary:{doc_id}")
+            cache.delete(f"document_metadata:{doc_id}")
+        except Exception:
+            pass
         
         # Reset global processing state to stop frontend polling
         try:
@@ -1773,10 +1903,10 @@ class DocumentProcessor:
                 
                 self._update_entity_operation(operation_id, EntityExtractionState.LLM_EXTRACTION, msg)
                 
-                # Map 75-95%
-                progress = 75.0 + ((processed / total) * 20.0)
+                # Map 75-99% (expanded range for better granularity on large docs)
+                progress = 75.0 + ((processed / total) * 24.0)
                 try:
-                    graph_db.create_document_node(doc_id_local, {"processing_progress": min(progress, 95.0)})
+                    graph_db.create_document_node(doc_id_local, {"processing_progress": min(progress, 99.0)})
                 except Exception: pass
 
             # Run extraction
@@ -1810,6 +1940,16 @@ class DocumentProcessor:
             graph_db.validate_entity_embeddings(doc_id_local)
             graph_db.repair_contains_entity_relationships_for_document(doc_id_local)
             
+            # Update precomputed counts/summaries (Fix for Issue "0 entities displayed")
+            try:
+                if getattr(settings, "enable_document_summaries", True):
+                    graph_db.update_document_precomputed_summary(doc_id_local)
+                    try:
+                        graph_db.update_document_preview(doc_id_local)
+                    except Exception: pass
+            except Exception as e:
+                logger.warning(f"Failed to update precomputed summary for {doc_id_local}: {e}")
+
             # Finalize
             graph_db.create_document_node(doc_id_local, {
                 "processing_status": "completed",
@@ -1821,8 +1961,8 @@ class DocumentProcessor:
             try:
                 from core.singletons import get_response_cache
                 cache = get_response_cache()
-                for key in (f"document_summary:{doc_id_local}", f"document_metadata:{doc_id_local}"):
-                    if key in cache: del cache[key]
+                cache.delete(f"document_summary:{doc_id_local}")
+                cache.delete(f"document_metadata:{doc_id_local}")
             except Exception: pass
             
             logger.info(f"Background extraction finished for {doc_id_local}")
@@ -2256,6 +2396,30 @@ class DocumentProcessor:
                 },
             )
 
+            # Ensure single-document summary stats remain accurate in chunks-only mode.
+            # This mode creates chunks (and optionally chunk similarities) without entities.
+            try:
+                if getattr(settings, "enable_document_summaries", True):
+                    graph_db.update_document_precomputed_summary(doc_id)
+                    try:
+                        graph_db.update_document_preview(doc_id)
+                    except Exception:
+                        pass
+            except Exception:
+                logger.debug(
+                    "Failed to update precomputed document summary for %s (chunks-only)",
+                    doc_id,
+                    exc_info=True,
+                )
+
+            # Invalidate cached summary payloads for this document (if enabled).
+            try:
+                cache = get_response_cache()
+                cache.delete(f"document_summary:{doc_id}")
+                cache.delete(f"document_metadata:{doc_id}")
+            except Exception:
+                pass
+
             # Create temporal nodes for time-based retrieval
             if settings.enable_temporal_filtering:
                 try:
@@ -2368,8 +2532,21 @@ class DocumentProcessor:
             if progress_callback and hasattr(progress_callback, 'is_cancelled'):
                 is_cancelled = progress_callback.is_cancelled
 
+            # Create progress callback for chunk-by-chunk updates during LLM extraction
+            def llm_progress_callback(processed: int, total: int):
+                """Called by extractor for each completed chunk during LLM extraction."""
+                _emit(
+                    EntityExtractionState.LLM_EXTRACTION,
+                    min(0.25, 0.05 + (processed / total * 0.20)),  # Progress within LLM phase (5-25%)
+                    f"Extracting entities ({processed}/{total} chunks)"
+                )
+
             entity_dict, relationship_dict = self._run_async(
-                extractor.extract_from_chunks(chunks_for_extraction, is_cancelled=is_cancelled)
+                extractor.extract_from_chunks(
+                    chunks_for_extraction,
+                    is_cancelled=is_cancelled,
+                    progress_callback=llm_progress_callback
+                )
             )
 
             # Phase 2: Embedding generation / database operations
@@ -2379,6 +2556,7 @@ class DocumentProcessor:
                 EntityExtractionState.EMBEDDING_GENERATION,
                 f"Generating embeddings for {entity_count_estimate} entities",
             )
+            # Clear chunk counts when transitioning to embedding phase (no longer chunk-by-chunk)
             _emit(
                 EntityExtractionState.EMBEDDING_GENERATION,
                 0.45,
@@ -2392,6 +2570,22 @@ class DocumentProcessor:
             ) = self._persist_extraction_results(
                 doc_id, chunks_for_extraction, entity_dict, relationship_dict
             )
+
+            # Defensive repair: ensure chunk->entity wiring exists based on Entity.source_chunks.
+            # In queue-driven "entities_only" processing we have observed cases where entities
+            # were created and `source_chunks` populated but no CONTAINS_ENTITY relationships
+            # were persisted, causing the single-document view stats to show 0 entities.
+            try:
+                repair_stats = graph_db.repair_contains_entity_relationships_for_document(doc_id)
+                logger.info(
+                    "Post-extraction CONTAINS_ENTITY repair for %s: created=%s (before=%s after=%s)",
+                    doc_id,
+                    repair_stats.get("created"),
+                    repair_stats.get("before"),
+                    repair_stats.get("after"),
+                )
+            except Exception as repair_exc:  # pragma: no cover - best effort
+                logger.debug("Failed CONTAINS_ENTITY repair for %s: %s", doc_id, repair_exc)
 
             # Phase 3: Relationship wiring
             expected_rels = metrics.get("relationships_requested", 0)
@@ -2474,6 +2668,29 @@ class DocumentProcessor:
                     doc_id,
                     validation_exc,
                 )
+
+            # Update precomputed counts and invalidate cached summary payloads so the
+            # single-document summary reflects the newly extracted entities/communities.
+            try:
+                if getattr(settings, "enable_document_summaries", True):
+                    graph_db.update_document_precomputed_summary(doc_id)
+                    try:
+                        graph_db.update_document_preview(doc_id)
+                    except Exception:
+                        pass
+            except Exception:
+                logger.debug(
+                    "Failed to update precomputed document summary for %s after entity extraction",
+                    doc_id,
+                    exc_info=True,
+                )
+
+            try:
+                cache = get_response_cache()
+                cache.delete(f"document_summary:{doc_id}")
+                cache.delete(f"document_metadata:{doc_id}")
+            except Exception:
+                pass
 
             self._update_entity_operation(
                 operation_id,

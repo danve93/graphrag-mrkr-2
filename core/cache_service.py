@@ -131,3 +131,28 @@ class CacheService:
         """Close the backend (useful for diskcache)."""
         if self.use_disk and hasattr(self._backend, "close"):
             self._backend.close()
+
+    # Dict-like convenience API (backward compatible with legacy call sites/tests)
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.set(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        self.delete(key)
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return self.get(key) is not None
+
+    def __len__(self) -> int:
+        try:
+            return len(self._backend)
+        except Exception:
+            return 0

@@ -1066,12 +1066,32 @@ Reply with ONLY one of:
 
             chunk_count = rec["chunk_count"] or 0
             entity_count = rec["entity_count"] or 0
-            return {
-                "chunk_count": chunk_count,
-                "entity_count": entity_count,
-                "community_count": rec["community_count"] or 0,
-                "similarity_count": rec["similarity_count"] or 0,
-            }
+            community_count = rec["community_count"] or 0
+            similarity_count = rec["similarity_count"] or 0
+
+            # Persist precomputed values on document node
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                SET d.precomputed_chunk_count = $chunk_count,
+                    d.precomputed_entity_count = $entity_count,
+                    d.precomputed_community_count = $community_count,
+                    d.precomputed_similarity_count = $similarity_count,
+                    d.precomputed_summary_updated_at = datetime()
+                """,
+                doc_id=doc_id,
+                chunk_count=chunk_count,
+                entity_count=entity_count,
+                community_count=community_count,
+                similarity_count=similarity_count,
+            )
+
+        return {
+            "chunk_count": chunk_count,
+            "entity_count": entity_count,
+            "community_count": community_count,
+            "similarity_count": similarity_count,
+        }
 
     # Snapshot & Restore (Phase 0: Safety)
 
@@ -1237,32 +1257,6 @@ Reply with ONLY one of:
             )
             rec = result.single()
             return rec["updated"] > 0 if rec else False
-            community_count = rec["community_count"] or 0
-            similarity_count = rec["similarity_count"] or 0
-
-            # Persist precomputed values on document node
-            session.run(
-                """
-                MATCH (d:Document {id: $doc_id})
-                SET d.precomputed_chunk_count = $chunk_count,
-                    d.precomputed_entity_count = $entity_count,
-                    d.precomputed_community_count = $community_count,
-                    d.precomputed_similarity_count = $similarity_count,
-                    d.precomputed_summary_updated_at = datetime()
-                """,
-                doc_id=doc_id,
-                chunk_count=chunk_count,
-                entity_count=entity_count,
-                community_count=community_count,
-                similarity_count=similarity_count,
-            )
-
-        return {
-            "chunk_count": chunk_count,
-            "entity_count": entity_count,
-            "community_count": community_count,
-            "similarity_count": similarity_count,
-        }
 
     def update_document_preview(self, doc_id: str, top_n_communities: int = None, top_n_similarities: int = None) -> Dict[str, Any]:
         """Compute and persist small preview lists for a document.
@@ -1947,11 +1941,13 @@ Reply with ONLY one of:
                 record = result.single()
                 chunks_deleted = record["chunks_deleted"] if record else 0
                 
-                # 2. Clean up orphaned entities (no source_chunks and no CONTAINS_ENTITY relationships)
+                # 2. Clean up orphaned entities (no CONTAINS_ENTITY relationships)
+                # This includes entities with:
+                # - Empty or null source_chunks
+                # - source_chunks referencing non-existent chunks (from deleted documents)
                 result = session.run("""
                     MATCH (e:Entity)
-                    WHERE (coalesce(e.source_chunks, []) = [] OR e.source_chunks IS NULL)
-                      AND NOT (()-[:CONTAINS_ENTITY]->(e))
+                    WHERE NOT EXISTS { MATCH ()-[:CONTAINS_ENTITY]->(e) }
                     DETACH DELETE e
                     RETURN count(e) as deleted
                 """)
@@ -3050,6 +3046,10 @@ Reply with ONLY one of:
                 source_text_units=source_text_units,
                 embedding=embedding,
             )
+            # NOTE: CONTAINS_ENTITY relationships are created in document_processor.py
+            # via create_chunk_entity_relationship() which correctly scopes to the
+            # current document's chunks only. Creating them here would cause
+            # cross-document pollution when entities are deduplicated across documents.
 
     def create_entity_node(
         self,
@@ -4363,7 +4363,7 @@ Reply with ONLY one of:
                 WITH total_documents, count(c) AS total_chunks
                 OPTIONAL MATCH (e:Entity)
                 WITH total_documents, total_chunks, count(e) AS total_entities
-                OPTIONAL MATCH ()-[r]->()
+                OPTIONAL MATCH (e1:Entity)-[r:RELATED_TO]->(e2:Entity)
                 RETURN total_documents, total_chunks, total_entities, count(r) AS total_relationships
                 """
             )
@@ -4557,11 +4557,17 @@ Reply with ONLY one of:
                 "error",
             }
 
-            metadata = {
-                key: value
-                for key, value in doc_data.items()
-                if key not in known_keys
-            }
+            metadata = {}
+            for key, value in doc_data.items():
+                if key in known_keys:
+                    continue
+                # Sanitize Neo4j types (DateTime, etc)
+                if hasattr(value, "iso_format"):
+                    metadata[key] = value.iso_format()
+                elif hasattr(value, "isoformat"):
+                    metadata[key] = value.isoformat()
+                else:
+                    metadata[key] = value
 
             return {
                 "id": doc_data.get("id", doc_id),
@@ -5124,6 +5130,49 @@ Reply with ONLY one of:
                 """
             )
             return [record.data() for record in result]
+
+    def get_document_chunk_count(self, doc_id: str) -> int:
+        """Get the count of chunks linked to a document.
+        
+        Used by restart recovery to determine if document processing can resume.
+        
+        Args:
+            doc_id: Document ID to count chunks for
+            
+        Returns:
+            Number of chunks linked to the document
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
+                RETURN count(c) as chunk_count
+                """,
+                doc_id=doc_id,
+            ).single()
+            return result["chunk_count"] if result else 0
+
+    def get_document_entity_count(self, doc_id: str) -> int:
+        """Get the count of entities linked to a document's chunks.
+        
+        Used by restart recovery to check if entity extraction is complete.
+        
+        Args:
+            doc_id: Document ID to count entities for
+            
+        Returns:
+            Number of entities linked to the document
+        """
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)-[:CONTAINS_ENTITY]->(e:Entity)
+                RETURN count(DISTINCT e) as entity_count
+                """,
+                doc_id=doc_id,
+            ).single()
+            return result["entity_count"] if result else 0
+
 
     def update_processing_state(
         self,

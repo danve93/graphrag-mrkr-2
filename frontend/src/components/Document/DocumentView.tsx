@@ -354,12 +354,14 @@ export default function DocumentView() {
     return () => { isActive = false }
   }, [isEntitiesExpanded, selectedDocumentId, summaryData?.id, documentData?.entities])
 
+  // Check preview availability - depends on document ID only to avoid infinite loops
+  const documentId = documentData?.id
   useEffect(() => {
     let isSubscribed = true
     const checkPreview = async () => {
-      if (!documentData) return
+      if (!documentId) return
       try {
-        const available = await api.hasDocumentPreview(documentData.id)
+        const available = await api.hasDocumentPreview(documentId)
         if (isSubscribed) setHasPreview(available)
       } catch (e) {
         if (isSubscribed) setHasPreview(false)
@@ -371,7 +373,7 @@ export default function DocumentView() {
     return () => {
       isSubscribed = false
     }
-  }, [documentData])
+  }, [documentId])
 
   useEffect(() => {
     if (selectedChunkId !== null && documentData) {
@@ -406,8 +408,9 @@ export default function DocumentView() {
     }, {})
   }, [documentData?.entities])
 
-  const docChunkCount = docChunksTotal ?? documentData?.chunks?.length ?? summaryData?.stats.chunks ?? 0
-  const docEntitiesCount = documentData?.entities?.length ?? 0
+  // Use summaryData.stats.chunks as fallback when documentData.chunks is empty (not just null/undefined)
+  const docChunkCount = docChunksTotal ?? (documentData?.chunks?.length || summaryData?.stats.chunks) ?? 0
+  const docEntitiesCount = (documentData?.entities?.length || summaryData?.stats.entities) ?? 0
 
   const isMarkdownDocument = useMemo(() => {
     if (!documentData) return false
@@ -771,8 +774,15 @@ export default function DocumentView() {
         void refreshProcessingState()
         void (async () => {
           try {
-            const updatedDoc = await api.getDocument(selectedDocumentId)
-            setDocumentData(updatedDoc)
+            // Refresh summary stats (entities, relationships, communities, similarities)
+            const updatedSummary = await api.getDocumentSummary(selectedDocumentId)
+            setSummaryData({ id: updatedSummary.id, filename: updatedSummary.filename, stats: updatedSummary.stats })
+
+            // Also refresh full document data if it's loaded
+            if (documentData) {
+              const updatedDoc = await api.getDocument(selectedDocumentId)
+              setDocumentData(updatedDoc)
+            }
           } catch (error) {
             console.error('Failed to refresh document during processing:', error)
           }
@@ -836,16 +846,47 @@ export default function DocumentView() {
 
   useEffect(() => {
     if (!selectedDocumentId) {
-      api.getStats().then(data => {
-        setGlobalStats({
-          total_documents: data.total_documents || 0,
-          total_chunks: data.total_chunks || 0,
-          total_entities: data.total_entities || 0,
-          total_relationships: data.total_relationships || 0,
+      // Function to load stats
+      const loadGlobalStats = () => {
+        api.getStats().then(data => {
+          setGlobalStats({
+            total_documents: data.total_documents || 0,
+            total_chunks: data.total_chunks || 0,
+            total_entities: data.total_entities || 0,
+            total_relationships: data.total_relationships || 0,
+          });
+        }).catch(() => {
+          // Silently fail
         });
-      }).catch(() => {
-        // Silently fail
-      });
+      };
+
+      // Load stats on mount
+      loadGlobalStats();
+
+      // Listen for document processing events to refresh stats
+      const handleStatsRefresh = () => {
+        loadGlobalStats();
+      };
+
+      if (typeof window !== 'undefined') {
+        window.addEventListener('documents:processed', handleStatsRefresh);
+        window.addEventListener('documents:processing-updated', handleStatsRefresh);
+        window.addEventListener('documents:uploaded', handleStatsRefresh);
+        window.addEventListener('server:reconnected', handleStatsRefresh);
+      }
+
+      // Poll every 5 seconds for real-time updates while on dashboard
+      const pollInterval = window.setInterval(loadGlobalStats, 5000);
+
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('documents:processed', handleStatsRefresh);
+          window.removeEventListener('documents:processing-updated', handleStatsRefresh);
+          window.removeEventListener('documents:uploaded', handleStatsRefresh);
+          window.removeEventListener('server:reconnected', handleStatsRefresh);
+        }
+        window.clearInterval(pollInterval);
+      };
     }
   }, [selectedDocumentId]);
 

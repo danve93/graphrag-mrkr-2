@@ -223,7 +223,9 @@ export default function DatabaseTab() {
                 processing_progress: progressMatch.progress_percentage,
                 queue_position: progressMatch.queue_position,
                 chunk_progress: progressMatch.chunk_progress,
-                entity_progress: progressMatch.entity_progress
+                entity_progress: progressMatch.entity_progress,
+                chunks_processed: progressMatch.chunks_processed,
+                total_chunks: progressMatch.total_chunks
               }
             }
             return freshDoc || doc
@@ -569,7 +571,7 @@ export default function DatabaseTab() {
                             <Loader size={14} />
                           )}
                           <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50 truncate">
-                            {doc.original_filename || doc.filename}
+                            {doc.original_filename || doc.filename || `Unnamed Document (${doc.document_id.substring(0, 8)}...)`}
                           </p>
                         </div>
                         <p className={`text-xs mt-1 ${isStuck && (status === 'queued' || status === 'staged') ? 'text-red-600 dark:text-red-400' : 'text-secondary-600 dark:text-secondary-400'}`}>
@@ -609,7 +611,11 @@ export default function DatabaseTab() {
                                 {(doc.processing_stage === 'embedding' && (doc as any).chunk_progress > 0) ?
                                   ` ${Math.round((doc as any).chunk_progress * 100)}%` : ''
                                 }
-                                {(!['classification', 'chunking', 'summarization', 'embedding', 'processing', 'queued'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).entity_progress > 0) ?
+                                {/* Show chunk count during entity extraction for granular progress */}
+                                {(['entity_extraction', 'llm_extraction', 'embedding_generation', 'database_operations', 'clustering', 'validation', 'starting'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).chunks_processed > 0) ?
+                                  ` (${(doc as any).chunks_processed}/${(doc as any).total_chunks || '?'})` : ''
+                                }
+                                {(!['classification', 'chunking', 'summarization', 'embedding', 'processing', 'queued', 'entity_extraction', 'llm_extraction'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).entity_progress > 0) ?
                                   ` ${Math.round((doc as any).entity_progress * 100)}%` : ''
                                 }
                               </>
