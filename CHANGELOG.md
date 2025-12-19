@@ -88,6 +88,7 @@ Post-audit hotfixes and feature additions.
   - Adding Neo4j fallback in `get_database_stats` to read processing status for background updates
   - Resetting global processing state when document update completes
 - **Redundant UI Banner**: Removed the duplicate "Processing in progress..." indicator block from DatabaseTab since per-document progress bars provide sufficient feedback.
+- **HTTP Compatibility for External Chat**: Added UUID generation fallback in `ExternalChatBubble.tsx` to support non-HTTPS deployments where `crypto.randomUUID()` is unavailable.
 
 ### New Features
 - **Automatic Orphan Cleanup on Startup**: Added automatic cleanup of orphaned chunks and entities on backend startup.
