@@ -1,6 +1,5 @@
 # Amber
-
-<img width="1280" height="640" alt="amber_avatar" src="https://github.com/user-attachments/assets/d86b3e7f-ca0b-488f-8ce6-9090bdb2a6a9" />
+<img height="447" alt="amber_avatar" src="https://github.com/user-attachments/assets/8c13be4b-3175-4b9c-9a4a-f205b31ce092" />
 
 A production-ready Graph-Enhanced Retrieval-Augmented Generation (GraphRAG) platform that combines vector similarity search with knowledge graph reasoning to deliver contextual, sourced, and high-quality answers over document collections.
 
@@ -17,7 +16,7 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 
 ## Architecture
 
-<img width="640" alt="architecture" src="https://github.com/user-attachments/assets/fcc010b5-5cb0-4e4c-be11-56ff12b87949" />
+<img height="447" alt="architecture" src="https://github.com/user-attachments/assets/9f6fcb0f-cde4-4bed-99cb-1b3638d71bd5" />
 
 ```
                          Frontend Layer
@@ -221,7 +220,7 @@ npm run dev
 
 ## GraphRAG Pipeline
 
-<img width="640" alt="pipeline" src="https://github.com/user-attachments/assets/f0d6b915-16c8-472f-bc44-9b7c24128246" />
+<img height="447" alt="pipeline" src="https://github.com/user-attachments/assets/112e5c90-fb9f-4d0a-8965-a3b646db64b1" />
 
 The RAG pipeline is implemented as a LangGraph StateGraph with the following stages:
 
@@ -354,7 +353,7 @@ SENTENCE_MIN_LENGTH=10
 
 ## API Reference
 
-<img width="640" alt="api" src="https://github.com/user-attachments/assets/807e87f8-b8bd-4f20-b376-7fa690f7e4fc" />
+<img height="447" alt="api" src="https://github.com/user-attachments/assets/380e45d8-5f49-460a-a91d-46f219fe000c" />
 
 ### Chat and Retrieval
 
@@ -476,8 +475,7 @@ amber/
 
 ## Documentation
 
-
-<img width="640" alt="documentation" src="https://github.com/user-attachments/assets/17fdc7ef-467f-4fde-a3e7-53093c4514ef" />
+<img width="1536" height="447" alt="documentation" src="https://github.com/user-attachments/assets/40b2e46f-37c0-4d71-a6f7-2ac0e0803386" />
 
 Comprehensive documentation is available in the `documentation/` directory:
 
