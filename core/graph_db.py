@@ -1441,6 +1441,202 @@ Reply with ONLY one of:
             # Re-raise so callers can handle or log at higher level
             raise
 
+    def create_sentence_node(
+        self,
+        sentence_id: str,
+        chunk_id: str,
+        content: str,
+        embedding: List[float],
+        index_in_chunk: int,
+    ) -> None:
+        """
+        Create a Sentence node and link it to its parent Chunk.
+        
+        Args:
+            sentence_id: Unique ID for the sentence
+            chunk_id: Parent chunk ID
+            content: Sentence text
+            embedding: Sentence embedding vector
+            index_in_chunk: Position of sentence within the chunk (0-indexed)
+        """
+        try:
+            with self.session_scope() as session:
+                session.run(
+                    """
+                    MERGE (s:Sentence {id: $sentence_id})
+                    SET s.content = $content,
+                        s.embedding = $embedding,
+                        s.index_in_chunk = $index_in_chunk,
+                        s.created_at = datetime()
+                    WITH s
+                    MATCH (c:Chunk {id: $chunk_id})
+                    MERGE (c)-[:HAS_SENTENCE]->(s)
+                    """,
+                    sentence_id=sentence_id,
+                    chunk_id=chunk_id,
+                    content=content,
+                    embedding=embedding,
+                    index_in_chunk=index_in_chunk,
+                )
+                logger.debug(f"Created sentence node {sentence_id} for chunk {chunk_id}")
+        except Exception as e:
+            logger.error(f"Failed to create sentence node {sentence_id}: {e}")
+            raise
+
+    def get_sentence_context(
+        self,
+        sentence_id: str,
+        window_size: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Get a sentence with its surrounding context (±window_size sentences).
+        
+        Args:
+            sentence_id: ID of the target sentence
+            window_size: Number of sentences to include on each side
+            
+        Returns:
+            Dict with combined text, chunk_id, and metadata
+        """
+        try:
+            with self.session_scope() as session:
+                # First get the target sentence and its chunk
+                result = session.run(
+                    """
+                    MATCH (c:Chunk)-[:HAS_SENTENCE]->(s:Sentence {id: $sentence_id})
+                    RETURN s.content AS target_content,
+                           s.index_in_chunk AS target_index,
+                           c.id AS chunk_id,
+                           c.content AS chunk_content
+                    """,
+                    sentence_id=sentence_id,
+                ).single()
+                
+                if not result:
+                    logger.warning(f"Sentence {sentence_id} not found")
+                    return {}
+                
+                chunk_id = result["chunk_id"]
+                target_index = result["target_index"]
+                
+                # Get all sentences from the same chunk, ordered by index
+                sentences_result = session.run(
+                    """
+                    MATCH (c:Chunk {id: $chunk_id})-[:HAS_SENTENCE]->(s:Sentence)
+                    RETURN s.content AS content, s.index_in_chunk AS idx
+                    ORDER BY s.index_in_chunk ASC
+                    """,
+                    chunk_id=chunk_id,
+                )
+                
+                sentences = [(r["content"], r["idx"]) for r in sentences_result]
+                
+                if not sentences:
+                    # Fallback to chunk content
+                    return {
+                        "content": result["chunk_content"],
+                        "chunk_id": chunk_id,
+                        "sentence_id": sentence_id,
+                        "window_start": 0,
+                        "window_end": 0,
+                    }
+                
+                # Calculate window bounds
+                start_idx = max(0, target_index - window_size)
+                end_idx = min(len(sentences), target_index + window_size + 1)
+                
+                # Combine sentences in window
+                window_sentences = [s[0] for s in sentences[start_idx:end_idx]]
+                combined_text = " ".join(window_sentences)
+                
+                return {
+                    "content": combined_text,
+                    "chunk_id": chunk_id,
+                    "sentence_id": sentence_id,
+                    "target_index": target_index,
+                    "window_start": start_idx,
+                    "window_end": end_idx - 1,
+                    "total_sentences": len(sentences),
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get sentence context for {sentence_id}: {e}")
+            return {}
+
+    def sentence_vector_search(
+        self,
+        query_embedding: List[float],
+        top_k: int = 10,
+        window_size: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform vector search on sentence embeddings and expand to context windows.
+        
+        Args:
+            query_embedding: Query embedding vector
+            top_k: Number of sentences to retrieve
+            window_size: Context window size for each matched sentence
+            
+        Returns:
+            List of context windows with metadata
+        """
+        try:
+            with self.session_scope() as session:
+                # Try to use sentence_embeddings index
+                result = session.run(
+                    """
+                    CALL db.index.vector.queryNodes('sentence_embeddings', $top_k, $query_embedding)
+                    YIELD node, score
+                    MATCH (c:Chunk)-[:HAS_SENTENCE]->(node)
+                    MATCH (d:Document)-[:HAS_CHUNK]->(c)
+                    RETURN node.id AS sentence_id,
+                           node.content AS sentence_content,
+                           node.index_in_chunk AS idx,
+                           score AS similarity,
+                           c.id AS chunk_id,
+                           d.id AS document_id,
+                           coalesce(d.title, d.original_filename, d.filename) AS document_name
+                    """,
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                )
+                
+                results = []
+                seen_chunks = set()
+                
+                for record in result:
+                    sentence_id = record["sentence_id"]
+                    chunk_id = record["chunk_id"]
+                    
+                    # Deduplicate by chunk to avoid overlapping windows
+                    if chunk_id in seen_chunks:
+                        continue
+                    seen_chunks.add(chunk_id)
+                    
+                    # Expand to context window
+                    context = self.get_sentence_context(sentence_id, window_size)
+                    
+                    results.append({
+                        "chunk_id": chunk_id,
+                        "content": context.get("content", record["sentence_content"]),
+                        "similarity": record["similarity"],
+                        "document_id": record["document_id"],
+                        "document_name": record["document_name"],
+                        "sentence_id": sentence_id,
+                        "window_metadata": {
+                            "target_index": context.get("target_index"),
+                            "window_start": context.get("window_start"),
+                            "window_end": context.get("window_end"),
+                        },
+                    })
+                
+                logger.debug(f"Sentence search returned {len(results)} results")
+                return results
+                
+        except Exception as e:
+            logger.warning(f"Sentence vector search failed: {e}")
+            return []
+
     def create_similarity_relationship(
         self, chunk_id1: str, chunk_id2: str, similarity_score: float, rank: int = None
     ) -> None:

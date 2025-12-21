@@ -58,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Search results highlight matching parameters with keyboard navigation support
   - Consistent UX across all configuration panels
 
+- **Sentence-Window Retrieval**: Fine-grained sentence-level embedding and retrieval for improved precision:
+  - `core/sentence_chunker.py`: Sentence splitting with abbreviation handling and context window extraction
+  - `core/graph_db.py`: Added `create_sentence_node()`, `get_sentence_context()`, `sentence_vector_search()` methods
+  - `ingestion/document_processor.py`: Automatic sentence embedding during ingestion when enabled
+  - `rag/retriever.py`: New `sentence_based_retrieval()` method for fine-grained search
+  - New `Sentence` nodes with `(:Chunk)-[:HAS_SENTENCE]->(:Sentence)` relationships
+  - Configurable context window (±N sentences, default 5) via `SENTENCE_WINDOW_SIZE`
+  - Minimum sentence length filtering via `SENTENCE_MIN_LENGTH` (default 10 chars)
+  - Opt-in via `ENABLE_SENTENCE_WINDOW_RETRIEVAL=true` (disabled by default)
+  - UI controls in RAG Tuning panel for runtime configuration
+  - Unit tests with 12 passing test cases in `tests/unit/test_sentence_chunker.py`
+
 ### Infrastructure Improvements
 
 - **Token Management Enhancements**: Comprehensive improvements to token counting and context management across the platform:

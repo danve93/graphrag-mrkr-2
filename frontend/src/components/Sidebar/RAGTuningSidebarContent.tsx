@@ -61,6 +61,7 @@ const sectionCategories = [
     sections: [
       { key: 'client_side_vector_search', label: 'Client-Side Vector Search' },
       { key: 'layered_memory', label: 'Layered Memory System' },
+      { key: 'sentence_window_retrieval', label: 'Sentence-Window Retrieval' },
     ],
   },
 ];

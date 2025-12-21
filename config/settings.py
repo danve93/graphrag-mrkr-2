@@ -260,6 +260,17 @@ class Settings(BaseSettings):
         default=10, description="Multiplier for BM25 candidate count (top_k * multiplier)"
     )
 
+    # Sentence-Window Retrieval Configuration
+    enable_sentence_window_retrieval: bool = Field(
+        default=False, description="Enable sentence-level embedding and window-based retrieval"
+    )
+    sentence_window_size: int = Field(
+        default=5, description="Number of sentences to include on each side of matched sentence"
+    )
+    sentence_min_length: int = Field(
+        default=10, description="Minimum character length for a valid sentence"
+    )
+
     # Fuzzy Matching Configuration
     enable_fuzzy_matching: bool = Field(
         default=True, description="Enable fuzzy matching for technical terms and typo correction"
@@ -1040,6 +1051,10 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "chunk_include_heading_path": "chunk_include_heading_path",
         "chunker_strategy_pdf": "chunker_strategy_pdf",
         "chunker_strategy_html": "chunker_strategy_html",
+        # === Sentence-Window Retrieval ===
+        "enable_sentence_window_retrieval": "enable_sentence_window_retrieval",
+        "sentence_window_size": "sentence_window_size",
+        "sentence_min_length": "sentence_min_length",
         "enable_stale_job_cleanup": "enable_stale_job_cleanup",
         "flashrank_enabled": "flashrank_enabled",
         "flashrank_model_name": "flashrank_model_name",

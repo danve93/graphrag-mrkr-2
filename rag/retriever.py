@@ -261,6 +261,70 @@ class DocumentRetriever:
             logger.error(f"Chunk-based retrieval failed: {e}")
             return []
 
+    async def sentence_based_retrieval(
+        self,
+        query: str,
+        search_query: Optional[str] = None,
+        top_k: int = 5,
+        allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Sentence-Window Retrieval: embed query, search sentence index, expand context.
+        
+        Args:
+            query: Original user query (for logging)
+            search_query: Contextualized query to use for embeddings (if None, uses query)
+            top_k: Number of relevant contexts to retrieve
+            allowed_document_ids: Optional list of document IDs to restrict retrieval
+            embedding_model: Optional override for embedding model
+            
+        Returns:
+            List of context chunks with expanded sentence windows
+        """
+        if not getattr(settings, "enable_sentence_window_retrieval", False):
+            logger.debug("Sentence window retrieval disabled, returning empty")
+            return []
+            
+        try:
+            effective_query = search_query or query
+            
+            # Get query embedding
+            query_embedding = await embedding_manager.aget_embedding(
+                effective_query, model=embedding_model
+            )
+            
+            if not query_embedding:
+                logger.warning("No embedding generated for sentence search query")
+                return []
+            
+            # Get window size from settings
+            window_size = getattr(settings, "sentence_window_size", 5)
+            
+            # Search sentence index with context expansion
+            results = graph_db.sentence_vector_search(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                window_size=window_size,
+            )
+            
+            # Filter by allowed documents if specified
+            if allowed_document_ids:
+                allowed_set = set(allowed_document_ids)
+                results = [r for r in results if r.get("document_id") in allowed_set]
+            
+            logger.info(
+                "Sentence retrieval: found %d results (window_size=%d)",
+                len(results),
+                window_size,
+            )
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Sentence-based retrieval failed: {e}")
+            return []
+
     async def entity_based_retrieval(
         self,
         query: str,

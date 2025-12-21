@@ -1098,6 +1098,48 @@
           "tooltip": "Minimum importance threshold (0.0-1.0) for facts to be loaded. Acts as quality filter to exclude low-value facts. Lower values include more facts. Recommended: 0.2-0.5 for balanced context."
         }
       ]
+    },
+    {
+      "key": "sentence_window_retrieval",
+      "label": "Sentence-Window Retrieval",
+      "description": "Fine-grained sentence-level search with context window expansion for improved precision.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "enable_sentence_window_retrieval",
+          "label": "Enable Sentence-Window Retrieval",
+          "value": false,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Enable sentence-level embedding and retrieval. Each sentence is embedded individually for fine-grained matching, but retrieval returns a context window of surrounding sentences. Increases ingestion time and storage but improves precision for detailed queries."
+        },
+        {
+          "key": "sentence_window_size",
+          "label": "Context Window Size",
+          "value": 5,
+          "options": null,
+          "min": 1.0,
+          "max": 15.0,
+          "step": 1.0,
+          "type": "slider",
+          "tooltip": "Number of sentences to include on each side of matched sentence (±N). Window size 5 = 11 sentences total (5 before + matched + 5 after). Larger windows provide more context but may dilute relevance. Recommended: 3-7 sentences."
+        },
+        {
+          "key": "sentence_min_length",
+          "label": "Min Sentence Length",
+          "value": 10,
+          "options": null,
+          "min": 5.0,
+          "max": 50.0,
+          "step": 5.0,
+          "type": "slider",
+          "tooltip": "Minimum character length for a valid sentence. Filters out very short fragments like 'Yes.' or 'OK.' that lack semantic value. Recommended: 10-20 characters."
+        }
+      ]
     }
   ]
 }

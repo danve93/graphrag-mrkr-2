@@ -956,6 +956,41 @@ class DocumentProcessor:
                     except Exception as e2:
                         logger.error("Failed to persist chunk %s to DB: %s", chunk_id, e2)
 
+            # Sentence-Window Retrieval: Split chunk into sentences and embed each
+            if getattr(settings, "enable_sentence_window_retrieval", False) and content:
+                try:
+                    from core.sentence_chunker import split_into_sentences
+                    import hashlib
+                    
+                    min_len = getattr(settings, "sentence_min_length", 10)
+                    sentences = split_into_sentences(content, min_length=min_len)
+                    
+                    for idx, sentence in enumerate(sentences):
+                        # Generate sentence ID from chunk_id + index
+                        sentence_id = hashlib.sha256(f"{chunk_id}:s{idx}".encode()).hexdigest()[:16]
+                        
+                        try:
+                            # Get embedding for sentence
+                            sentence_embedding = await embedding_manager.aget_embedding(sentence)
+                            
+                            # Store sentence node
+                            await loop.run_in_executor(
+                                executor,
+                                graph_db.create_sentence_node,
+                                sentence_id,
+                                chunk_id,
+                                sentence,
+                                sentence_embedding,
+                                idx,
+                            )
+                            logger.debug(f"Created sentence {idx} for chunk {chunk_id}")
+                        except Exception as se:
+                            logger.debug(f"Failed to create sentence {idx} for chunk {chunk_id}: {se}")
+                    
+                    logger.debug(f"Created {len(sentences)} sentences for chunk {chunk_id}")
+                except Exception as e:
+                    logger.warning(f"Sentence processing failed for chunk {chunk_id}: {e}")
+
             # Report progress
             processed_count += 1
             if progress_callback:

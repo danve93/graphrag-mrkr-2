@@ -149,6 +149,8 @@ The following implementation highlights summarize factual, developer-facing feat
 
 - Smart consolidation: Multi-category chunk consolidation ensures diverse representation when queries match multiple document categories. The `SmartConsolidator` class (`rag/nodes/smart_consolidation.py`) enforces per-category minimum chunk requirements (configurable, default 1 per category), removes semantic duplicates using embedding similarity (0.95 threshold), respects token budgets (8K max context default), and reorders results to maximize diversity while maintaining relevance. Integrated into the retrieval pipeline when query routing is enabled, improving result diversity and preventing redundant context.
 
+- Sentence-Window Retrieval: Fine-grained sentence-level embedding system enables precision search while preserving context. During ingestion (`ingestion/document_processor.py`), chunks are split into sentences (`core/sentence_chunker.py`) with abbreviation-aware parsing and minimum length filtering (default 10 chars). Each sentence receives its own embedding and is stored as a `Sentence` node linked to its parent `Chunk` via `HAS_SENTENCE` relationships. At query time, `sentence_vector_search()` (`core/graph_db.py`) searches sentence embeddings and expands matches to context windows (±N sentences, configurable via `sentence_window_size`, default 5). The `sentence_based_retrieval()` method (`rag/retriever.py`) integrates into the hybrid retrieval pipeline as an optional path controlled by `enable_sentence_window_retrieval` setting (disabled by default). Deduplicates by chunk to prevent overlapping windows. Ideal for detailed queries requiring precise matching with sufficient surrounding context.
+
 These highlights are factual summaries of implemented behavior and do not reference external documentation paths.
 
 ## Architecture
@@ -268,6 +270,7 @@ Settings live in `config/settings.py` and can be set through environment variabl
 - **Document Conversion**: `document_conversion_provider` (auto|native|marker|docling), `use_marker_for_pdf`.
 - **Entity / OCR**: `enable_entity_extraction`, `SYNC_ENTITY_EMBEDDINGS`, `enable_ocr`, `ocr_quality_threshold`.
 - **Clustering**: `enable_clustering`, `enable_graph_clustering`, `clustering_resolution`, `clustering_min_edge_weight`, `clustering_relationship_types`, `clustering_level`.
+- **Sentence-Window Retrieval**: `enable_sentence_window_retrieval` (default: false), `sentence_window_size` (default: 5), `sentence_min_length` (default: 10).
 
 ### Development Workflow
 - Create and activate a virtualenv: `python3 -m venv .venv && source .venv/bin/activate`.

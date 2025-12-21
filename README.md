@@ -62,6 +62,7 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 | **Hybrid Retrieval** | Combined vector search (70%) and entity search (30%) with configurable weights |
 | **Graph Expansion** | Multi-hop traversal (1-3 hops) through similarity and entity relationship edges |
 | **FlashRank Reranking** | Cross-encoder reranking with 10-15% relevance improvement |
+| **Sentence-Window Retrieval** | Fine-grained sentence-level embedding with ±N context expansion for precision |
 | **Leiden Community Detection** | Automatic entity clustering into semantic communities |
 | **Entity Extraction with Gleaning** | Multi-pass extraction with 30-40% recall improvement |
 | **Quality Scoring** | Chunk quality assessment for filtering low-quality content |
@@ -166,6 +167,7 @@ npm run dev
 - **Selective Database Clearing**: Granular control to clear Knowledge Base or Conversation History independently
 - **Google Gemini Support**: Added Gemini as LLM provider option with full configuration support
 - **HTML Heading Chunker**: New strategy for HTML documents with semantic structure and heading path extraction
+- **Sentence-Window Retrieval**: Fine-grained sentence-level embedding and retrieval with configurable context window (±5 sentences) for improved precision on detailed queries
 
 **Infrastructure:**
 - **Token Management Enhancements**: Comprehensive token tracking and context management
@@ -251,21 +253,27 @@ Each node is independently testable, configurable, and replaceable. State flows 
 
 ```
 Document ──[HAS_CHUNK]──> Chunk ──[SIMILAR_TO]──> Chunk
-                            │
-                    [CONTAINS_ENTITY]
-                            │
-                            ▼
-                         Entity ──[RELATED_TO]──> Entity
-                            │
-                      [IN_COMMUNITY]
-                            │
-                            ▼
-                        Community
+                             │
+                     [CONTAINS_ENTITY]
+                             │         [HAS_SENTENCE]
+                             ▼              │
+                          Entity ───────────▼
+                             │          Sentence
+                       [RELATED_TO]
+                             │
+                             ▼
+                          Entity
+                             │
+                       [IN_COMMUNITY]
+                             │
+                             ▼
+                         Community
 ```
 
 | Relationship | Description | Key Properties |
 |-------------|-------------|----------------|
 | `HAS_CHUNK` | Document to Chunk | `chunk_index` |
+| `HAS_SENTENCE` | Chunk to Sentence | `index_in_chunk` |
 | `CONTAINS_ENTITY` | Chunk to Entity | `mention_count` |
 | `SIMILAR_TO` | Chunk to Chunk | `strength` (0-1 cosine similarity) |
 | `RELATED_TO` | Entity to Entity | `strength`, `co_occurrence` |
@@ -301,6 +309,9 @@ CACHE_TYPE=disk
 ENABLE_QUERY_ROUTING=false
 ENABLE_STRUCTURED_KG=true
 ENABLE_ADAPTIVE_ROUTING=true
+ENABLE_SENTENCE_WINDOW_RETRIEVAL=false
+SENTENCE_WINDOW_SIZE=5
+SENTENCE_MIN_LENGTH=10
 ```
 
 ### Chat Tuning vs RAG Tuning
