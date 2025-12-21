@@ -5,6 +5,11 @@ import fcose from 'cytoscape-fcose'
 import type { GraphEdge, GraphNode } from '@/types/graph'
 import { useGraphEditorStore } from './useGraphEditorStore'
 import { ConfirmActionModal } from './ConfirmActionModal'
+import { API_URL } from '@/lib/api'
+import { showToast } from '@/components/Toast/ToastContainer'
+import { GitMerge } from 'lucide-react'
+import { MergeNodesModal } from './MergeNodesModal'
+import { HealingSuggestionsModal } from './HealingSuggestionsModal'
 // @ts-ignore
 import edgehandles from 'cytoscape-edgehandles'
 
@@ -20,19 +25,21 @@ interface CytoscapeGraphProps {
     width?: number
     height?: number
     onGraphUpdate?: () => void
+    editable?: boolean
 }
 
+// Premium color palette synced with ThreeGraph for consistency
 const COMMUNITY_COLORS = [
-    '#22d3ee', // cyan
-    '#a855f7', // purple
-    '#f97316', // orange
-    '#10b981', // emerald
-    '#3b82f6', // blue
-    '#f59e0b', // amber
-    '#e11d48', // rose
-    '#0ea5e9', // sky
-    '#8b5cf6', // violet
-    '#14b8a6', // teal
+    '#06b6d4', // cyan-500 (deeper)
+    '#8b5cf6', // violet-500
+    '#f97316', // orange-500
+    '#10b981', // emerald-500
+    '#3b82f6', // blue-500
+    '#f59e0b', // amber-500
+    '#ec4899', // pink-500
+    '#6366f1', // indigo-500
+    '#14b8a6', // teal-500
+    '#ef4444', // red-500
 ]
 
 function getCommunityColor(communityId?: number | null) {
@@ -43,13 +50,33 @@ function getCommunityColor(communityId?: number | null) {
     return COMMUNITY_COLORS[idx]
 }
 
-export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, height, onGraphUpdate }: CytoscapeGraphProps) {
+export default function CytoscapeGraph({
+    nodes,
+    edges,
+    backgroundColor,
+    width,
+    height,
+    onGraphUpdate,
+    onNodeClick,
+    editable = true,
+}: CytoscapeGraphProps) {
     const cyRef = useRef<cytoscape.Core | null>(null)
     const ehRef = useRef<any>(null)
-    const { mode } = useGraphEditorStore()
+    const { mode, setMode } = useGraphEditorStore()
+    const effectiveMode = editable ? mode : 'select'
+    const nodeLookup = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
 
     // Safety Modal State for Pruning
+    // Safety Modal State for Pruning
     const [pruneTarget, setPruneTarget] = React.useState<{ type: 'edge' | 'node', id: string, source?: string, target?: string } | null>(null);
+
+    // Interaction State
+    const [healingNodeId, setHealingNodeId] = React.useState<string | null>(null);
+    const [tappedGhostEdge, setTappedGhostEdge] = React.useState<any>(null);
+    const [showMergeModal, setShowMergeModal] = React.useState(false);
+    const [selectedNodes, setSelectedNodes] = React.useState<any[]>([]);
+    const [healNotification, setHealNotification] = React.useState<string | null>(null);
+    const [healLoading, setHealLoading] = React.useState(false);
 
     // Transform graph data into Cytoscape elements
     const elements = useMemo(() => {
@@ -105,12 +132,18 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
             {
                 selector: 'edge',
                 style: {
-                    width: 'mapData(weight, 0, 1, 1, 3)',
+                    width: 1.5,
                     'line-color': '#334155', // slate-700
                     'curve-style': 'bezier',
                     'target-arrow-shape': 'triangle',
                     'target-arrow-color': '#334155',
                     opacity: 0.6,
+                },
+            },
+            {
+                selector: 'edge[weight]',
+                style: {
+                    width: 'mapData(weight, 0, 1, 1, 3)',
                 },
             },
             // EDGE HANDLES (GHOST)
@@ -183,10 +216,15 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
         if (!pruneTarget) return;
 
         try {
+            const token = localStorage.getItem('authToken');
             if (pruneTarget.type === 'edge') {
-                const response = await fetch('/api/graph/editor/edge', {
+                const response = await fetch(`${API_URL}/api/graph/editor/edge`, {
                     method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                    },
+                    credentials: 'include',
                     body: JSON.stringify({
                         source_id: pruneTarget.source,
                         target_id: pruneTarget.target,
@@ -194,26 +232,63 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
                     })
                 });
 
-                if (!response.ok) throw new Error('Failed to delete edge');
+                if (!response.ok) {
+                    const payload = await response.text()
+                    throw new Error(payload || 'Failed to delete edge');
+                }
             }
             // Node deletion to be implemented
 
             // Refresh graph
             onGraphUpdate?.();
             setPruneTarget(null);
+            setMode('select');
         } catch (error) {
             console.error("Prune failed", error);
-            // Optionally show error toast
+            showToast('error', 'Prune failed', error instanceof Error ? error.message : 'Failed to delete edge');
         }
     };
 
-    // Initialize Event Listeners (including Tap for Prune)
+    const handleAcceptGhostEdge = async () => {
+        if (!tappedGhostEdge) return;
+        // Logic to accept ghost edge (AI suggestion)
+        // For now, treat same as manual edge creation
+        try {
+            const token = localStorage.getItem('authToken');
+            const response = await fetch(`${API_URL}/api/graph/editor/edge`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                },
+                credentials: 'include',
+                body: JSON.stringify({
+                    source_id: tappedGhostEdge.source,
+                    target_id: tappedGhostEdge.target,
+                    relation_type: 'RELATED_TO',
+                    properties: {
+                        weight: tappedGhostEdge.weight,
+                        created_by: 'ai_suggestion'
+                    }
+                })
+            });
+
+            if (!response.ok) throw new Error('Failed to create edge');
+            onGraphUpdate?.();
+            setTappedGhostEdge(null);
+            showToast('success', 'Connection created', 'AI suggestion accepted');
+        } catch (e) {
+            showToast('error', 'Failed to create connection', String(e));
+        }
+    };
+
+    // Initialize Event Listeners (including Tap for Prune and Heal)
     useEffect(() => {
-        if (!cyRef.current) return;
+        if (!editable || !cyRef.current) return;
         const cy = cyRef.current;
 
         const handleTap = (evt: any) => {
-            if (mode === 'prune') {
+            if (effectiveMode === 'prune') {
                 const target = evt.target;
                 if (target === cy) return; // Clicked background
 
@@ -233,15 +308,72 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
         return () => {
             cy.off('tap', handleTap);
         };
-    }, [mode]);
+    }, [editable, effectiveMode]);
+
+    // Handle Node Selection & Heal Mode
+    useEffect(() => {
+        if (!cyRef.current) return;
+        const cy = cyRef.current;
+        const handleNodeTap = (evt: any) => {
+            const nodeId = evt.target.id();
+            const selected = nodeLookup.get(nodeId);
+
+            if (effectiveMode === 'heal') {
+                setHealingNodeId(nodeId);
+                return;
+            }
+
+            if (effectiveMode === 'select') {
+                if (selected) {
+                    onNodeClick?.(selected);
+                }
+                // Update internal selection state for Merge
+                const currentSelected = cy.$(':selected').map((ele: any) => ele.id());
+                // We need the actual node objects for the merge modal
+                // Using a slight delay to let Cytoscape update its selection state
+                setTimeout(() => {
+                    const selectedEles = cy.$('node:selected');
+                    const selectedData = selectedEles.map((ele: any) => ({
+                        id: ele.id(),
+                        label: ele.data('label'),
+                        type: ele.data('type')
+                    }));
+
+                    // If multiple nodes selected, update state
+                    if (selectedData.length > 0) {
+                        setSelectedNodes(selectedData);
+                    } else {
+                        setSelectedNodes([]);
+                    }
+                }, 10);
+            }
+        };
+
+        cy.on('tap', 'node', handleNodeTap);
+        // Also listen for unselect to clear merge state
+        const handleUnselect = () => {
+            setTimeout(() => {
+                const selectedEles = cy.$('node:selected');
+                if (selectedEles.length === 0) {
+                    setSelectedNodes([]);
+                }
+            }, 10);
+        };
+        cy.on('unselect', 'node', handleUnselect);
+
+        return () => {
+            cy.off('tap', 'node', handleNodeTap);
+            cy.off('unselect', 'node', handleUnselect);
+        };
+    }, [effectiveMode, nodeLookup, onNodeClick]);
 
     // Initialize EdgeHandles
     useEffect(() => {
-        if (!cyRef.current) return
+        if (!editable || !cyRef.current) return
         const cy = cyRef.current
 
         // Only initialize once
-            if (!ehRef.current) {
+        if (!ehRef.current) {
             // Initialize edgehandles without strict type-checking
             // @ts-ignore
             if (cy.edgehandles) {
@@ -270,9 +402,14 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
 
                         try {
                             // Call API to create edge
-                            const response = await fetch('/api/graph/editor/edge', {
+                            const token = localStorage.getItem('authToken');
+                            const response = await fetch(`${API_URL}/api/graph/editor/edge`, {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                                },
+                                credentials: 'include',
                                 body: JSON.stringify({
                                     source_id: sourceNode.id(),
                                     target_id: targetNode.id(),
@@ -285,16 +422,23 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
                             });
 
                             if (!response.ok) {
-                                console.error("Failed to persist edge")
-                                // Ideally remove the added edge if API fails
-                                addedEles.remove()
+                                const errorText = await response.text();
+                                console.error("Failed to persist edge:", errorText);
+                                showToast('error', 'Edge creation failed', errorText || 'Failed to create edge');
+                                // Remove the added edge if API fails
+                                addedEles.remove();
                             } else {
-                                // Success!
+                                const data = await response.json();
+                                console.log("Edge created successfully:", data);
+                                showToast('success', 'Edge created', 'Relationship saved to the graph');
+                                // Success! Refresh graph
                                 onGraphUpdate?.();
+                                setMode('select');
                             }
                         } catch (e) {
-                            console.error("Error creating edge", e)
-                            addedEles.remove()
+                            console.error("Error creating edge", e);
+                            showToast('error', 'Edge creation failed', e instanceof Error ? e.message : String(e));
+                            addedEles.remove();
                         }
                     },
                     cancel: (sourceNode: any, cancelledTargets: any) => { },
@@ -310,7 +454,8 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
 
         // Toggle based on mode
         if (ehRef.current) {
-            if (mode === 'connect') {
+            if (effectiveMode === 'connect') {
+                ehRef.current.enable()  // Must enable first
                 ehRef.current.enableDrawMode()
             } else {
                 ehRef.current.disableDrawMode()
@@ -318,7 +463,7 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
             }
         }
 
-    }, [mode]) // Dependencies
+    }, [editable, effectiveMode]) // Dependencies
 
     // Handle re-layout when data dramatically changes
     useEffect(() => {
@@ -330,6 +475,11 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
         runLayout()
     }, [elements.length])
 
+    useEffect(() => {
+        if (!cyRef.current) return
+        cyRef.current.resize()
+    }, [width, height])
+
     return (
         <div style={{ width: width ?? '100%', height: height ?? '100%', backgroundColor }}>
             <CytoscapeComponent
@@ -340,18 +490,73 @@ export default function CytoscapeGraph({ nodes, edges, backgroundColor, width, h
                 cy={(cy) => {
                     cyRef.current = cy
                 }}
-                wheelSensitivity={0.3}
             />
 
             {pruneTarget && (
                 <ConfirmActionModal
-                    title="Prune Edge"
-                    message="Are you sure you want to permanently delete this relationship?"
-                    confirmText="Delete"
+                    title={pruneTarget.type === 'edge' ? 'Prune Connection' : `Prune Node ${pruneTarget.id}`}
+                    message={`Are you sure you want to permanently delete this ${pruneTarget.type === 'edge' ? 'connection' : 'node'}? This action cannot be undone.`}
+                    confirmText="Prune"
                     isDangerous={true}
                     onConfirm={handlePruneConfirm}
                     onCancel={() => setPruneTarget(null)}
                 />
+            )}
+
+            {healingNodeId && (
+                <HealingSuggestionsModal
+                    nodeId={healingNodeId}
+                    onClose={() => setHealingNodeId(null)}
+                />
+            )}
+
+            {tappedGhostEdge && (
+                <ConfirmActionModal
+                    title="Accept Suggestion?"
+                    message={`Do you want to create this connection with ${(tappedGhostEdge.weight * 100).toFixed(0)}% confidence?`}
+                    confirmText="Create Connection"
+                    isDangerous={false}
+                    onConfirm={handleAcceptGhostEdge}
+                    onCancel={() => setTappedGhostEdge(null)}
+                />
+            )}
+
+            {/* Merge Button Overlay */}
+            {selectedNodes.length > 1 && mode === 'select' && (
+                <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-10">
+                    <button
+                        onClick={() => setShowMergeModal(true)}
+                        className="button-primary shadow-lg shadow-indigo-900/40 rounded-full flex items-center gap-2 hover:scale-105 active:scale-95 transition-all"
+                    >
+                        <GitMerge className="w-5 h-5" />
+                        Merge {selectedNodes.length} Nodes
+                    </button>
+                </div>
+            )}
+
+            {showMergeModal && (
+                <MergeNodesModal
+                    selectedNodes={selectedNodes}
+                    onClose={() => setShowMergeModal(false)}
+                    onMergeSuccess={() => {
+                        setShowMergeModal(false);
+                        setSelectedNodes([]);
+                        onGraphUpdate?.();
+                    }}
+                />
+            )}
+
+            {/* Heal Notification Banner */}
+            {healNotification && (
+                <div className={`absolute top-4 left-1/2 transform -translate-x-1/2 z-20 ${healLoading ? 'bg-accent-primary' : 'bg-accent-hover'} text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2`}>
+                    {healLoading && (
+                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    )}
+                    {healNotification}
+                </div>
             )}
         </div>
     )

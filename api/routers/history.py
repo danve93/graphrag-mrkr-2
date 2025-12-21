@@ -5,7 +5,7 @@ History router for managing chat conversation history.
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Cookie
 
 from api.models import (
     ConversationHistory,
@@ -15,7 +15,7 @@ from api.models import (
     SessionCreateRequest,
 )
 from api.services.chat_history_service import chat_history_service
-from api.auth import get_current_user, require_admin
+from api.auth import get_current_user, require_admin, validate_admin_session
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,10 @@ router = APIRouter()
 
 
 @router.get("/sessions", response_model=List[ConversationSession])
-async def list_sessions(user_id: Optional[str] = Depends(get_current_user)):
+async def list_sessions(
+    user_id: Optional[str] = Depends(get_current_user),
+    admin_session: Optional[str] = Cookie(None),
+):
     """
     List conversation sessions for the current user.
     If anonymous, returns empty list (or could return ephemeral sessions if tracked).
@@ -32,7 +35,10 @@ async def list_sessions(user_id: Optional[str] = Depends(get_current_user)):
         if user_id:
             sessions = await chat_history_service.list_user_sessions(user_id)
             return sessions
-        
+
+        if admin_session and validate_admin_session(admin_session):
+            return await chat_history_service.list_sessions()
+
         # Security: Do not list all sessions for anonymous users
         return []
 

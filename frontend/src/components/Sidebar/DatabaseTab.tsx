@@ -2,12 +2,23 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { api } from '@/lib/api'
-import { DatabaseStats, ProcessingSummary } from '@/types'
-import { TrashIcon, DocumentArrowUpIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { DatabaseStats, ProcessingSummary, FolderSummary, DocumentSummary } from '@/types'
+import {
+  Trash2,
+  FileUp,
+  Search,
+  X,
+  Folder,
+  Plus,
+  ChevronUp,
+  ChevronDown,
+} from 'lucide-react'
 import Loader from '@/components/Utils/Loader'
 import { useChatStore } from '@/store/chatStore'
 import { showToast } from '@/components/Toast/ToastContainer'
 import UploadUpdateDialog from '@/components/Document/UploadUpdateDialog'
+import FolderDeleteDialog from './FolderDeleteDialog'
+import ClearDatabaseDialog from './ClearDatabaseDialog'
 
 export default function DatabaseTab() {
   const [stats, setStats] = useState<DatabaseStats | null>(null)
@@ -15,10 +26,19 @@ export default function DatabaseTab() {
   const [processingState, setProcessingState] = useState<ProcessingSummary | null>(null)
   const [isStuck, setIsStuck] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [draggingDocumentId, setDraggingDocumentId] = useState<string | null>(null)
+  const [draggingOverFolderId, setDraggingOverFolderId] = useState<string | null>(null)
   const [uploadingFile, setUploadingFile] = useState(false)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [enableDeleteOps, setEnableDeleteOps] = useState(true)
+  const [folders, setFolders] = useState<FolderSummary[]>([])
+  const [activeFolderId, setActiveFolderId] = useState<string>('all')
+  const [sortMode, setSortMode] = useState<'newest' | 'oldest' | 'name' | 'manual'>('newest')
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [folderDeleteTarget, setFolderDeleteTarget] = useState<FolderSummary | null>(null)
+  const [isReordering, setIsReordering] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const wasProcessingRef = useRef(false)
   const lastUpdateTimestampRef = useRef<number>(Date.now())
@@ -28,14 +48,23 @@ export default function DatabaseTab() {
 
   // Upload dialog state
   const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [pendingFolderId, setPendingFolderId] = useState<string | null>(null)
   const [showUploadDialog, setShowUploadDialog] = useState(false)
+  const [showClearDialog, setShowClearDialog] = useState(false)
 
-  const handleFiles = async (files: FileList | File[]) => {
+  const normalizeFolderId = (folderId?: string | null) => {
+    if (!folderId || folderId === 'root' || folderId === 'all') return null
+    return folderId
+  }
+
+  const handleFiles = async (files: FileList | File[], targetFolderId?: string | null) => {
     const fileArray = Array.from(files)
+    const normalizedFolderId = normalizeFolderId(targetFolderId)
 
     // For single file uploads, show the dialog
     if (fileArray.length === 1) {
       setPendingFile(fileArray[0])
+      setPendingFolderId(normalizedFolderId)
       setShowUploadDialog(true)
       return
     }
@@ -44,7 +73,10 @@ export default function DatabaseTab() {
     setUploadingFile(true)
     try {
       for (const file of fileArray) {
-        await api.stageFile(file)
+        const staged = await api.stageFile(file)
+        if (normalizedFolderId && staged?.document_id) {
+          await api.moveDocumentToFolder(staged.document_id, normalizedFolderId)
+        }
         showToast('success', `${file.name} uploaded`, 'Document queued for processing')
       }
 
@@ -65,7 +97,10 @@ export default function DatabaseTab() {
     setShowUploadDialog(false)
     setUploadingFile(true)
     try {
-      await api.stageFile(pendingFile)
+      const staged = await api.stageFile(pendingFile)
+      if (pendingFolderId && staged?.document_id) {
+        await api.moveDocumentToFolder(staged.document_id, pendingFolderId)
+      }
       showToast('success', `${pendingFile.name} uploaded`, 'Document queued for processing')
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('documents:uploaded'))
@@ -75,6 +110,7 @@ export default function DatabaseTab() {
     } finally {
       setUploadingFile(false)
       setPendingFile(null)
+      setPendingFolderId(null)
     }
   }
 
@@ -103,6 +139,7 @@ export default function DatabaseTab() {
     } finally {
       setUploadingFile(false)
       setPendingFile(null)
+      setPendingFolderId(null)
     }
   }
 
@@ -110,20 +147,24 @@ export default function DatabaseTab() {
   const handleDialogClose = () => {
     setShowUploadDialog(false)
     setPendingFile(null)
+    setPendingFolderId(null)
   }
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
 
-    await handleFiles(files)
+    await handleFiles(files, activeFolderId)
     e.target.value = ''
   }
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    setIsDragging(true)
+    const hasFiles = Array.from(e.dataTransfer.types || []).includes('Files')
+    if (hasFiles) {
+      setIsDragging(true)
+    }
   }
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -136,25 +177,30 @@ export default function DatabaseTab() {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
+    setDraggingDocumentId(null)
+    setDraggingOverFolderId(null)
 
     const files = e.dataTransfer.files
     if (files && files.length > 0) {
-      await handleFiles(files)
+      await handleFiles(files, activeFolderId)
     }
   }
 
   useEffect(() => {
     loadStats()
+    loadFolders()
 
     // Listen for processing completion events to refresh stats automatically
     const handler = () => {
       loadStats()
+      loadFolders()
     }
 
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
       window.addEventListener('documents:processed', handler)
       window.addEventListener('documents:processing-updated', handler)
       window.addEventListener('documents:uploaded', handler)
+      window.addEventListener('documents:metadata-updated', handler)
       window.addEventListener('server:reconnected', handler)
     }
 
@@ -163,6 +209,7 @@ export default function DatabaseTab() {
         window.removeEventListener('documents:processed', handler)
         window.removeEventListener('documents:processing-updated', handler)
         window.removeEventListener('documents:uploaded', handler)
+        window.removeEventListener('documents:metadata-updated', handler)
         window.removeEventListener('server:reconnected', handler)
       }
     }
@@ -174,6 +221,12 @@ export default function DatabaseTab() {
       searchInputRef.current.focus()
     }
   }, [searchMode])
+
+  useEffect(() => {
+    if (activeFolderId === 'all' && sortMode === 'manual') {
+      setSortMode('newest')
+    }
+  }, [activeFolderId, sortMode])
 
   // Poll for processing updates when active (without refreshing entire stats)
   useEffect(() => {
@@ -301,29 +354,39 @@ export default function DatabaseTab() {
     }
   }
 
+  const loadFolders = async () => {
+    try {
+      const data = await api.getFolders()
+      const nextFolders = data.folders || []
+      setFolders(nextFolders)
+      if (
+        activeFolderId !== 'all' &&
+        activeFolderId !== 'root' &&
+        !nextFolders.some((folder: FolderSummary) => folder.id === activeFolderId)
+      ) {
+        setActiveFolderId('all')
+      }
+      return data
+    } catch (error) {
+      console.error('Failed to load folders:', error)
+      return null
+    }
+  }
+
   const handleDeleteDocument = async (documentId: string) => {
     if (!confirm('Delete this document and all its chunks?')) return
 
     try {
       await api.deleteDocument(documentId)
       const newStats = await loadStats()
+      await loadFolders()
 
       // If the deleted document was selected, switch selection to next available or fallback to chat
       if (selectedDocumentId === documentId) {
-        if (newStats && newStats.documents && newStats.documents.length > 0) {
-          // Find next document: try to find the document at the same index as the deleted one
-          const idx = newStats.documents.findIndex((d: any) => d.document_id === documentId)
-          // If not found (deleted), pick the next one at idx (same position) or the last one
-          const pickIndex = Math.min(Math.max(0, idx), newStats.documents.length - 1)
-          const nextDoc = newStats.documents[pickIndex]
-          if (nextDoc) {
-            selectDocument(nextDoc.document_id)
-          } else {
-            // No documents left
-            clearSelectedDocument()
-          }
+        const visibleDocs = newStats?.documents ? filterDocuments(newStats.documents) : []
+        if (visibleDocs.length > 0) {
+          selectDocument(visibleDocs[0].document_id)
         } else {
-          // No documents left, go back to chat view
           clearSelectedDocument()
         }
       }
@@ -336,16 +399,23 @@ export default function DatabaseTab() {
     selectDocument(documentId)
   }
 
-  const handleClearDatabase = async () => {
-    if (!confirm('Clear the entire database? This cannot be undone.')) return
+  const handleClearDatabase = () => {
+    setShowClearDialog(true)
+  }
 
+  const performClearDatabase = async (options: { clearKnowledgeBase: boolean; clearConversations: boolean }) => {
     try {
-      await api.clearDatabase()
-      const newStats = await loadStats()
+      setShowClearDialog(false)
+      await api.clearDatabase(options)
+      await loadStats()
+      await loadFolders()
+      setActiveFolderId('all')
       // After clearing the database, ensure the UI returns to chat view
       clearSelectedDocument()
+      showToast('success', 'Database cleared successfully')
     } catch (error) {
       console.error('Failed to clear database:', error)
+      showToast('error', 'Failed to clear database')
     }
   }
 
@@ -378,16 +448,208 @@ export default function DatabaseTab() {
     }
   }
 
+  const handleCreateFolder = async () => {
+    const trimmed = newFolderName.trim()
+    if (!trimmed) {
+      showToast('error', 'Folder name required', 'Enter a unique folder name')
+      return
+    }
+
+    try {
+      const folder = await api.createFolder(trimmed)
+      await loadFolders()
+      setActiveFolderId(folder.id)
+      setIsCreatingFolder(false)
+      setNewFolderName('')
+      showToast('success', `Folder "${folder.name}" created`)
+    } catch (error) {
+      showToast('error', 'Failed to create folder', error instanceof Error ? error.message : 'Unknown error')
+    }
+  }
+
+  const handleDeleteFolder = async (mode: 'move_to_root' | 'delete_documents') => {
+    if (!folderDeleteTarget) return
+
+    try {
+      const result = await api.deleteFolder(folderDeleteTarget.id, mode)
+      const updatedStats = await loadStats()
+      await loadFolders()
+      if (activeFolderId === folderDeleteTarget.id) {
+        setActiveFolderId('all')
+      }
+      if (selectedDocumentId) {
+        const stillExists = updatedStats?.documents?.some(
+          (doc: DocumentSummary) => doc.document_id === selectedDocumentId
+        )
+        if (!stillExists) {
+          clearSelectedDocument()
+        }
+      }
+      const deletedCount = result?.documents_deleted || 0
+      const movedCount = result?.documents_moved || 0
+      if (mode === 'delete_documents') {
+        showToast('success', `Folder deleted`, `${deletedCount} documents removed`)
+      } else {
+        showToast('success', `Folder deleted`, `${movedCount} documents moved to root`)
+      }
+      setFolderDeleteTarget(null)
+    } catch (error) {
+      showToast('error', 'Failed to delete folder', error instanceof Error ? error.message : 'Unknown error')
+    }
+  }
+
+  const handleMoveDocumentToFolder = async (documentId: string, targetFolderId: string | null) => {
+    try {
+      const normalizedFolderId = normalizeFolderId(targetFolderId)
+      const currentFolderId = stats?.documents?.find((doc) => doc.document_id === documentId)?.folder_id || null
+      if (normalizedFolderId === currentFolderId) {
+        return
+      }
+      await api.moveDocumentToFolder(documentId, normalizedFolderId)
+      await loadStats()
+      await loadFolders()
+      const folderName =
+        normalizedFolderId ? folders.find((folder) => folder.id === normalizedFolderId)?.name : null
+      showToast(
+        'success',
+        'Document moved',
+        normalizedFolderId ? `Moved to ${folderName || 'folder'}` : 'Moved to root'
+      )
+    } catch (error) {
+      showToast('error', 'Failed to move document', error instanceof Error ? error.message : 'Unknown error')
+    }
+  }
+
+  const handleFolderDragOver = (event: React.DragEvent, folderId: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setDraggingOverFolderId(folderId)
+  }
+
+  const handleFolderDragLeave = (event: React.DragEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setDraggingOverFolderId(null)
+  }
+
+  const handleFolderDrop = async (event: React.DragEvent, folderId: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setDraggingOverFolderId(null)
+
+    const files = event.dataTransfer.files
+    if (files && files.length > 0) {
+      await handleFiles(files, folderId)
+      return
+    }
+
+    if (draggingDocumentId) {
+      await handleMoveDocumentToFolder(draggingDocumentId, folderId)
+      setDraggingDocumentId(null)
+    }
+  }
+
+  const handleReorderDocument = async (documentId: string, direction: 'up' | 'down') => {
+    if (sortMode !== 'manual' || activeFolderId === 'all' || searchQuery.trim()) return
+
+    const documents = getFilteredDocuments()
+    const index = documents.findIndex((doc) => doc.document_id === documentId)
+    if (index === -1) return
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (targetIndex < 0 || targetIndex >= documents.length) return
+
+    const reordered = [...documents]
+    const [moved] = reordered.splice(index, 1)
+    reordered.splice(targetIndex, 0, moved)
+
+    const orderedIds = reordered.map((doc) => doc.document_id)
+    const orderMap = new Map(orderedIds.map((id, idx) => [id, idx]))
+
+    try {
+      setIsReordering(true)
+      await api.reorderDocuments(normalizeFolderId(activeFolderId), orderedIds)
+      setStats((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          documents: prev.documents.map((doc) => ({
+            ...doc,
+            folder_order: orderMap.has(doc.document_id) ? orderMap.get(doc.document_id) : doc.folder_order,
+          })),
+        }
+      })
+    } catch (error) {
+      showToast('error', 'Failed to reorder', error instanceof Error ? error.message : 'Unknown error')
+    } finally {
+      setIsReordering(false)
+    }
+  }
+
+  const getDocumentLabel = (doc: any) =>
+    doc.title || doc.original_filename || doc.filename || `Unnamed Document (${doc.document_id?.substring(0, 8)}...)`
+
+  const getDocumentCreatedAt = (doc: any) => {
+    if (!doc.created_at) return 0
+    if (typeof doc.created_at === 'number') {
+      return doc.created_at > 1_000_000_000_000 ? doc.created_at : doc.created_at * 1000
+    }
+    const parsed = Date.parse(doc.created_at)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+
+  const sortDocuments = (documents: any[]) => {
+    const sorted = [...documents]
+    if (sortMode === 'name') {
+      sorted.sort((a, b) => getDocumentLabel(a).localeCompare(getDocumentLabel(b)))
+      return sorted
+    }
+
+    if (sortMode === 'oldest') {
+      sorted.sort((a, b) => getDocumentCreatedAt(a) - getDocumentCreatedAt(b))
+      return sorted
+    }
+
+    if (sortMode === 'manual') {
+      sorted.sort((a, b) => {
+        const orderA = typeof a.folder_order === 'number' ? a.folder_order : Number.POSITIVE_INFINITY
+        const orderB = typeof b.folder_order === 'number' ? b.folder_order : Number.POSITIVE_INFINITY
+        if (orderA !== orderB) return orderA - orderB
+        return getDocumentCreatedAt(b) - getDocumentCreatedAt(a)
+      })
+      return sorted
+    }
+
+    sorted.sort((a, b) => getDocumentCreatedAt(b) - getDocumentCreatedAt(a))
+    return sorted
+  }
+
+  const filterDocuments = (documents: any[]) => {
+    let filtered = documents
+
+    if (activeFolderId !== 'all') {
+      if (activeFolderId === 'root') {
+        filtered = filtered.filter((doc) => !doc.folder_id)
+      } else {
+        filtered = filtered.filter((doc) => doc.folder_id === activeFolderId)
+      }
+    }
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      filtered = filtered.filter(
+        (doc) =>
+          getDocumentLabel(doc).toLowerCase().includes(query) ||
+          (doc.document_type || '').toLowerCase().includes(query)
+      )
+    }
+
+    return sortDocuments(filtered)
+  }
+
   const getFilteredDocuments = () => {
     if (!stats?.documents) return []
-    if (!searchQuery.trim()) return stats.documents
-
-    const query = searchQuery.toLowerCase()
-    return stats.documents.filter(
-      (doc) =>
-        (doc.original_filename || doc.filename || '').toLowerCase().includes(query) ||
-        ((doc as any).document_type || '').toLowerCase().includes(query)
-    )
+    return filterDocuments(stats.documents)
   }
 
   if (loading) {
@@ -415,6 +677,10 @@ export default function DatabaseTab() {
     return null
   }
 
+  const filteredDocuments = getFilteredDocuments()
+  const isManualReorder = sortMode === 'manual' && activeFolderId !== 'all'
+  const reorderDisabled = isReordering || !!searchQuery.trim()
+
   return (
     <div
       className={`relative transition-all ${isDragging ? 'is-dragging-ring rounded-lg' : ''}`}
@@ -424,11 +690,11 @@ export default function DatabaseTab() {
     >
       {isDragging && (
         <div
-          className="absolute inset-0 accent-selected border-2 border-dashed rounded-lg flex items-center justify-center z-10"
+          className="absolute inset-0 accent-selected border-2 border-dashed rounded-lg flex items-center justify-center z-10 pointer-events-none"
           style={{ borderColor: 'var(--primary-500)' }}
         >
           <div className="text-center">
-            <DocumentArrowUpIcon className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--primary-600)' }} />
+            <FileUp className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--primary-600)' }} />
             <p className="text-sm font-medium" style={{ color: 'var(--primary-700)' }}>
               Drop files to upload
             </p>
@@ -457,7 +723,7 @@ export default function DatabaseTab() {
                 <Loader size={14} label="Uploading..." />
               ) : (
                 <>
-                  <DocumentArrowUpIcon className="w-4 h-4" />
+                  <FileUp className="w-4 h-4" />
                   <span>Upload Files</span>
                 </>
               )}
@@ -472,11 +738,147 @@ export default function DatabaseTab() {
             />
           </label>
         </div>
+
+        <div className="rounded-lg border border-dashed border-secondary-200 dark:border-secondary-700 p-3 text-xs text-secondary-600 dark:text-secondary-400">
+          Drop files anywhere in this panel to upload. Drag documents onto a folder to move them.
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-secondary-900 dark:text-secondary-50">Folders</h3>
+            {!isCreatingFolder && (
+              <button
+                type="button"
+                onClick={() => setIsCreatingFolder(true)}
+                className="text-xs text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200 flex items-center gap-1"
+              >
+                <Plus className="w-4 h-4" />
+                New
+              </button>
+            )}
+          </div>
+
+          {isCreatingFolder && (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleCreateFolder()
+                  }
+                  if (e.key === 'Escape') {
+                    setIsCreatingFolder(false)
+                    setNewFolderName('')
+                  }
+                }}
+                placeholder="Folder name"
+                className="flex-1 px-3 py-2 text-sm border border-secondary-300 rounded-md focus:outline-none focus-primary"
+              />
+              <button
+                type="button"
+                onClick={handleCreateFolder}
+                className="button-primary text-xs"
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreatingFolder(false)
+                  setNewFolderName('')
+                }}
+                className="button-ghost text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setActiveFolderId('all')}
+              className={`w-full flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition ${activeFolderId === 'all'
+                ? 'border-primary-500 bg-secondary-50 dark:bg-secondary-900'
+                : 'border-secondary-200 dark:border-secondary-700 hover:bg-secondary-50 dark:hover:bg-secondary-900'
+                }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Folder className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                <span className="truncate">All documents</span>
+              </div>
+              <span className="text-xs text-secondary-500 dark:text-secondary-400">
+                {stats?.documents?.length || 0}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveFolderId('root')}
+              onDragOver={(event) => handleFolderDragOver(event, 'root')}
+              onDragLeave={handleFolderDragLeave}
+              onDrop={(event) => handleFolderDrop(event, 'root')}
+              className={`w-full flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition ${activeFolderId === 'root'
+                ? 'border-primary-500 bg-secondary-50 dark:bg-secondary-900'
+                : 'border-secondary-200 dark:border-secondary-700 hover:bg-secondary-50 dark:hover:bg-secondary-900'
+                } ${draggingOverFolderId === 'root' ? 'border-primary-400 bg-primary-50 dark:bg-secondary-800' : ''}`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Folder className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                <span className="truncate">Unfiled</span>
+              </div>
+              <span className="text-xs text-secondary-500 dark:text-secondary-400">
+                {stats?.documents?.filter((doc) => !doc.folder_id).length || 0}
+              </span>
+            </button>
+
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => setActiveFolderId(folder.id)}
+                onDragOver={(event) => handleFolderDragOver(event, folder.id)}
+                onDragLeave={handleFolderDragLeave}
+                onDrop={(event) => handleFolderDrop(event, folder.id)}
+                className={`w-full flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition ${activeFolderId === folder.id
+                  ? 'border-primary-500 bg-secondary-50 dark:bg-secondary-900'
+                  : 'border-secondary-200 dark:border-secondary-700 hover:bg-secondary-50 dark:hover:bg-secondary-900'
+                  } ${draggingOverFolderId === folder.id ? 'border-primary-400 bg-primary-50 dark:bg-secondary-800' : ''}`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Folder className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                  <span className="truncate">{folder.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-secondary-500 dark:text-secondary-400">
+                    {folder.document_count}
+                  </span>
+                  {enableDeleteOps && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setFolderDeleteTarget(folder)
+                      }}
+                      className="text-red-600 hover:text-red-700 p-1"
+                      title={`Delete ${folder.name}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Documents List */}
         {stats && stats.documents.length > 0 && (
           <>
             {!searchMode ? (
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-medium text-secondary-900 dark:text-secondary-50">Documents</h3>
                   <button
@@ -484,24 +886,38 @@ export default function DatabaseTab() {
                     className="text-secondary-600 dark:text-secondary-400 hover:text-secondary-900 dark:hover:text-secondary-200 p-1"
                     title="Search documents"
                   >
-                    <MagnifyingGlassIcon className="w-4 h-4" />
+                    <Search className="w-4 h-4" />
                   </button>
                 </div>
-                <button
-                  onClick={handleCleanupOrphans}
-                  className="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
-                  title="Remove orphaned chunks and entities not connected to any document"
-                >
-                  Cleanup
-                </button>
-                {enableDeleteOps && (
-                  <button
-                    onClick={handleClearDatabase}
-                    className="text-xs text-red-600 hover:text-red-700"
+                <div className="flex items-center gap-2">
+                  <select
+                    value={sortMode}
+                    onChange={(e) => setSortMode(e.target.value as typeof sortMode)}
+                    className="text-xs border border-secondary-300 rounded-md px-2 py-1 bg-white dark:bg-secondary-900 text-secondary-700 dark:text-secondary-200"
                   >
-                    Clear All
+                    <option value="newest">Newest</option>
+                    <option value="oldest">Oldest</option>
+                    <option value="name">Name</option>
+                    <option value="manual" disabled={activeFolderId === 'all'}>
+                      Manual
+                    </option>
+                  </select>
+                  <button
+                    onClick={handleCleanupOrphans}
+                    className="button-ghost py-1 px-2 text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 h-auto"
+                    title="Remove orphaned chunks and entities not connected to any document"
+                  >
+                    Cleanup
                   </button>
-                )}
+                  {enableDeleteOps && (
+                    <button
+                      onClick={handleClearDatabase}
+                      className="button-ghost py-1 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 h-auto"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -521,6 +937,18 @@ export default function DatabaseTab() {
                     className="w-full px-3 py-2 text-sm border border-secondary-300 rounded-md focus:outline-none focus-primary"
                   />
                 </div>
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as typeof sortMode)}
+                  className="text-xs border border-secondary-300 rounded-md px-2 py-1 bg-white dark:bg-secondary-900 text-secondary-700 dark:text-secondary-200"
+                >
+                  <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="name">Name</option>
+                  <option value="manual" disabled={activeFolderId === 'all'}>
+                    Manual
+                  </option>
+                </select>
                 <button
                   onClick={() => {
                     setSearchMode(false)
@@ -529,14 +957,20 @@ export default function DatabaseTab() {
                   className="text-secondary-600 hover:text-secondary-900 dark:text-secondary-400 dark:hover:text-secondary-200 p-1"
                   title="Close search"
                 >
-                  <XMarkIcon className="w-4 h-4" />
+                  <X className="w-4 h-4" />
                 </button>
               </div>
             )}
 
 
+            {isManualReorder && searchQuery.trim() && (
+              <div className="text-xs text-secondary-500 dark:text-secondary-400">
+                Manual ordering is disabled while searching.
+              </div>
+            )}
+
             <div className="space-y-2">
-              {getFilteredDocuments().map((doc, index) => {
+              {filteredDocuments.map((doc, index) => {
                 const isActive = doc.document_id === selectedDocumentId
                 const statusLabel = formatStatus(doc)
                 const status = doc.processing_status
@@ -550,12 +984,17 @@ export default function DatabaseTab() {
                     key={index}
                     draggable
                     onDragStart={(e) => {
-                      e.dataTransfer.effectAllowed = 'copy'
+                      e.dataTransfer.effectAllowed = 'move'
                       e.dataTransfer.setData('application/json', JSON.stringify({
                         type: 'document',
                         document_id: doc.document_id,
-                        filename: doc.original_filename || doc.filename,
+                        filename: doc.title || doc.original_filename || doc.filename,
                       }))
+                      setDraggingDocumentId(doc.document_id)
+                    }}
+                    onDragEnd={() => {
+                      setDraggingDocumentId(null)
+                      setDraggingOverFolderId(null)
                     }}
                     onClick={() => handleSelectDocument(doc.document_id)}
                     className={`card p-3 flex flex-col gap-2 transition-all cursor-move group ${isActive
@@ -571,14 +1010,19 @@ export default function DatabaseTab() {
                             <Loader size={14} />
                           )}
                           <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50 truncate">
-                            {doc.original_filename || doc.filename || `Unnamed Document (${doc.document_id.substring(0, 8)}...)`}
+                            {getDocumentLabel(doc)}
                           </p>
+                          {activeFolderId === 'all' && doc.folder_name && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary-100 text-secondary-700 dark:bg-secondary-900 dark:text-secondary-300">
+                              {doc.folder_name}
+                            </span>
+                          )}
                         </div>
                         <p className={`text-xs mt-1 ${isStuck && (status === 'queued' || status === 'staged') ? 'text-red-600 dark:text-red-400' : 'text-secondary-600 dark:text-secondary-400'}`}>
                           {status === 'queued' || status === 'staged'
                             ? (isStuck ? 'Queue stuck - processing may have crashed' : 'Processing queued')
-                            : (doc as any).document_type
-                              ? (doc as any).document_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+                            : doc.document_type
+                              ? doc.document_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
                               : 'Reading document...'}
                         </p>
                         {statusLabel && status !== 'queued' && status !== 'staged' && (
@@ -587,18 +1031,48 @@ export default function DatabaseTab() {
                           </p>
                         )}
                       </div>
-                      {enableDeleteOps && (
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            handleDeleteDocument(doc.document_id)
-                          }}
-                          className="text-red-600 hover:text-red-700 p-1 flex-shrink-0"
-                          title={`Delete ${doc.original_filename || doc.filename}`}
-                        >
-                          <TrashIcon className="w-4 h-4" />
-                        </button>
-                      )}
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {isManualReorder && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void handleReorderDocument(doc.document_id, 'up')
+                              }}
+                              disabled={reorderDisabled || index === 0}
+                              className="text-secondary-600 hover:text-secondary-900 p-1 disabled:opacity-40"
+                              title="Move up"
+                            >
+                              <ChevronUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void handleReorderDocument(doc.document_id, 'down')
+                              }}
+                              disabled={reorderDisabled || index >= filteredDocuments.length - 1}
+                              className="text-secondary-600 hover:text-secondary-900 p-1 disabled:opacity-40"
+                              title="Move down"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        {enableDeleteOps && (
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleDeleteDocument(doc.document_id)
+                            }}
+                            className="text-red-600 hover:text-red-700 p-1"
+                            title={`Delete ${getDocumentLabel(doc)}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {status === 'processing' && progress !== null && (
@@ -636,9 +1110,20 @@ export default function DatabaseTab() {
                   </div>
                 )
               })}
-              {searchQuery.trim() && getFilteredDocuments().length === 0 && (
+              {searchQuery.trim() && filteredDocuments.length === 0 && (
                 <div className="text-center text-secondary-600 dark:text-secondary-400 py-6">
                   <p className="text-sm">No documents match &quot;{searchQuery}&quot;</p>
+                </div>
+              )}
+              {!searchQuery.trim() && filteredDocuments.length === 0 && (
+                <div className="text-center text-secondary-600 dark:text-secondary-400 py-6">
+                  <p className="text-sm">
+                    {activeFolderId === 'root'
+                      ? 'No unfiled documents'
+                      : activeFolderId === 'all'
+                        ? 'No documents found'
+                        : 'No documents in this folder'}
+                  </p>
                 </div>
               )}
             </div>
@@ -660,6 +1145,23 @@ export default function DatabaseTab() {
           onClose={handleDialogClose}
           onUploadNew={handleUploadNew}
           onUpdateExisting={handleUpdateExisting}
+        />
+      )}
+
+      {folderDeleteTarget && (
+        <FolderDeleteDialog
+          folder={folderDeleteTarget}
+          onClose={() => setFolderDeleteTarget(null)}
+          onMoveToRoot={() => handleDeleteFolder('move_to_root')}
+          onDeleteDocuments={() => handleDeleteFolder('delete_documents')}
+          disableDeleteDocuments={!enableDeleteOps}
+        />
+      )}
+
+      {showClearDialog && (
+        <ClearDatabaseDialog
+          onClose={() => setShowClearDialog(false)}
+          onConfirm={performClearDatabase}
         />
       )}
     </div>

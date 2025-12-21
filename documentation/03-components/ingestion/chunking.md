@@ -1,15 +1,20 @@
 # Chunking Strategy Component
 
 Semantic text chunking with configurable size, overlap, and provenance tracking.
+Includes token-aware chunkers for structured HTML and Docling outputs.
 
 ## Overview
 
-The chunking component segments document text into overlapping chunks suitable for embedding and retrieval. It uses RecursiveCharacterTextSplitter to preserve semantic boundaries (paragraphs, sentences) while maintaining configurable chunk sizes and overlap for context continuity.
+The chunking component segments document text into overlapping chunks suitable for embedding and retrieval. It uses:
+- **HTML heading chunker** for Zendesk/Confluence-style pages (token-aware, section-preserving)
+- **Docling Hybrid chunker** for structured Docling output (token-aware)
+- **RecursiveCharacterTextSplitter** for legacy character-based chunking
 
 **Location**: `core/chunking.py`
-**Strategy**: RecursiveCharacterTextSplitter (LangChain)
-**Default Size**: 800 characters
-**Default Overlap**: 200 characters
+**Strategy**: HTML heading, Docling Hybrid, or RecursiveCharacterTextSplitter
+**Default Char Size**: 1200 characters
+**Default Char Overlap**: 150 characters
+**Default Token Budget**: target 800, min 180, max 1000, overlap 100
 
 ## Architecture
 
@@ -46,77 +51,43 @@ The chunking component segments document text into overlapping chunks suitable f
 └──────────────────────────────────────────────────┘
 ```
 
+## Strategy Selection
+
+Chunking strategy is selected by file type and settings:
+
+- HTML (`.html`, `.htm`, `.xhtml`): `chunker_strategy_html` (default `html_heading`)
+- PDF (`.pdf`): `chunker_strategy_pdf` (default `docling_hybrid`)
+- All other types: legacy character-based chunker
+
+Note: Docling Hybrid chunking requires Docling conversion (`DOCUMENT_CONVERSION_PROVIDER=docling`)
+so the `docling_document` payload is available. Otherwise the pipeline falls back to legacy chunking.
+
 ## Core Implementation
 
 ### RecursiveCharacterTextSplitter
 
 ```python
 # core/chunking.py
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from typing import List
-from config.settings import settings
+from core.chunking import document_chunker
 
-def chunk_text(
-    text: str,
-    chunk_size: int = None,
-    chunk_overlap: int = None,
-    separators: List[str] = None
-) -> List[str]:
-    """
-    Split text into semantic chunks with overlap.
-    
-    Args:
-        text: Input text to chunk
-        chunk_size: Target chunk size in characters (default from settings)
-        chunk_overlap: Overlap between chunks (default from settings)
-        separators: Custom separator hierarchy (default: paragraph → sentence → word)
-    
-    Returns:
-        List of text chunks
-    
-    Example:
-        >>> text = "Paragraph one.\\n\\nParagraph two.\\n\\nParagraph three."
-        >>> chunks = chunk_text(text, chunk_size=50, chunk_overlap=10)
-        >>> len(chunks)
-        3
-    """
-    # Use settings defaults if not provided
-    if chunk_size is None:
-        chunk_size = settings.chunk_size
-    
-    if chunk_overlap is None:
-        chunk_overlap = settings.chunk_overlap
-    
-    if separators is None:
-        separators = [
-            "\n\n",  # Paragraph breaks
-            "\n",    # Line breaks
-            ". ",    # Sentence endings
-            " ",     # Word boundaries
-            ""       # Character-level fallback
-        ]
-    
-    # Create splitter
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-        separators=separators,
-        keep_separator=True
-    )
-    
-    # Split text
-    chunks = splitter.split_text(text)
-    
-    return chunks
+chunks = document_chunker.chunk_text(
+    text=content,
+    document_id=doc_id,
+    source_metadata={"file_extension": ".html"},
+    docling_document=docling_document,
+)
 ```
 
 ### Configuration
 
 ```bash
 # Environment variables
-CHUNK_SIZE=800
-CHUNK_OVERLAP=200
+CHUNK_SIZE=1200
+CHUNK_OVERLAP=150
+CHUNK_TARGET_TOKENS=800
+CHUNK_MIN_TOKENS=180
+CHUNK_MAX_TOKENS=1000
+CHUNK_OVERLAP_TOKENS=100
 
 # Alternative configurations:
 
@@ -272,11 +243,11 @@ def chunk_by_tokens(
 ### Add Position Metadata
 
 ```python
+from core.chunking import document_chunker
+
 def chunk_with_metadata(
     text: str,
-    document_id: str,
-    chunk_size: int = 800,
-    chunk_overlap: int = 200
+    document_id: str
 ) -> List[Dict]:
     """
     Chunk text and add position metadata.
@@ -291,31 +262,22 @@ def chunk_with_metadata(
             - end_char: End position in document
             - word_count: Number of words
     """
-    chunks = chunk_text(text, chunk_size, chunk_overlap)
-    
+    chunks = document_chunker.chunk_text(text, document_id)
     chunk_objects = []
-    current_pos = 0
-    
-    for i, chunk_text in enumerate(chunks):
-        # Find chunk position in original text
-        start_pos = text.find(chunk_text, current_pos)
-        if start_pos == -1:
-            start_pos = current_pos
-        
-        end_pos = start_pos + len(chunk_text)
-        
+    for chunk in chunks:
+        metadata = chunk.get("metadata", {}) or {}
+        chunk_text = chunk.get("content", "")
         chunk_obj = {
-            "id": f"{document_id}_chunk_{i}",
+            "id": chunk.get("chunk_id"),
             "text": chunk_text,
             "document_id": document_id,
-            "chunk_index": i,
-            "start_char": start_pos,
-            "end_char": end_pos,
+            "chunk_index": chunk.get("chunk_index"),
+            "start_char": metadata.get("start_offset"),
+            "end_char": metadata.get("end_offset"),
             "word_count": len(chunk_text.split())
         }
         
         chunk_objects.append(chunk_obj)
-        current_pos = start_pos + 1
     
     return chunk_objects
 ```
@@ -479,7 +441,7 @@ def compute_overlap(
 ### Basic Chunking
 
 ```python
-from core.chunking import chunk_text
+from core.chunking import document_chunker
 
 text = """
 This is the first paragraph with important information.
@@ -489,32 +451,28 @@ This is the second paragraph with more details.
 This is the third paragraph concluding the document.
 """
 
-chunks = chunk_text(text, chunk_size=100, chunk_overlap=20)
+chunks = document_chunker.chunk_text(text, "demo_doc")
 
 for i, chunk in enumerate(chunks):
-    print(f"Chunk {i}: {len(chunk)} chars")
-    print(chunk[:50] + "...")
+    content = chunk["content"]
+    print(f"Chunk {i}: {len(content)} chars")
+    print(content[:50] + "...")
     print()
 ```
 
 ### Document Processing
 
 ```python
-from core.chunking import chunk_with_metadata
+from core.chunking import document_chunker
 
 def process_document(document_text: str, document_id: str):
     """Process document into chunks with metadata."""
-    chunks = chunk_with_metadata(
-        text=document_text,
-        document_id=document_id,
-        chunk_size=800,
-        chunk_overlap=200
-    )
+    chunks = document_chunker.chunk_text(document_text, document_id)
     
     print(f"Created {len(chunks)} chunks")
     
     # Analyze
-    stats = analyze_chunks([c["text"] for c in chunks])
+    stats = analyze_chunks([c["content"] for c in chunks])
     print(f"Average chunk size: {stats['avg_length']:.0f} chars")
     
     return chunks
@@ -526,13 +484,14 @@ def process_document(document_text: str, document_id: str):
 
 ```python
 import time
+from core.chunking import document_chunker
 
 def benchmark_chunking(text: str, iterations: int = 100):
     """Benchmark chunking performance."""
     start = time.time()
     
     for _ in range(iterations):
-        chunks = chunk_text(text)
+        chunks = document_chunker.chunk_text(text, "bench_doc")
     
     elapsed = time.time() - start
     avg_time = elapsed / iterations
@@ -571,31 +530,38 @@ def estimate_memory_usage(num_chunks: int, avg_chunk_size: int) -> int:
 
 ```python
 import pytest
-from core.chunking import chunk_text, chunk_with_metadata
+from config.settings import settings
+from core.chunking import document_chunker
 
 def test_basic_chunking():
     text = "A" * 1000
-    chunks = chunk_text(text, chunk_size=200, chunk_overlap=50)
+    settings.chunk_size = 200
+    settings.chunk_overlap = 50
+    chunks = document_chunker.chunk_text(text, "doc-basic")
     
     assert len(chunks) > 1
-    assert all(len(chunk) <= 250 for chunk in chunks)  # Allow some flexibility
+    assert all(len(chunk["content"]) <= 250 for chunk in chunks)  # Allow some flexibility
 
 def test_chunk_overlap():
     text = "Sentence one. Sentence two. Sentence three."
-    chunks = chunk_text(text, chunk_size=20, chunk_overlap=10)
+    settings.chunk_size = 20
+    settings.chunk_overlap = 10
+    chunks = document_chunker.chunk_text(text, "doc-overlap")
     
     # Verify overlap exists
     assert len(chunks) > 1
     for i in range(len(chunks) - 1):
         # Check if end of chunk N overlaps with start of chunk N+1
-        overlap_exists = chunks[i][-10:] in chunks[i + 1][:20]
+        overlap_exists = chunks[i]["content"][-10:] in chunks[i + 1]["content"][:20]
         assert overlap_exists
 
 def test_chunk_metadata():
     text = "Test document content."
-    chunks = chunk_with_metadata(text, "doc123", chunk_size=10, chunk_overlap=2)
+    settings.chunk_size = 10
+    settings.chunk_overlap = 2
+    chunks = document_chunker.chunk_text(text, "doc123")
     
-    assert all("id" in chunk for chunk in chunks)
+    assert all("chunk_id" in chunk for chunk in chunks)
     assert all("chunk_index" in chunk for chunk in chunks)
     assert all(chunk["document_id"] == "doc123" for chunk in chunks)
 ```

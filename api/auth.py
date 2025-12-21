@@ -189,14 +189,19 @@ async def require_current_user(
 
 async def require_admin(
     user_id: Optional[str] = Depends(get_current_user),
-    authorization: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    admin_session: Optional[str] = Cookie(None),
 ) -> str:
     """
     Require admin privileges. 
     Accepts:
     1. Legacy Admin Token (via Authorization header or env var matching)
-    2. Authenticated User with role='admin'
+    2. Valid admin session cookie
+    3. Authenticated User with role='admin'
     """
+    if admin_session and validate_admin_session(admin_session):
+        return "admin_session"
+
     # 1. Check Legacy Token
     # verify_token raises 401 if invalid/missing, so we catch it
     try:

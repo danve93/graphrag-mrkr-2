@@ -92,6 +92,13 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
             weights_used=weights_before
         )
         
+        # Record feedback for Routing Accuracy metric
+        try:
+            from core.routing_metrics import routing_metrics
+            routing_metrics.record_user_feedback(correct=(request.rating == 1))
+        except Exception as e:
+            logger.warning(f"Failed to record routing accuracy feedback: {e}")
+        
         # Get learner metrics
         learner_metrics = learner.get_metrics()
         

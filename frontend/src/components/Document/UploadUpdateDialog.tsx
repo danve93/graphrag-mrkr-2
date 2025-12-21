@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon, DocumentTextIcon, ArrowPathIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline'
+import { X, FileText, RefreshCw, Search } from 'lucide-react'
 import { api } from '@/lib/api'
 import Loader from '@/components/Utils/Loader'
 
@@ -143,7 +143,7 @@ export default function UploadUpdateDialog({
                         className="p-1 rounded hover:bg-secondary-700"
                         style={{ color: 'var(--text-secondary)' }}
                     >
-                        <XMarkIcon className="w-5 h-5" />
+                        <X className="w-5 h-5" />
                     </button>
                 </div>
 
@@ -154,7 +154,7 @@ export default function UploadUpdateDialog({
                         className="flex items-center gap-3 p-3 rounded-lg mb-4"
                         style={{ backgroundColor: 'var(--bg-tertiary)' }}
                     >
-                        <DocumentTextIcon className="w-5 h-5" style={{ color: 'var(--accent-primary)' }} />
+                        <FileText className="w-5 h-5" style={{ color: 'var(--accent-primary)' }} />
                         <div className="flex-1 min-w-0">
                             <p
                                 className="text-sm font-medium truncate"
@@ -171,7 +171,7 @@ export default function UploadUpdateDialog({
                     {/* Search Input - Always visible */}
                     <div className="relative mb-4">
                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <MagnifyingGlassIcon className="h-4 w-4 text-secondary-400" />
+                            <Search className="h-4 w-4 text-secondary-400" />
                         </div>
                         <input
                             type="text"
@@ -198,7 +198,7 @@ export default function UploadUpdateDialog({
                                 className="mt-2 text-sm flex items-center gap-1 mx-auto"
                                 style={{ color: 'var(--accent-primary)' }}
                             >
-                                <ArrowPathIcon className="w-4 h-4" /> Retry
+                                <RefreshCw className="w-4 h-4" /> Retry
                             </button>
                         </div>
                     ) : displayedDocs.length === 0 ? (

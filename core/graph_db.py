@@ -709,8 +709,15 @@ Reply with ONLY one of:
             )
             
             orphan_ids = [record["id"] for record in result]
-            logger.info(f"Found {len(orphan_ids)} orphan/micro-cluster nodes (size < {min_cluster_size})")
-            return orphan_ids
+            # Deduplicate while preserving order
+            seen = set()
+            unique_orphan_ids = []
+            for oid in orphan_ids:
+                if oid not in seen:
+                    seen.add(oid)
+                    unique_orphan_ids.append(oid)
+            logger.info(f"Found {len(unique_orphan_ids)} orphan/micro-cluster nodes (size < {min_cluster_size})")
+            return unique_orphan_ids
 
     def update_document_summary(
         self,
@@ -778,6 +785,40 @@ Reply with ONLY one of:
                 doc_id=doc_id,
                 metadata=metadata,
             )
+
+    def update_document_details(
+        self,
+        doc_id: str,
+        title: Optional[str] = None,
+        document_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update document title and/or document_type."""
+        if title is None and document_type is None:
+            return {}
+
+        set_clauses = []
+        params: Dict[str, Any] = {"doc_id": doc_id}
+        if title is not None:
+            set_clauses.append("d.title = $title")
+            params["title"] = title
+        if document_type is not None:
+            set_clauses.append("d.document_type = $document_type")
+            params["document_type"] = document_type
+
+        query = f"""
+            MATCH (d:Document {{id: $doc_id}})
+            SET {", ".join(set_clauses)}
+            RETURN d.title as title, d.document_type as document_type
+        """
+
+        with self.session_scope() as session:
+            record = session.run(query, **params).single()
+            if not record:
+                return {}
+            return {
+                "title": record.get("title"),
+                "document_type": record.get("document_type"),
+            }
 
     # Temporal Graph Methods
 
@@ -1708,7 +1749,7 @@ Reply with ONLY one of:
                     YIELD node, score
                     MATCH (d:Document)-[:HAS_CHUNK]->(node)
                     RETURN node.id as chunk_id, node.content as content, score as similarity,
-                           coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                           coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id
                     """,
                     query_embedding=query_embedding,
                     top_k=top_k,
@@ -1727,7 +1768,7 @@ Reply with ONLY one of:
                     MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
                     WHERE c.embedding IS NOT NULL
                     RETURN c.id as chunk_id, c.content as content, c.embedding as embedding,
-                           coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                           coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id
                     """
                 )
                 candidates = [record.data() for record in result]
@@ -1800,7 +1841,7 @@ Reply with ONLY one of:
                              END
                      END as calculated_similarity
                 RETURN DISTINCT related.id as chunk_id, related.content as content,
-                       distance, coalesce(d.original_filename, d.filename) as document_name, d.id as document_id,
+                       distance, coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id,
                        calculated_similarity as similarity
                 ORDER BY distance ASC, calculated_similarity DESC
                 """
@@ -1988,27 +2029,46 @@ Reply with ONLY one of:
             )
             return {record["hash"]: record["chunk_id"] for record in result if record["hash"]}
 
-    def get_document_chunking_params(self, doc_id: str) -> Optional[Dict[str, int]]:
+    def get_document_chunking_params(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the chunking parameters used when the document was originally ingested.
         
         Returns:
-            Dict with chunk_size_used and chunk_overlap_used, or None if not found.
+            Dict with chunking parameters, or None if not found.
         """
         with self.session_scope() as session:
             result = session.run(
                 """
                 MATCH (d:Document {id: $doc_id})
-                RETURN d.chunk_size_used as chunk_size, d.chunk_overlap_used as chunk_overlap
+                RETURN d.chunk_size_used as chunk_size,
+                       d.chunk_overlap_used as chunk_overlap,
+                       d.chunk_target_tokens as chunk_target_tokens,
+                       d.chunk_min_tokens as chunk_min_tokens,
+                       d.chunk_max_tokens as chunk_max_tokens,
+                       d.chunk_overlap_tokens as chunk_overlap_tokens,
+                       d.chunk_tokenizer as chunk_tokenizer,
+                       d.chunk_include_heading_path as chunk_include_heading_path,
+                       d.chunker_strategy_pdf as chunker_strategy_pdf,
+                       d.chunker_strategy_html as chunker_strategy_html
                 """,
                 doc_id=doc_id,
             )
             record = result.single()
-            if record and record["chunk_size"] is not None:
-                return {
+            if record:
+                params = {
                     "chunk_size_used": record["chunk_size"],
                     "chunk_overlap_used": record["chunk_overlap"],
+                    "chunk_target_tokens": record["chunk_target_tokens"],
+                    "chunk_min_tokens": record["chunk_min_tokens"],
+                    "chunk_max_tokens": record["chunk_max_tokens"],
+                    "chunk_overlap_tokens": record["chunk_overlap_tokens"],
+                    "chunk_tokenizer": record["chunk_tokenizer"],
+                    "chunk_include_heading_path": record["chunk_include_heading_path"],
+                    "chunker_strategy_pdf": record["chunker_strategy_pdf"],
+                    "chunker_strategy_html": record["chunker_strategy_html"],
                 }
+                if any(value is not None for value in params.values()):
+                    return params
             return None
 
     def delete_chunks_with_entity_cleanup(self, chunk_ids: List[str]) -> Dict[str, int]:
@@ -2516,6 +2576,9 @@ Reply with ONLY one of:
         query = f"""
             MATCH (e:Entity)
             {where_clause}
+            OPTIONAL MATCH (e)-[r:RELATED_TO]-()
+            WITH e, count(r) as manual_degree
+            ORDER BY manual_degree DESC, e.id DESC
             WITH collect(e)[0..$limit] AS selected
             UNWIND selected AS e
             OPTIONAL MATCH (e)-[r:RELATED_TO]-(n:Entity)
@@ -2535,7 +2598,7 @@ Reply with ONLY one of:
                 relatedEdges,
                 node,
                 degree,
-                collect(DISTINCT CASE WHEN d.id IS NOT NULL THEN {{doc_id: d.id, doc_name: coalesce(d.original_filename, d.filename)}} ELSE NULL END) AS docs
+                collect(DISTINCT CASE WHEN d.id IS NOT NULL THEN {{document_id: d.id, document_name: coalesce(d.title, d.original_filename, d.filename)}} ELSE NULL END) AS docs
             WITH
                 allNodes,
                 relatedEdges,
@@ -2560,7 +2623,7 @@ Reply with ONLY one of:
             WITH
                 nodes,
                 rel,
-                collect(DISTINCT CASE WHEN tu IS NULL THEN NULL ELSE {{id: tu, doc_id: CASE WHEN d.id IS NOT NULL THEN d.id ELSE 'unknown' END, doc_name: CASE WHEN d.id IS NOT NULL THEN coalesce(d.original_filename, d.filename) ELSE 'unknown' END}} END) AS textUnits
+                collect(DISTINCT CASE WHEN tu IS NULL THEN NULL ELSE {{id: tu, doc_id: CASE WHEN d.id IS NOT NULL THEN d.id ELSE 'unknown' END, doc_name: CASE WHEN d.id IS NOT NULL THEN coalesce(d.title, d.original_filename, d.filename) ELSE 'unknown' END}} END) AS textUnits
             RETURN
                 nodes,
                 collect(DISTINCT {{
@@ -2692,6 +2755,9 @@ Reply with ONLY one of:
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Chunk) ON (c.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.id)")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.name)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (f:Folder) ON (f.id)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (f:Folder) ON (f.name)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (d:Document) ON (d.folder_id)")
             
             # Create vector index for Entity embeddings
             # Note: 1536 dimensions for text-embedding-ada-002
@@ -2782,7 +2848,7 @@ Reply with ONLY one of:
                     WHERE c.id IN $candidate_ids
                     WITH c, d, gds.similarity.cosine(c.embedding, $query_embedding) AS similarity
                     RETURN c.id as chunk_id, c.content as content, similarity,
-                           coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                           coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id
                     ORDER BY similarity DESC
                     LIMIT $top_k
                     """,
@@ -2804,7 +2870,7 @@ Reply with ONLY one of:
                         MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
                         WHERE c.id IN $candidate_ids AND c.embedding IS NOT NULL
                         RETURN c.id as chunk_id, c.content as content, c.embedding as embedding,
-                               coalesce(d.original_filename, d.filename) as document_name, d.id as document_id
+                               coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id
                         """,
                         candidate_ids=candidate_chunk_ids,
                     )
@@ -2882,7 +2948,7 @@ Reply with ONLY one of:
                 # Build Cypher query with optional document filter
                 if allowed_document_ids:
                     cypher = """
-                    CALL db.index.fulltext.queryNodes('chunk_content_fulltext', $query)
+                    CALL db.index.fulltext.queryNodes('chunk_content_fulltext', $search_query)
                     YIELD node, score
                     MATCH (d:Document)-[:HAS_CHUNK]->(node)
                     WHERE d.id IN $allowed_doc_ids
@@ -2890,7 +2956,7 @@ Reply with ONLY one of:
                            node.content AS content,
                            node.chunk_index AS chunk_index,
                            d.id AS document_id,
-                           d.filename AS document_name,
+                           coalesce(d.title, d.original_filename, d.filename) AS document_name,
                            d.original_filename AS filename,
                            score AS keyword_score
                     ORDER BY score DESC
@@ -2898,26 +2964,26 @@ Reply with ONLY one of:
                     """
                     result = session.run(
                         cypher,
-                        query=search_query,
+                        search_query=search_query,
                         allowed_doc_ids=allowed_document_ids,
                         limit=top_k,
                     )
                 else:
                     cypher = """
-                    CALL db.index.fulltext.queryNodes('chunk_content_fulltext', $query)
+                    CALL db.index.fulltext.queryNodes('chunk_content_fulltext', $search_query)
                     YIELD node, score
                     MATCH (d:Document)-[:HAS_CHUNK]->(node)
                     RETURN node.id AS chunk_id,
                            node.content AS content,
                            node.chunk_index AS chunk_index,
                            d.id AS document_id,
-                           d.filename AS document_name,
+                           coalesce(d.title, d.original_filename, d.filename) AS document_name,
                            d.original_filename AS filename,
                            score AS keyword_score
                     ORDER BY score DESC
                     LIMIT $limit
                     """
-                    result = session.run(cypher, query=search_query, limit=top_k)
+                    result = session.run(cypher, search_query=search_query, limit=top_k)
 
                 chunks = []
                 for record in result:
@@ -3581,7 +3647,7 @@ Reply with ONLY one of:
                 WHERE e.id IN $entity_ids
                 OPTIONAL MATCH (d:Document)-[:HAS_CHUNK]->(c)
                 RETURN DISTINCT c.id as chunk_id, c.content as content,
-                       coalesce(d.original_filename, d.filename) as document_name, d.id as document_id,
+                       coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id,
                        collect(e.name) as contained_entities
                 """,
                 entity_ids=entity_ids,
@@ -4377,6 +4443,7 @@ Reply with ONLY one of:
                 OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
                 WITH d, count(c) as chunk_count
                 RETURN d.id as document_id,
+                       d.title as title,
                        d.filename as filename,
                        coalesce(d.original_filename, d.filename) as original_filename,
                        d.created_at as created_at,
@@ -4384,7 +4451,10 @@ Reply with ONLY one of:
               coalesce(d.processing_stage, 'idle') as processing_stage,
               coalesce(d.processing_progress, 0.0) as processing_progress,
               chunk_count,
-              d.document_type as document_type
+              d.document_type as document_type,
+              d.folder_id as folder_id,
+              d.folder_name as folder_name,
+              d.folder_order as folder_order
                 ORDER BY d.created_at DESC
                 """
             )
@@ -4398,6 +4468,253 @@ Reply with ONLY one of:
                 "documents": documents,
             }
 
+    def list_folders(self) -> List[Dict[str, Any]]:
+        """List all folders with document counts."""
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                MATCH (f:Folder)
+                OPTIONAL MATCH (d:Document {folder_id: f.id})
+                RETURN f.id as id,
+                       f.name as name,
+                       f.created_at as created_at,
+                       count(d) as document_count
+                ORDER BY f.name ASC
+                """
+            )
+            return [record.data() for record in result]
+
+    def create_folder(self, name: str) -> Dict[str, Any]:
+        """Create a new folder with a unique name."""
+        import uuid
+        import time
+
+        folder_name = (name or "").strip()
+        if not folder_name:
+            raise ValueError("Folder name cannot be empty")
+
+        with self.session_scope() as session:
+            existing = session.run(
+                "MATCH (f:Folder {name: $name}) RETURN f.id as id",
+                name=folder_name,
+            ).single()
+            if existing:
+                raise ValueError("Folder name already exists")
+
+            folder_id = str(uuid.uuid4())
+            created_at = time.time()
+
+            session.run(
+                """
+                CREATE (f:Folder {id: $id, name: $name, created_at: $created_at})
+                """,
+                id=folder_id,
+                name=folder_name,
+                created_at=created_at,
+            )
+
+            return {
+                "id": folder_id,
+                "name": folder_name,
+                "created_at": created_at,
+                "document_count": 0,
+            }
+
+    def rename_folder(self, folder_id: str, name: str) -> Dict[str, Any]:
+        """Rename a folder and update document metadata."""
+        folder_name = (name or "").strip()
+        if not folder_name:
+            raise ValueError("Folder name cannot be empty")
+
+        with self.session_scope() as session:
+            existing = session.run(
+                "MATCH (f:Folder {name: $name}) RETURN f.id as id",
+                name=folder_name,
+            ).single()
+            if existing and existing.get("id") != folder_id:
+                raise ValueError("Folder name already exists")
+
+            record = session.run(
+                """
+                MATCH (f:Folder {id: $id})
+                SET f.name = $name
+                RETURN f.id as id, f.name as name, f.created_at as created_at
+                """,
+                id=folder_id,
+                name=folder_name,
+            ).single()
+
+            if not record:
+                raise ValueError("Folder not found")
+
+            session.run(
+                """
+                MATCH (d:Document {folder_id: $folder_id})
+                SET d.folder_name = $name
+                """,
+                folder_id=folder_id,
+                name=folder_name,
+            )
+
+            return {
+                "id": record.get("id"),
+                "name": record.get("name"),
+                "created_at": record.get("created_at"),
+            }
+
+    def delete_folder(self, folder_id: str, mode: str) -> Dict[str, Any]:
+        """Delete a folder, moving or deleting its documents."""
+        with self.session_scope() as session:
+            record = session.run(
+                "MATCH (f:Folder {id: $id}) RETURN f.id as id, f.name as name",
+                id=folder_id,
+            ).single()
+            if not record:
+                raise ValueError("Folder not found")
+
+            doc_records = session.run(
+                "MATCH (d:Document {folder_id: $folder_id}) RETURN d.id as id",
+                folder_id=folder_id,
+            )
+            doc_ids = [r["id"] for r in doc_records if r.get("id")]
+
+        documents_deleted = 0
+        documents_moved = 0
+
+        if mode == "delete_documents":
+            for doc_id in doc_ids:
+                self.delete_document(doc_id)
+                documents_deleted += 1
+        elif mode == "move_to_root":
+            with self.session_scope() as session:
+                session.run(
+                    """
+                    MATCH (d:Document {folder_id: $folder_id})
+                    REMOVE d.folder_id, d.folder_name, d.folder_order
+                    """,
+                    folder_id=folder_id,
+                )
+                documents_moved = len(doc_ids)
+        else:
+            raise ValueError("Invalid delete mode")
+
+        with self.session_scope() as session:
+            session.run(
+                """
+                MATCH (f:Folder {id: $id})
+                DETACH DELETE f
+                """,
+                id=folder_id,
+            )
+
+        return {
+            "folder_id": folder_id,
+            "documents_deleted": documents_deleted,
+            "documents_moved": documents_moved,
+            "document_ids": doc_ids,
+        }
+
+    def assign_document_folder(self, doc_id: str, folder_id: Optional[str]) -> Dict[str, Any]:
+        """Assign a document to a folder or move it to root."""
+        with self.session_scope() as session:
+            doc_record = session.run(
+                "MATCH (d:Document {id: $doc_id}) RETURN d.id as id",
+                doc_id=doc_id,
+            ).single()
+            if not doc_record:
+                raise ValueError("Document not found")
+
+            if folder_id:
+                folder_record = session.run(
+                    "MATCH (f:Folder {id: $folder_id}) RETURN f.id as id, f.name as name",
+                    folder_id=folder_id,
+                ).single()
+                if not folder_record:
+                    raise ValueError("Folder not found")
+
+                max_record = session.run(
+                    """
+                    MATCH (d:Document)
+                    WHERE d.folder_id = $folder_id AND d.folder_order IS NOT NULL
+                    RETURN max(d.folder_order) as max_order
+                    """,
+                    folder_id=folder_id,
+                ).single()
+                max_order = max_record.get("max_order") if max_record else None
+                next_order = int(max_order + 1) if max_order is not None else 0
+
+                session.run(
+                    """
+                    MATCH (d:Document {id: $doc_id})
+                    OPTIONAL MATCH (d)-[r:IN_FOLDER]->(:Folder)
+                    DELETE r
+                    WITH d
+                    MATCH (f:Folder {id: $folder_id})
+                    MERGE (d)-[:IN_FOLDER]->(f)
+                    SET d.folder_id = $folder_id,
+                        d.folder_name = $folder_name,
+                        d.folder_order = $folder_order
+                    """,
+                    doc_id=doc_id,
+                    folder_id=folder_id,
+                    folder_name=folder_record.get("name"),
+                    folder_order=next_order,
+                )
+
+                return {
+                    "folder_id": folder_id,
+                    "folder_name": folder_record.get("name"),
+                    "folder_order": next_order,
+                }
+
+            max_record = session.run(
+                """
+                MATCH (d:Document)
+                WHERE d.folder_id IS NULL
+                RETURN max(d.folder_order) as max_order
+                """
+            ).single()
+            max_order = max_record.get("max_order") if max_record else None
+            next_order = int(max_order + 1) if max_order is not None else 0
+
+            session.run(
+                """
+                MATCH (d:Document {id: $doc_id})
+                OPTIONAL MATCH (d)-[r:IN_FOLDER]->(:Folder)
+                DELETE r
+                SET d.folder_id = null,
+                    d.folder_name = null,
+                    d.folder_order = $folder_order
+                """,
+                doc_id=doc_id,
+                folder_order=next_order,
+            )
+
+            return {"folder_id": None, "folder_name": None, "folder_order": next_order}
+
+    def reorder_documents(self, document_ids: List[str], folder_id: Optional[str]) -> int:
+        """Persist manual ordering for documents in a folder or root."""
+        if not document_ids:
+            return 0
+
+        rows = [{"doc_id": doc_id, "order": idx} for idx, doc_id in enumerate(document_ids)]
+
+        with self.session_scope() as session:
+            result = session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (d:Document {id: row.doc_id})
+                WHERE ($folder_id IS NULL AND d.folder_id IS NULL)
+                   OR d.folder_id = $folder_id
+                SET d.folder_order = row.order
+                RETURN count(d) as updated
+                """,
+                rows=rows,
+                folder_id=folder_id,
+            )
+            record = result.single()
+            return record.get("updated", 0) if record else 0
+
     def list_documents(self) -> List[Dict[str, Any]]:
         """List all documents in the database."""
         with self.session_scope() as session:
@@ -4407,11 +4724,15 @@ Reply with ONLY one of:
                 OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
                 WITH d, count(c) as chunk_count
                 RETURN d.id as document_id,
+                       d.title as title,
                        d.filename as filename,
                        coalesce(d.original_filename, d.filename) as original_filename,
                        d.created_at as created_at,
                        d.hashtags as hashtags,
-                       chunk_count
+                       chunk_count,
+                       d.folder_id as folder_id,
+                       d.folder_name as folder_name,
+                       d.folder_order as folder_order
                 ORDER BY d.created_at DESC
                 """
             )
@@ -4500,7 +4821,7 @@ Reply with ONLY one of:
                 """
                 MATCH (d:Document {id: $doc_id})-[r:RELATED_TO|SIMILAR_TO]-(other:Document)
                 RETURN DISTINCT other.id as id,
-                                other.filename as title,
+                                coalesce(other.title, other.original_filename, other.filename) as title,
                                 coalesce(other.link, '') as link,
                                 other.filename as filename
                 ORDER BY other.filename ASC
@@ -4569,6 +4890,11 @@ Reply with ONLY one of:
                 else:
                     metadata[key] = value
 
+            if doc_data.get("title") is not None:
+                metadata.setdefault("title", doc_data.get("title"))
+            if doc_data.get("document_type") is not None:
+                metadata.setdefault("document_type", doc_data.get("document_type"))
+
             return {
                 "id": doc_data.get("id", doc_id),
                 "title": doc_data.get("title"),
@@ -4581,6 +4907,9 @@ Reply with ONLY one of:
                 "summary": doc_data.get("summary"),
                 "document_type": doc_data.get("document_type"),
                 "hashtags": doc_data.get("hashtags", []),
+                "folder_id": doc_data.get("folder_id"),
+                "folder_name": doc_data.get("folder_name"),
+                "folder_order": doc_data.get("folder_order"),
                 "processing_status": doc_data.get("processing_status"),
                 "processing_stage": doc_data.get("processing_stage"),
                 "processing_progress": doc_data.get("processing_progress"),
@@ -5247,12 +5576,39 @@ Reply with ONLY one of:
             )
             return [record.data() for record in result]
 
-    def clear_database(self) -> None:
-        """Clear all data from the database."""
+    def clear_database(self, clear_knowledge_base: bool = True, clear_conversations: bool = True) -> None:
+        """
+        Clear data from the database based on flags.
+        
+        Args:
+            clear_knowledge_base: If True, deletes Documents, Chunks, Entities, Folders, etc.
+            clear_conversations: If True, deletes Conversations, Messages, TimeNodes.
+        """
         with self.session_scope() as session:
-            # Delete all nodes and relationships
-            session.run("MATCH (n) DETACH DELETE n")
-            logger.info("Database cleared")
+            if clear_knowledge_base:
+                # Delete KB nodes: Document, Chunk, Entity, Folder, CommunitySummary
+                # Also clean up any specific relationships if needed, but DETACH DELETE handles it.
+                session.run("""
+                    MATCH (n)
+                    WHERE n:Document OR n:Chunk OR n:Entity OR n:Folder OR n:CommunitySummary
+                    DETACH DELETE n
+                """)
+                logger.info("Cleared Knowledge Base nodes")
+
+            if clear_conversations:
+                # Delete Chat nodes: Conversation, Message
+                # Also delete TimeNodes (history organization) if clearing conversations
+                session.run("""
+                    MATCH (n)
+                    WHERE n:Conversation OR n:Message OR n:TimeNode
+                    DETACH DELETE n
+                """)
+                logger.info("Cleared Conversation History nodes")
+            
+            # If both are true, might as well ensure everything else is gone (like unconnected nodes)?
+            # But the targeted delete is safer to preserve User nodes if they exist (though currently User nodes are minimal/optional)
+            
+            logger.info(f"Database clear operation completed (KB={clear_knowledge_base}, Chats={clear_conversations})")
 
 
 # Global database instance

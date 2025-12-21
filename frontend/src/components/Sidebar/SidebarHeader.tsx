@@ -1,7 +1,6 @@
 'use client';
 
 import { useBranding } from '@/components/Branding/BrandingProvider';
-import { UserGroupIcon } from '@heroicons/react/24/outline'; // Added UserGroupIcon import
 
 export default function SidebarHeader() {
   const branding = useBranding();

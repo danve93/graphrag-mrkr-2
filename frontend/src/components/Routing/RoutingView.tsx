@@ -151,7 +151,7 @@ export default function RoutingView() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto pb-28 p-[var(--space-6)]">
         {/* Main Metrics Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" style={{ marginBottom: '24px' }}>
           {/* Total Queries */}
@@ -159,8 +159,8 @@ export default function RoutingView() {
             icon={<Activity className="w-5 h-5" />}
             label="Total Queries"
             value={metrics.total_queries.toString()}
-            iconColor="text-blue-600"
-            bgColor="bg-blue-50 dark:bg-blue-900/20"
+            iconColor="text-primary-500"
+            bgColor="bg-primary-500/10 dark:bg-primary-500/20"
           />
 
           {/* Cache Hit Rate */}
@@ -169,8 +169,8 @@ export default function RoutingView() {
             label="Cache Hit Rate"
             value={hasQueries ? formatPercentage(metrics.cache_hit_rate) : 'N/A'}
             subtitle={hasQueries ? 'Latency reduction: ~30%' : 'No queries yet'}
-            iconColor="text-green-600"
-            bgColor="bg-green-50 dark:bg-green-900/20"
+            iconColor="text-primary-500"
+            bgColor="bg-primary-500/10 dark:bg-primary-500/20"
             status={hasQueries && metrics.cache_hit_rate > 0.4 ? 'good' : hasQueries ? 'warning' : undefined}
           />
 
@@ -180,8 +180,8 @@ export default function RoutingView() {
             label="Avg Routing Latency"
             value={hasQueries ? formatLatency(metrics.avg_routing_latency_ms) : 'N/A'}
             subtitle={hasQueries ? (metrics.cache_hit_rate > 0 ? 'With cache hits' : 'No cache hits yet') : 'No queries yet'}
-            iconColor="text-purple-600"
-            bgColor="bg-purple-50 dark:bg-purple-900/20"
+            iconColor="text-primary-500"
+            bgColor="bg-primary-500/10 dark:bg-primary-500/20"
             status={hasQueries && metrics.avg_routing_latency_ms < 500 ? 'good' : hasQueries && metrics.avg_routing_latency_ms < 2000 ? 'warning' : hasQueries ? 'error' : undefined}
           />
 
@@ -191,8 +191,8 @@ export default function RoutingView() {
             label="Fallback Rate"
             value={hasQueries ? formatPercentage(metrics.fallback_rate) : 'N/A'}
             subtitle={hasQueries ? 'Expanded to all docs' : 'No queries yet'}
-            iconColor="text-orange-600"
-            bgColor="bg-orange-50 dark:bg-orange-900/20"
+            iconColor="text-primary-500"
+            bgColor="bg-primary-500/10 dark:bg-primary-500/20"
             status={hasQueries && metrics.fallback_rate < 0.1 ? 'good' : hasQueries && metrics.fallback_rate < 0.3 ? 'warning' : hasQueries ? 'error' : undefined}
           />
 
@@ -202,8 +202,8 @@ export default function RoutingView() {
             label="Multi-Category Rate"
             value={hasQueries ? formatPercentage(metrics.multi_category_rate) : 'N/A'}
             subtitle={hasQueries ? 'Queries matching 2-3 categories' : 'No queries yet'}
-            iconColor="text-indigo-600"
-            bgColor="bg-indigo-50 dark:bg-indigo-900/20"
+            iconColor="text-primary-500"
+            bgColor="bg-primary-500/10 dark:bg-primary-500/20"
           />
 
           {/* Routing Accuracy */}
@@ -212,8 +212,8 @@ export default function RoutingView() {
             label="Routing Accuracy"
             value={metrics.routing_accuracy !== null ? formatPercentage(metrics.routing_accuracy) : 'N/A'}
             subtitle="Based on user feedback"
-            iconColor="text-teal-600"
-            bgColor="bg-teal-50 dark:bg-teal-900/20"
+            iconColor="text-primary-500"
+            bgColor="bg-primary-500/10 dark:bg-primary-500/20"
           />
         </div>
 
@@ -373,10 +373,11 @@ interface KPIStatusProps {
 }
 
 function KPIStatus({ label, target, current, status }: KPIStatusProps) {
+  // Use project standard colors for status indicators
   const statusColors = {
-    good: { bg: 'rgba(50, 215, 75, 0.15)', color: '#32D74B' },
-    warning: { bg: 'rgba(255, 214, 10, 0.15)', color: '#FFD60A' },
-    error: { bg: 'rgba(255, 69, 58, 0.15)', color: '#FF453A' },
+    good: { bg: 'rgba(50, 215, 75, 0.15)', color: '#32D74B' }, // Green
+    warning: { bg: 'rgba(255, 214, 10, 0.15)', color: '#FFD60A' }, // Yellow
+    error: { bg: 'rgba(255, 69, 58, 0.15)', color: '#FF453A' }, // Red
   };
 
   const statusLabels = {

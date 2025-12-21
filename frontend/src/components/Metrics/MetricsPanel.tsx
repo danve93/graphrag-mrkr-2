@@ -5,11 +5,12 @@ import { Activity } from 'lucide-react';
 import RagasSubPanel from './RagasSubPanel';
 import TruLensSubPanel from './TruLensSubPanel';
 import OpenTelemetrySubPanel from './OpenTelemetrySubPanel';
+import LLMUsageSubPanel from './LLMUsageSubPanel';
 
 import RoutingView from '../Routing/RoutingView';
 
 export default function MetricsPanel() {
-  const [activeSection, setActiveSection] = useState<string>('trulens');
+  const [activeSection, setActiveSection] = useState<string>('llmUsage');
 
   // Listen for section selection from sidebar
   useEffect(() => {
@@ -37,13 +38,13 @@ export default function MetricsPanel() {
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <Activity className="text-[#f27a03]" size={24} />
+            <Activity style={{ color: 'var(--accent-primary)' }} size={24} />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -62,6 +63,7 @@ export default function MetricsPanel() {
         {activeSection === 'trulens' && <TruLensSubPanel />}
         {activeSection === 'routing' && <RoutingView />}
         {activeSection === 'opentelemetry' && <OpenTelemetrySubPanel />}
+        {activeSection === 'llmUsage' && <LLMUsageSubPanel />}
       </div>
     </div>
   );

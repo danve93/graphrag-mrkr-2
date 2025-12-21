@@ -1,23 +1,64 @@
-import React, { useState } from 'react';
-import { X, Edit2, Trash2, MessageSquare, FileText, Check, XCircle } from 'lucide-react';
-import type { GraphNode } from '@/types/graph';
+import React, { useEffect, useMemo, useState } from 'react';
+import { X, Edit2, MessageSquare, FileText, Check, XCircle, Network, Users } from 'lucide-react';
+import type { GraphNode, GraphEdge } from '@/types/graph';
+import { API_URL } from '@/lib/api';
 
 interface NodeSidebarProps {
     node: GraphNode;
     onClose: () => void;
     onEdit: (node: GraphNode) => void;
-    onDelete: (nodeId: string) => void;
     onChat: (node: GraphNode) => void;
+    allNodes?: GraphNode[];  // Optional: for finding connected nodes
+    allEdges?: GraphEdge[];  // Optional: for finding connections
+    onNodeSelect?: (node: GraphNode) => void;  // Optional: for navigating to connected node
 }
 
-export default function NodeSidebar({ node, onClose, onEdit, onDelete, onChat }: NodeSidebarProps) {
+export default function NodeSidebar({
+    node,
+    onClose,
+    onEdit,
+    onChat,
+    allNodes = [],
+    allEdges = [],
+    onNodeSelect
+}: NodeSidebarProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [editedDescription, setEditedDescription] = useState(node.description || '');
+
+    useEffect(() => {
+        setIsEditing(false);
+        setEditedDescription(node.description || '');
+    }, [node.id, node.description]);
+
+    // Find connected nodes from edges
+    const connectedNodes = useMemo(() => {
+        if (!allEdges.length || !allNodes.length) return [];
+
+        const connectedIds = new Set<string>();
+        allEdges.forEach(edge => {
+            if (edge.source === node.id) connectedIds.add(edge.target);
+            if (edge.target === node.id) connectedIds.add(edge.source);
+        });
+
+        return allNodes
+            .filter(n => connectedIds.has(n.id))
+            .sort((a, b) => (b.degree || 0) - (a.degree || 0))
+            .slice(0, 10); // Limit to top 10 by degree
+    }, [node.id, allNodes, allEdges]);
+
+    // Find nodes in the same community
+    const communityNodes = useMemo(() => {
+        if (node.community_id === null || node.community_id === undefined) return [];
+        return allNodes
+            .filter(n => n.community_id === node.community_id && n.id !== node.id)
+            .sort((a, b) => (b.degree || 0) - (a.degree || 0))
+            .slice(0, 8); // Limit to top 8
+    }, [node.id, node.community_id, allNodes]);
 
     const handleSaveEdit = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch('/api/graph/editor/node', {
+            const response = await fetch(`${API_URL}/api/graph/editor/node`, {
                 method: 'PATCH',
                 headers: {
                     'Content-Type': 'application/json',
@@ -26,13 +67,14 @@ export default function NodeSidebar({ node, onClose, onEdit, onDelete, onChat }:
                 credentials: 'include',
                 body: JSON.stringify({
                     node_id: node.id,
-                    updates: { description: editedDescription }
+                    properties: { description: editedDescription }
                 }),
             });
             if (response.ok) {
                 setIsEditing(false);
-                // Trigger refresh via onEdit
                 onEdit({ ...node, description: editedDescription });
+            } else {
+                console.error('Failed to save edit:', await response.text());
             }
         } catch (e) {
             console.error('Failed to save edit', e);
@@ -71,7 +113,7 @@ export default function NodeSidebar({ node, onClose, onEdit, onDelete, onChat }:
             </div>
 
             {/* Actions Toolbar */}
-            <div className="p-3 grid grid-cols-3 gap-2 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
+            <div className="p-3 grid grid-cols-2 gap-2 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
                 <button
                     onClick={() => onChat(node)}
                     className="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-md hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] transition-colors border border-transparent hover:border-[var(--border)]"
@@ -85,13 +127,6 @@ export default function NodeSidebar({ node, onClose, onEdit, onDelete, onChat }:
                 >
                     <Edit2 size={16} />
                     <span className="text-[10px] font-medium">Edit</span>
-                </button>
-                <button
-                    onClick={() => onDelete(node.id)}
-                    className="flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-md hover:bg-red-500/10 text-red-500 transition-colors border border-transparent hover:border-red-500/20"
-                >
-                    <Trash2 size={16} />
-                    <span className="text-[10px] font-medium">Delete</span>
                 </button>
             </div>
 
@@ -135,12 +170,82 @@ export default function NodeSidebar({ node, onClose, onEdit, onDelete, onChat }:
                         </div>
                     </div>
                     <div className="bg-[var(--bg-tertiary)] p-3 rounded-md border border-[var(--border)] text-center">
-                        <div className="text-xs text-[var(--text-secondary)] mb-1">Degree</div>
+                        <div className="text-xs text-[var(--text-secondary)] mb-1 flex items-center justify-center gap-1" title="Number of direct connections this entity has">
+                            Degree
+                        </div>
                         <div className="text-lg font-mono font-semibold text-[var(--text-primary)]">
                             {node.degree ?? '-'}
                         </div>
                     </div>
                 </div>
+
+                {/* Connected Entities */}
+                {connectedNodes.length > 0 && (
+                    <div className="space-y-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] flex items-center gap-2">
+                            <Network size={12} />
+                            Connected Entities ({connectedNodes.length})
+                        </h3>
+                        <div className="space-y-1 max-h-40 overflow-y-auto">
+                            {connectedNodes.map((connNode) => (
+                                <button
+                                    key={connNode.id}
+                                    onClick={() => onNodeSelect?.(connNode)}
+                                    className="w-full flex items-center gap-2 p-2 bg-[var(--bg-tertiary)] rounded border border-[var(--border)] hover:border-accent-primary transition-colors group text-left"
+                                >
+                                    <div
+                                        className="w-6 h-6 rounded flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                        style={{ backgroundColor: connNode.color || 'var(--accent-primary)' }}
+                                    >
+                                        {connNode.label.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <span className="text-xs text-[var(--text-primary)] truncate block group-hover:text-accent-primary transition-colors">
+                                            {connNode.label}
+                                        </span>
+                                        <span className="text-[10px] text-[var(--text-secondary)]">
+                                            {connNode.type || 'Entity'} • deg: {connNode.degree ?? 0}
+                                        </span>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Same Community Entities */}
+                {communityNodes.length > 0 && (
+                    <div className="space-y-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] flex items-center gap-2">
+                            <Users size={12} />
+                            Same Community ({communityNodes.length})
+                        </h3>
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                            {communityNodes.map((commNode) => (
+                                <button
+                                    key={commNode.id}
+                                    onClick={() => onNodeSelect?.(commNode)}
+                                    className="w-full flex items-center gap-2 p-2 bg-[var(--bg-tertiary)] rounded border border-[var(--border)] hover:border-accent-primary transition-colors group text-left"
+                                >
+                                    <div
+                                        className="w-6 h-6 rounded flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                        style={{ backgroundColor: commNode.color || 'var(--accent-primary)' }}
+                                    >
+                                        {commNode.label.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <span className="text-xs text-[var(--text-primary)] truncate block group-hover:text-accent-primary transition-colors">
+                                            {commNode.label}
+                                        </span>
+                                        <span className="text-[10px] text-[var(--text-secondary)]">
+                                            {commNode.type || 'Entity'} • deg: {commNode.degree ?? 0}
+                                        </span>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Source Documents (Provenance) */}
                 {node.documents && node.documents.length > 0 && (

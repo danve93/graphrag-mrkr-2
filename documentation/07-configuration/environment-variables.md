@@ -55,6 +55,16 @@ NEO4J_PASSWORD=your_secure_password
 NEO4J_MAX_CONNECTION_POOL_SIZE=50
 ```
 
+### Gemini Configuration
+
+```bash
+# Required
+GEMINI_API_KEY=your_api_key
+# Optional
+GEMINI_MODEL=gemini-3-flash-preview
+GEMINI_EMBEDDING_MODEL=models/text-embedding-004
+```
+
 ### Redis (Optional - for job management)
 
 ```bash
@@ -87,6 +97,7 @@ LLM_PROVIDER=openai  # or 'ollama'
 - `text-embedding-ada-002` - OpenAI default
 - `text-embedding-3-small` - Lower cost
 - `text-embedding-3-large` - Highest quality
+- `models/text-embedding-004` - Google Gemini
 - `nomic-embed-text` - Ollama local embedding
 
 ### Concurrency & Rate Limits
@@ -115,12 +126,26 @@ CHUNK_SIZE=1200
 
 # Overlap between chunks
 CHUNK_OVERLAP=150
+
+# Token-aware chunking (HTML heading + Docling hybrid)
+CHUNK_TARGET_TOKENS=800
+CHUNK_MIN_TOKENS=180
+CHUNK_MAX_TOKENS=1000
+CHUNK_OVERLAP_TOKENS=100
+CHUNK_TOKENIZER=cl100k_base
+CHUNK_INCLUDE_HEADING_PATH=true
+CHUNKER_STRATEGY_PDF=docling_hybrid
+CHUNKER_STRATEGY_HTML=html_heading
 ```
 
 **Recommended Values**:
 - Technical docs: `CHUNK_SIZE=1200`, `CHUNK_OVERLAP=150`
 - General text: `CHUNK_SIZE=1000`, `CHUNK_OVERLAP=200`
 - Short-form: `CHUNK_SIZE=800`, `CHUNK_OVERLAP=100`
+
+**Notes**:
+- `CHUNK_SIZE` and `CHUNK_OVERLAP` apply to the legacy character-based chunker.
+- Token-aware chunkers (HTML heading, Docling hybrid) use the token settings above.
 
 ### Entity Extraction
 
@@ -152,6 +177,13 @@ OCR_QUALITY_THRESHOLD=0.6
 
 # Enable quality filtering
 ENABLE_QUALITY_FILTERING=true
+```
+
+### Document Conversion
+
+```bash
+# Conversion engine: auto|native|marker|docling
+DOCUMENT_CONVERSION_PROVIDER=auto
 ```
 
 ### Marker PDF Conversion

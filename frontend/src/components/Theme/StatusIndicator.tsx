@@ -56,7 +56,7 @@ export default function StatusIndicator() {
       <div className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-default">
         {isConnected ? (
           <>
-            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#f27a03' }} />
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: 'var(--accent-primary)' }} />
             <span className="text-xs" style={{ color: 'white' }}>Connected</span>
           </>
         ) : (

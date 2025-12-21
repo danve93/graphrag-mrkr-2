@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useState } from 'react'
-import { XMarkIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
+import { X, ExternalLink } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -344,7 +344,7 @@ ${cleanHtml}
                 rel="noreferrer"
                 className="button-ghost text-xs flex items-center gap-1"
               >
-                <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                <ExternalLink className="w-4 h-4" />
                 Open in new tab
               </a>
             )}
@@ -353,7 +353,7 @@ ${cleanHtml}
               onClick={onClose}
               className="button-secondary text-xs flex items-center gap-1"
             >
-              <XMarkIcon className="w-4 h-4" />
+              <X className="w-4 h-4" />
               Close
             </button>
           </div>

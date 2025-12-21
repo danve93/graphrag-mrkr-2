@@ -99,6 +99,113 @@
       ]
     },
     {
+      "key": "chunking",
+      "label": "Chunking",
+      "description": "Token-aware chunking budgets and strategy selection for ingestion.",
+      "llm_override_enabled": false,
+      "llm_override_value": null,
+      "parameters": [
+        {
+          "key": "chunk_target_tokens",
+          "label": "Target Tokens",
+          "value": 800,
+          "options": null,
+          "min": 200.0,
+          "max": 2000.0,
+          "step": 50.0,
+          "type": "slider",
+          "tooltip": "Target token size for token-aware chunkers (HTML heading and Docling hybrid). Chunks grow toward this size while respecting max tokens."
+        },
+        {
+          "key": "chunk_min_tokens",
+          "label": "Min Tokens",
+          "value": 180,
+          "options": null,
+          "min": 50.0,
+          "max": 600.0,
+          "step": 10.0,
+          "type": "slider",
+          "tooltip": "Minimum tokens per chunk for token-aware chunkers. Smaller chunks are merged when possible."
+        },
+        {
+          "key": "chunk_max_tokens",
+          "label": "Max Tokens",
+          "value": 1000,
+          "options": null,
+          "min": 300.0,
+          "max": 3000.0,
+          "step": 50.0,
+          "type": "slider",
+          "tooltip": "Hard ceiling on chunk size in tokens for token-aware chunkers."
+        },
+        {
+          "key": "chunk_overlap_tokens",
+          "label": "Overlap Tokens",
+          "value": 100,
+          "options": null,
+          "min": 0.0,
+          "max": 400.0,
+          "step": 10.0,
+          "type": "slider",
+          "tooltip": "Token overlap between adjacent chunks to preserve context."
+        },
+        {
+          "key": "chunk_tokenizer",
+          "label": "Tokenizer",
+          "value": "cl100k_base",
+          "options": [
+            "cl100k_base",
+            "o200k_base"
+          ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "Tokenizer used to count tokens for token-aware chunking."
+        },
+        {
+          "key": "chunk_include_heading_path",
+          "label": "Include Heading Path",
+          "value": true,
+          "options": null,
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "toggle",
+          "tooltip": "Prefix HTML heading paths into chunk text to preserve section context."
+        },
+        {
+          "key": "chunker_strategy_pdf",
+          "label": "PDF Chunker",
+          "value": "docling_hybrid",
+          "options": [
+            "docling_hybrid",
+            "legacy"
+          ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "Chunking strategy for PDF files. Docling Hybrid uses Docling structure; legacy uses character-based splitting."
+        },
+        {
+          "key": "chunker_strategy_html",
+          "label": "HTML Chunker",
+          "value": "html_heading",
+          "options": [
+            "html_heading",
+            "docling_hybrid",
+            "legacy"
+          ],
+          "min": null,
+          "max": null,
+          "step": null,
+          "type": "select",
+          "tooltip": "Chunking strategy for HTML files (Zendesk, Confluence). HTML heading preserves sections; Docling Hybrid uses Docling structure."
+        }
+      ]
+    },
+    {
       "key": "temporal_retrieval",
       "label": "Temporal Retrieval",
       "description": "Time-based filtering and time-decay scoring for recent document prioritization.",
@@ -399,7 +506,7 @@
         {
           "key": "flashrank_blend_weight",
           "label": "Blend Weight (rerank vs hybrid)",
-          "value": 0.0,
+          "value": 0,
           "options": null,
           "min": 0.0,
           "max": 1.0,
@@ -475,21 +582,25 @@
     },
     {
       "key": "pdf_processing",
-      "label": "PDF Processing",
-      "description": "Controls how PDF documents are converted to text",
+      "label": "Document Conversion",
+      "description": "Controls which conversion engine is used during ingestion. Marker settings below apply only when the conversion engine is set to Marker.",
       "llm_override_enabled": true,
       "llm_override_value": null,
       "parameters": [
         {
-          "key": "use_marker_for_pdf",
-          "label": "Use Marker for PDF",
-          "value": true,
-          "options": null,
+          "key": "document_conversion_provider",
+          "label": "Conversion Engine",
+          "value": "docling",
+          "options": [
+            "native",
+            "marker",
+            "docling"
+          ],
           "min": null,
           "max": null,
           "step": null,
-          "type": "toggle",
-          "tooltip": "Enable Marker for advanced PDF conversion to Markdown. Provides superior quality for complex PDFs with tables, equations, and multi-column layouts. Processing takes 2-5x longer than standard extraction."
+          "type": "select",
+          "tooltip": "Select the conversion engine for ingestion. Marker is PDF-only (non-PDF files use built-in loaders). Docling supports more formats (PDF, Office, HTML, images, WebVTT, audio like MP3/WAV) and is used for all supported files when selected."
         },
         {
           "key": "marker_output_format",
@@ -505,7 +616,7 @@
           "max": null,
           "step": null,
           "type": "select",
-          "tooltip": "Controls Marker's output format. Markdown is recommended for RAG ingestion as it preserves structure for chunking."
+          "tooltip": "Marker only. Controls Marker's output format. Markdown is recommended for RAG ingestion as it preserves structure for chunking."
         },
         {
           "key": "marker_use_llm",
@@ -516,7 +627,7 @@
           "max": null,
           "step": null,
           "type": "toggle",
-          "tooltip": "Enable LLM-powered hybrid processors for complex regions like tables, equations, and diagrams. Significantly improves extraction quality but increases processing time."
+          "tooltip": "Marker only. Enable LLM-powered hybrid processors for complex regions like tables, equations, and diagrams. Significantly improves extraction quality but increases processing time."
         },
         {
           "key": "marker_paginate_output",
@@ -527,7 +638,7 @@
           "max": null,
           "step": null,
           "type": "toggle",
-          "tooltip": "Include page number markers in Marker output for document provenance tracking. Enables citations back to original page numbers."
+          "tooltip": "Marker only. Include page number markers in Marker output for document provenance tracking. Enables citations back to original page numbers."
         },
         {
           "key": "marker_force_ocr",
@@ -538,7 +649,7 @@
           "max": null,
           "step": null,
           "type": "toggle",
-          "tooltip": "Force OCR processing on all PDF pages. Use for PDFs with garbled or problematic embedded text. Processing is 10-20x slower than standard extraction."
+          "tooltip": "Marker only. Force OCR processing on all PDF pages. Use for PDFs with garbled or problematic embedded text. Processing is 10-20x slower than standard extraction."
         },
         {
           "key": "marker_strip_existing_ocr",
@@ -549,7 +660,7 @@
           "max": null,
           "step": null,
           "type": "toggle",
-          "tooltip": "Strip embedded OCR text and re-OCR with Marker. Use when existing OCR quality is poor, common in low-quality scans."
+          "tooltip": "Marker only. Strip embedded OCR text and re-OCR with Marker. Use when existing OCR quality is poor, common in low-quality scans."
         },
         {
           "key": "marker_pdftext_workers",
@@ -560,7 +671,7 @@
           "max": 16.0,
           "step": 1.0,
           "type": "slider",
-          "tooltip": "Number of parallel workers for PDF text extraction. More workers increase processing speed but use more CPU and memory."
+          "tooltip": "Marker only. Number of parallel workers for PDF text extraction. More workers increase processing speed but use more CPU and memory."
         },
         {
           "key": "marker_llm_model",
@@ -570,13 +681,15 @@
             "gpt-4o-mini",
             "gpt-4o",
             "gpt-4-turbo",
-            "claude-3-5-sonnet-20241022"
+            "claude-3-5-sonnet-20241022",
+            "gemini-3-flash-preview",
+            "gemini-3-pro-preview"
           ],
           "min": null,
           "max": null,
           "step": null,
           "type": "select",
-          "tooltip": "LLM model used by Marker for table extraction and complex layout analysis when 'Marker Use LLM' is enabled. API key must be configured in OPENAI_API_KEY or MARKER_LLM_API_KEY environment variable."
+          "tooltip": "Marker only. LLM model used by Marker for table extraction and complex layout analysis when 'Marker Use LLM' is enabled. API key must be configured in OPENAI_API_KEY or MARKER_LLM_API_KEY environment variable."
         }
       ]
     },

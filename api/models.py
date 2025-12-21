@@ -3,6 +3,7 @@ Pydantic models for API requests and responses.
 """
 
 from typing import Any, Dict, List, Optional
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -321,6 +322,52 @@ class DatabaseStats(BaseModel):
     enable_delete_operations: bool = Field(True, description="Whether delete operations are enabled")
 
 
+class FolderSummary(BaseModel):
+    """Summary information for a document folder."""
+
+    id: str
+    name: str
+    created_at: Optional[float] = None
+    document_count: int = Field(0, description="Number of documents in the folder")
+
+
+class FolderListResponse(BaseModel):
+    """Response model for listing folders."""
+
+    folders: List[FolderSummary]
+
+
+class CreateFolderRequest(BaseModel):
+    """Request model for creating a folder."""
+
+    name: str = Field(..., description="Unique folder name")
+
+
+class RenameFolderRequest(BaseModel):
+    """Request model for renaming a folder."""
+
+    name: str = Field(..., description="New unique folder name")
+
+
+class MoveDocumentRequest(BaseModel):
+    """Request model for moving a document into or out of a folder."""
+
+    folder_id: Optional[str] = Field(
+        None, description="Target folder id, or null to move to root"
+    )
+
+
+class ReorderDocumentsRequest(BaseModel):
+    """Request model for manual document ordering."""
+
+    folder_id: Optional[str] = Field(
+        None, description="Folder id to reorder, or null for root"
+    )
+    document_ids: List[str] = Field(
+        default_factory=list, description="Document ids in desired order"
+    )
+
+
 class DocumentChunk(BaseModel):
     """Chunk information associated with a document."""
 
@@ -371,6 +418,9 @@ class DocumentMetadataResponse(BaseModel):
     summary: str | None = None
     document_type: str | None = None
     hashtags: List[str] = Field(default_factory=list)
+    folder_id: str | None = None
+    folder_name: str | None = None
+    folder_order: int | None = None
     chunks: List[DocumentChunk] = Field(default_factory=list)
     entities: List[DocumentEntity] = Field(default_factory=list)
     quality_scores: Dict[str, Any] | None = None
@@ -425,6 +475,44 @@ class UpdateMetadataRequest(BaseModel):
         ...,
         description="Dictionary of metadata key-value pairs to set"
     )
+
+
+class UpdateDocumentDetailsRequest(BaseModel):
+    """Request model for updating document title and type."""
+
+    title: Optional[str] = Field(
+        default=None,
+        description="Human-friendly document title to display in the UI",
+    )
+    document_type: Optional[str] = Field(
+        default=None,
+        description="Document type (normalized to snake_case)",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Title cannot be empty")
+        return value
+
+    @field_validator("document_type")
+    @classmethod
+    def normalize_document_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Document type cannot be empty")
+        normalized = re.sub(r"[\s-]+", "_", value.lower())
+        normalized = re.sub(r"[^a-z0-9_]", "", normalized)
+        normalized = re.sub(r"_+", "_", normalized).strip("_")
+        if not normalized:
+            raise ValueError("Document type cannot be empty")
+        return normalized
 
 
 class ConversationHistory(BaseModel):

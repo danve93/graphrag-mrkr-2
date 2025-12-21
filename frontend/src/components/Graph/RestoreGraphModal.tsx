@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { AlertTriangle, X, Upload } from 'lucide-react';
+import { API_URL } from '@/lib/api';
 
 interface RestoreGraphModalProps {
     onClose: () => void;
@@ -29,7 +30,7 @@ export const RestoreGraphModal: React.FC<RestoreGraphModalProps> = ({ onClose })
             formData.append('confirmation', 'DELETE');
 
             const token = localStorage.getItem('authToken');
-            const response = await fetch('/api/graph/editor/restore', {
+            const response = await fetch(`${API_URL}/api/graph/editor/restore`, {
                 method: 'POST',
                 headers: {
                     ...(token ? { 'Authorization': `Bearer ${token}` } : {})

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { GitMerge, ArrowRight, AlertTriangle, Loader2 } from 'lucide-react';
+import { API_URL } from '@/lib/api';
 
 interface MergeNodesModalProps {
     selectedNodes: any[];
@@ -23,7 +24,7 @@ export const MergeNodesModal: React.FC<MergeNodesModalProps> = ({ selectedNodes,
 
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch('/api/graph/editor/nodes/merge', {
+            const response = await fetch(`${API_URL}/api/graph/editor/nodes/merge`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

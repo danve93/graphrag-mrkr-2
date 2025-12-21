@@ -4,11 +4,8 @@ import { useState } from 'react'
 import { api } from '@/lib/api'
 import { showToast } from '@/components/Toast/ToastContainer'
 import Loader from '@/components/Utils/Loader'
-import Tooltip from '@/components/Utils/Tooltip'
-import {
-  CloudArrowUpIcon,
-  XCircleIcon,
-} from '@heroicons/react/24/outline'
+import { AnimatedTooltip as Tooltip } from '@motion-primitives/animated-tooltip'
+import { CloudUpload, XCircle } from 'lucide-react'
 
 export default function UploadTab() {
   const [isDragging, setIsDragging] = useState(false)
@@ -32,10 +29,10 @@ export default function UploadTab() {
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('documents:uploaded'))
           }
-          
+
           // Show toast notification
           showToast('success', `${file.name} uploaded`, 'Document queued for processing')
-          
+
           setUploadSuccess(`${file.name} uploaded and queued for processing`)
           // Clear success message after 3 seconds
           setTimeout(() => setUploadSuccess(null), 3000)
@@ -109,7 +106,7 @@ export default function UploadTab() {
                 <Loader size={28} label="Uploading..." />
               ) : (
                 <>
-                  <CloudArrowUpIcon className="w-12 h-12 text-secondary-400 mb-3" />
+                  <CloudUpload className="w-12 h-12 text-secondary-400 mb-3" />
                   <span className="text-sm font-medium text-secondary-700 dark:text-secondary-300">
                     {isDragging
                       ? 'Drop files here'
@@ -128,7 +125,7 @@ export default function UploadTab() {
       {/* Success Message */}
       {uploadSuccess && (
         <div className="p-4 rounded-lg flex items-start bg-green-50 text-green-800">
-          <CloudArrowUpIcon className="w-5 h-5 mr-2 flex-shrink-0" />
+          <CloudUpload className="w-5 h-5 mr-2 flex-shrink-0" />
           <p className="text-sm">{uploadSuccess}</p>
         </div>
       )}
@@ -136,7 +133,7 @@ export default function UploadTab() {
       {/* Error Message */}
       {uploadError && (
         <div className="p-4 rounded-lg flex items-start bg-red-50 text-red-800">
-          <XCircleIcon className="w-5 h-5 mr-2 flex-shrink-0" />
+          <XCircle className="w-5 h-5 mr-2 flex-shrink-0" />
           <p className="text-sm">{uploadError}</p>
         </div>
       )}

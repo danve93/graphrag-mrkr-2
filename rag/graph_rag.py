@@ -113,7 +113,7 @@ class GraphRAG:
             
             # Track stage with timing
             start_time = time.time()
-            state["query_analysis"] = analyze_query(query, chat_history)
+            state["query_analysis"] = analyze_query(query, chat_history, state.get("session_id"))
             duration_ms = int((time.time() - start_time) * 1000)
             
             state["stages"].append({
@@ -173,7 +173,7 @@ class GraphRAG:
                 
                 # Execute structured query
                 logger.info("Executing structured KG query")
-                result = executor.execute_query(query)
+                result = executor.execute_query(query, session_id=state.get("session_id"))
                 
                 duration_ms = int((time.time() - start_time) * 1000)
                 
@@ -762,6 +762,7 @@ class GraphRAG:
                         llm_model=state.get("llm_model", None),
                         custom_prompt=custom_prompt,
                         memory_context=state.get("memory_context", None),
+                        session_id=state.get("session_id"),
                     )
                 except Exception:
                     # fallback to direct import if package import fails
@@ -775,6 +776,7 @@ class GraphRAG:
                         state.get("chat_history", []),
                         llm_model=state.get("llm_model", None),
                         memory_context=state.get("memory_context", None),
+                        session_id=state.get("session_id"),
                     )
     
                 state["response"] = response_data.get("response", "")
@@ -968,6 +970,9 @@ class GraphRAG:
                 except Exception as e:
                     logger.warning(f"Failed to load memory context: {e}")
                     state["memory_context"] = None
+
+            # Store session_id in state for token tracking
+            state["session_id"] = session_id
 
             # If session-scoped response cache is enabled, check fast-path
             try:
@@ -1433,6 +1438,7 @@ class GraphRAG:
                         temperature=temperature,
                         chat_history=chat_hist,
                         llm_model=llm_model,
+                        session_id=session_id,
                     )
 
                     for token in gen:

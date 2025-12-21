@@ -184,27 +184,27 @@ export default function DocumentationSidebarContent({ onFileSelect, selectedFile
 
   const filteredSections = searchQuery
     ? docSections
-        .map(section => {
-          const query = searchQuery.toLowerCase();
-          const sectionTitleMatch = section.title.toLowerCase().includes(query);
-          
-          // If section title matches, show all files in that section
-          if (sectionTitleMatch) {
-            return section;
-          }
-          
-          // Otherwise, filter files by name or path
-          const matchingFiles = section.files.filter(file =>
-            file.name.toLowerCase().includes(query) ||
-            file.path.toLowerCase().includes(query)
-          );
-          
-          return {
-            ...section,
-            files: matchingFiles,
-          };
-        })
-        .filter(section => section.files.length > 0)
+      .map(section => {
+        const query = searchQuery.toLowerCase();
+        const sectionTitleMatch = section.title.toLowerCase().includes(query);
+
+        // If section title matches, show all files in that section
+        if (sectionTitleMatch) {
+          return section;
+        }
+
+        // Otherwise, filter files by name or path
+        const matchingFiles = section.files.filter(file =>
+          file.name.toLowerCase().includes(query) ||
+          file.path.toLowerCase().includes(query)
+        );
+
+        return {
+          ...section,
+          files: matchingFiles,
+        };
+      })
+      .filter(section => section.files.length > 0)
     : docSections;
 
   return (
@@ -218,7 +218,7 @@ export default function DocumentationSidebarContent({ onFileSelect, selectedFile
             placeholder="Search docs..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-9 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f27a03] focus:border-transparent"
+            className="w-full pl-9 pr-9 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
             style={{
               borderColor: 'var(--border)',
               background: 'var(--bg-primary)',
@@ -243,13 +243,14 @@ export default function DocumentationSidebarContent({ onFileSelect, selectedFile
           <div key={section.id}>
             <button
               onClick={() => toggleFolder(section.id)}
-              className="flex items-center gap-2 w-full text-left mb-2 text-sm font-semibold hover:text-[#f27a03] transition-colors"
+              className="flex items-center gap-2 w-full text-left mb-2 text-sm font-semibold transition-colors"
               style={{ color: 'var(--text-secondary)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--accent-primary)')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
             >
               <ChevronRight
-                className={`w-4 h-4 transition-transform ${
-                  expandedFolders.has(section.id) ? 'rotate-90' : ''
-                }`}
+                className={`w-4 h-4 transition-transform ${expandedFolders.has(section.id) ? 'rotate-90' : ''
+                  }`}
               />
               <Folder className="w-4 h-4" />
               <span>{section.title}</span>
@@ -261,13 +262,12 @@ export default function DocumentationSidebarContent({ onFileSelect, selectedFile
                   <button
                     key={file.path}
                     onClick={() => onFileSelect(file.path)}
-                    className={`flex items-center gap-2 w-full text-left px-3 py-2 text-sm rounded-lg transition-colors ${
-                      selectedFile === file.path
-                        ? 'bg-orange-50 dark:bg-orange-900/20 text-[#f27a03]'
-                        : 'hover:bg-gray-50 dark:hover:bg-neutral-800'
-                    }`}
+                    className={`flex items-center gap-2 w-full text-left px-3 py-2 text-sm rounded-lg transition-colors ${selectedFile === file.path
+                      ? 'bg-orange-50 dark:bg-orange-900/20'
+                      : 'hover:bg-gray-50 dark:hover:bg-neutral-800'
+                      }`}
                     style={{
-                      color: selectedFile === file.path ? '#f27a03' : 'var(--text-secondary)',
+                      color: selectedFile === file.path ? 'var(--accent-primary)' : 'var(--text-secondary)',
                     }}
                   >
                     <FileText className="w-4 h-4" />

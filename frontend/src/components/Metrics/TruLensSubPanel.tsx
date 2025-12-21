@@ -108,13 +108,26 @@ export default function TruLensSubPanel() {
 
       if (response.ok) {
         await loadHealth();
+        const { showToast } = require('@/components/Toast/ToastContainer');
+        if (action === 'enable') {
+          showToast(
+            'warning',
+            'Monitoring Enabled',
+            'Please restart the backend to ensure all components are validation-instrumented.',
+            8000
+          );
+        } else {
+          showToast('success', 'Monitoring Disabled');
+        }
       } else {
         const error = await response.json();
-        alert(`Failed to ${action} monitoring: ${error.detail}`);
+        const { showToast } = require('@/components/Toast/ToastContainer');
+        showToast('error', `Failed to ${action} monitoring`, error.detail);
       }
     } catch (error) {
       console.error('Failed to toggle monitoring:', error);
-      alert('Failed to toggle monitoring');
+      const { showToast } = require('@/components/Toast/ToastContainer');
+      showToast('error', 'Failed to toggle monitoring');
     }
   };
 
@@ -267,7 +280,7 @@ export default function TruLensSubPanel() {
       </div>
 
       {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 pb-28 space-y-6">
         {/* Section 1: Controls */}
         <section>
           <h3 className="text-lg font-semibold mb-4">Monitoring Controls</h3>
@@ -283,9 +296,10 @@ export default function TruLensSubPanel() {
               <button
                 onClick={toggleMonitoring}
                 className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${health?.monitoring_enabled
-                  ? 'bg-[#f27a03]'
+                  ? ''
                   : 'bg-gray-200 dark:bg-gray-700'
                   }`}
+                style={{ backgroundColor: health?.monitoring_enabled ? 'var(--accent-primary)' : undefined }}
               >
                 <span
                   className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${health?.monitoring_enabled ? 'translate-x-7' : 'translate-x-1'
@@ -310,7 +324,8 @@ export default function TruLensSubPanel() {
                 onChange={(e) => setSamplingRate(Number(e.target.value))}
                 onMouseUp={(e) => updateSamplingRate(Number((e.target as HTMLInputElement).value))}
                 onTouchEnd={(e) => updateSamplingRate(Number((e.target as HTMLInputElement).value))}
-                className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-[#f27a03]"
+                className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                style={{ accentColor: 'var(--accent-primary)' }}
               />
               <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mt-1">
                 <span>0%</span>
@@ -372,7 +387,8 @@ export default function TruLensSubPanel() {
             <button
               onClick={() => window.open('http://localhost:8501', '_blank')}
               disabled={dashboardStatus !== 'running'}
-              className="px-4 py-2 bg-[#f27a03] text-white rounded-lg font-medium hover:bg-[#d96d03] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="px-4 py-2 text-white rounded-lg font-medium hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              style={{ backgroundColor: 'var(--accent-primary)' }}
             >
               <ExternalLink className="w-4 h-4" />
               Open Dashboard

@@ -1,16 +1,15 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { PaperAirplaneIcon } from '@heroicons/react/24/solid'
-import { StopIcon, DocumentArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { Send, Square, FileUp, X } from 'lucide-react'
 import { api } from '@/lib/api'
 import { DocumentSummary } from '@/types'
 import { showToast } from '@/components/Toast/ToastContainer'
 import { useChatStore } from '@/store/chatStore'
 import Loader from '@/components/Utils/Loader'
-import Tooltip from '@/components/Utils/Tooltip'
+import { AnimatedTooltip as Tooltip } from '@motion-primitives/animated-tooltip'
 
-type SelectedDocMap = Record<string, { filename: string; original_filename?: string }>
+type SelectedDocMap = Record<string, { filename: string; original_filename?: string; title?: string }>
 
 interface ChatInputProps {
   onSend: (message: string, contextDocuments: string[], contextDocumentLabels: string[], contextHashtags?: string[]) => void
@@ -82,8 +81,19 @@ export default function ChatInput({
     fetchDocuments()
     fetchHashtags()
 
+    const refreshDocuments = () => {
+      void fetchDocuments()
+    }
+
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('documents:metadata-updated', refreshDocuments)
+    }
+
     return () => {
       isMounted = false
+      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('documents:metadata-updated', refreshDocuments)
+      }
     }
   }, [])
 
@@ -129,7 +139,7 @@ export default function ChatInput({
         return available.slice(0, 8)
       }
       return available
-        .filter((doc) => (doc.original_filename || doc.filename).toLowerCase().includes(normalized))
+        .filter((doc) => (doc.title || doc.original_filename || doc.filename).toLowerCase().includes(normalized))
         .slice(0, 8)
     }
   }, [documents, hashtags, mentionState, selectedDocs])
@@ -206,6 +216,7 @@ export default function ChatInput({
       [doc.document_id]: {
         filename: doc.filename,
         original_filename: doc.original_filename,
+        title: doc.title,
       },
     }))
     setMentionState(null)
@@ -288,20 +299,20 @@ export default function ChatInput({
       // Start with explicitly selected documents
       const contextDocIds = Object.keys(selectedDocs)
       const contextDocLabels = contextDocIds
-        .map((id) => selectedDocs[id]?.original_filename || selectedDocs[id]?.filename)
+        .map((id) => selectedDocs[id]?.title || selectedDocs[id]?.original_filename || selectedDocs[id]?.filename)
         .filter((label): label is string => Boolean(label))
 
       // If hashtags are selected, add documents that have those hashtags
       if (selectedHashtags.length > 0) {
-        const hashtagDocs = documents.filter((doc) => 
+        const hashtagDocs = documents.filter((doc) =>
           doc.hashtags && doc.hashtags.some((tag) => selectedHashtags.includes(tag))
         )
-        
+
         // Add these documents to the context if not already included
         hashtagDocs.forEach((doc) => {
           if (!contextDocIds.includes(doc.document_id)) {
             contextDocIds.push(doc.document_id)
-            contextDocLabels.push(doc.original_filename || doc.filename)
+            contextDocLabels.push(doc.title || doc.original_filename || doc.filename)
           }
         })
       }
@@ -481,7 +492,7 @@ export default function ChatInput({
               style={{ backgroundColor: 'var(--accent-subtle)', borderColor: 'var(--accent-primary)', borderRadius: 'var(--radius-md)' }}
             >
               <div className="text-center">
-                <DocumentArrowUpIcon style={{ width: '32px', height: '32px', margin: '0 auto var(--space-2)', color: 'var(--accent-primary)' }} />
+                <FileUp style={{ width: '32px', height: '32px', margin: '0 auto var(--space-2)', color: 'var(--accent-primary)' }} />
                 <p style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--accent-primary)' }}>
                   Drop files to upload, or drop documents to add to context
                 </p>
@@ -500,17 +511,17 @@ export default function ChatInput({
                   className="inline-flex max-w-full items-center"
                   style={{ gap: 'var(--space-2)', borderRadius: 'var(--radius-full)', padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--text-xs)', backgroundColor: 'var(--accent-subtle)', color: 'var(--accent-primary)' }}
                 >
-                  <span className="truncate" title={info.original_filename || info.filename}>
-                    {info.original_filename || info.filename}
+                  <span className="truncate" title={info.title || info.original_filename || info.filename}>
+                    {info.title || info.original_filename || info.filename}
                   </span>
                   <button
                     type="button"
                     onClick={() => handleRemoveDoc(docId)}
                     className="focus:outline-none"
                     style={{ borderRadius: 'var(--radius-full)', padding: '2px', color: 'var(--accent-primary)', transition: 'opacity var(--timing-fast) var(--easing-standard)' }}
-                    aria-label={`Remove ${info.original_filename || info.filename} from forced context`}
+                    aria-label={`Remove ${info.title || info.original_filename || info.filename} from forced context`}
                   >
-                    <XMarkIcon className="h-3.5 w-3.5" />
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </span>
               ))}
@@ -530,7 +541,7 @@ export default function ChatInput({
                     style={{ borderRadius: 'var(--radius-full)', padding: '2px', color: 'var(--accent-primary)', transition: 'opacity var(--timing-fast) var(--easing-standard)' }}
                     aria-label={`Remove ${hashtag} from forced context`}
                   >
-                    <XMarkIcon className="h-3.5 w-3.5" />
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </span>
               ))}
@@ -607,8 +618,8 @@ export default function ChatInput({
                         color: idx === mentionIndex ? 'var(--accent-primary)' : 'inherit'
                       }}
                     >
-                      <span className="truncate" title={doc.original_filename || doc.filename}>
-                        {doc.original_filename || doc.filename}
+                      <span className="truncate" title={doc.title || doc.original_filename || doc.filename}>
+                        {doc.title || doc.original_filename || doc.filename}
                       </span>
                       {typeof doc.chunk_count === 'number' && (
                         <span className="text-xs text-secondary-400 whitespace-nowrap">
@@ -639,12 +650,11 @@ export default function ChatInput({
           >
             {/* File Upload Button */}
             <Tooltip content={disabled || isStreaming || uploadingFile || !isConnected ? 'Upload disabled' : 'Upload documents'}>
-                <label
-                  className={`cursor-pointer p-2 text-secondary-400 transition-colors ${
-                  disabled || isStreaming || uploadingFile || !isConnected
-                    ? 'opacity-50 pointer-events-none'
-                    : ''
-                }`}
+              <label
+                className={`cursor-pointer p-2 text-secondary-400 transition-colors ${disabled || isStreaming || uploadingFile || !isConnected
+                  ? 'opacity-50 pointer-events-none'
+                  : ''
+                  }`}
               >
                 <input
                   type="file"
@@ -654,7 +664,7 @@ export default function ChatInput({
                   accept=".pdf,.txt,.md,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
                   multiple
                 />
-                    <DocumentArrowUpIcon className="w-5 h-5" style={{ color: 'var(--accent-primary)' }} />
+                <FileUp className="w-5 h-5" style={{ color: 'var(--accent-primary)' }} />
               </label>
             </Tooltip>
 
@@ -665,7 +675,7 @@ export default function ChatInput({
                 onClick={onStop}
                 className="inline-flex items-center gap-1 rounded-md bg-rose-500 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-2"
               >
-                <StopIcon className="w-4 h-4" />
+                <Square className="w-4 h-4" />
                 Stop
               </button>
             ) : (
@@ -674,7 +684,7 @@ export default function ChatInput({
                 disabled={disabled || !input.trim() || uploadingFile || !isConnected}
                 className="button-primary p-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <PaperAirplaneIcon className="w-4 h-4" />
+                <Send className="w-4 h-4" />
               </button>
             )}
           </div>
@@ -691,4 +701,3 @@ export default function ChatInput({
     </div>
   )
 }
-

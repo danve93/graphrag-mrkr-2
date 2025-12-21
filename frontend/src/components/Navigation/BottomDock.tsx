@@ -97,7 +97,8 @@ export default function BottomDock() {
         {/* Mobile Menu Button */}
         <button
           onClick={() => setIsMenuOpen(!isMenuOpen)}
-          className="fixed bottom-4 right-4 z-50 w-14 h-14 rounded-full bg-[#f27a03] text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-[#f27a03] focus:ring-offset-2"
+          className="fixed bottom-4 right-4 z-50 w-14 h-14 rounded-full text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-offset-2"
+          style={{ backgroundColor: 'var(--accent-primary)', '--tw-ring-color': 'var(--accent-primary)' } as React.CSSProperties}
           aria-label={isMenuOpen ? "Close navigation menu" : "Open navigation menu"}
           aria-expanded={isMenuOpen}
           aria-controls="mobile-navigation-menu"
@@ -118,12 +119,16 @@ export default function BottomDock() {
           id="mobile-navigation-menu"
           role="dialog"
           aria-label="Navigation menu"
-          className={`fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-neutral-900 rounded-t-2xl shadow-2xl transition-transform duration-300 ${isMenuOpen ? 'translate-y-0' : 'translate-y-full'
+          className={`fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl shadow-2xl transition-transform duration-300 backdrop-blur-xl ${isMenuOpen ? 'translate-y-0' : 'translate-y-full'
             }`}
+          style={{
+            backgroundColor: 'var(--bg-secondary)',
+            borderTop: '1px solid var(--border)',
+          }}
         >
           <div className="p-6 pb-8">
             {/* Handle bar */}
-            <div className="w-12 h-1 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto mb-6" aria-hidden="true" />
+            <div className="w-12 h-1 rounded-full mx-auto mb-6" style={{ backgroundColor: 'var(--text-tertiary)' }} aria-hidden="true" />
 
             {/* Grid of navigation items */}
             <div className="grid grid-cols-3 gap-4">
@@ -135,11 +140,14 @@ export default function BottomDock() {
                   <button
                     key={item.view}
                     onClick={() => handleNavigation(item.view)}
-                    className={`flex flex-col items-center justify-center p-4 rounded-xl transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-[#f27a03] ${isActive
-                      ? 'bg-orange-50 dark:bg-orange-900/20 text-[#f27a03]'
-                      : 'bg-gray-50 dark:bg-neutral-800 text-gray-600 dark:text-gray-400'
-                      }`}
-                    style={{ minHeight: '88px', minWidth: '88px' }}
+                    className="flex flex-col items-center justify-center p-4 rounded-xl transition-all active:scale-95 focus:outline-none focus:ring-2"
+                    style={{
+                      minHeight: '88px',
+                      minWidth: '88px',
+                      backgroundColor: isActive ? 'var(--accent-subtle)' : 'var(--bg-tertiary)',
+                      color: isActive ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                      '--tw-ring-color': 'var(--accent-primary)',
+                    } as React.CSSProperties}
                     aria-label={`Navigate to ${item.title}`}
                     aria-current={isActive ? 'page' : undefined}
                   >
@@ -173,7 +181,7 @@ export default function BottomDock() {
             key={item.view}
             onClick={() => handleNavigation(item.view)}
             className={`cursor-pointer transition-all duration-200 relative ${isActive
-              ? 'text-[#f27a03] scale-110'
+              ? 'scale-110 text-[var(--accent-primary)]'
               : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
               }`}
           >
@@ -185,8 +193,8 @@ export default function BottomDock() {
               <Icon className="w-full h-full" />
               {isActive && (
                 <div
-                  className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 rounded-full bg-[#f27a03] animate-pulse"
-                  style={{ boxShadow: '0 0 8px rgba(242, 122, 3, 0.6)' }}
+                  className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 rounded-full animate-pulse"
+                  style={{ backgroundColor: 'var(--accent-primary)', boxShadow: '0 0 8px var(--accent-primary)' }}
                 />
               )}
             </DockIcon>

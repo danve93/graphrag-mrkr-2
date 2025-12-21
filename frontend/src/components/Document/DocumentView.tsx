@@ -3,17 +3,19 @@
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowLeftIcon,
-  DocumentTextIcon,
-  MagnifyingGlassIcon,
-  ClipboardIcon,
-  ExclamationCircleIcon,
-  ArrowUpTrayIcon,
-} from '@heroicons/react/24/outline'
+  ArrowLeft,
+  FileText,
+  Search,
+  Clipboard,
+  AlertCircle,
+  Upload,
+  SquarePen,
+  ChevronDown,
+  ChevronUp,
+  Database,
+} from 'lucide-react'
 import { Button } from '@mui/material'
-import { Description as DocumentIconMui, Storage as DatabaseIconMui } from '@mui/icons-material'
 import Loader from '@/components/Utils/Loader'
-import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/solid'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -31,6 +33,7 @@ import DocumentPreview from './DocumentPreview'
 import DocumentGraph from './DocumentGraph'
 import CommunitiesSection from './CommunitiesSection'
 import ChunkSimilaritiesSection from './ChunkSimilaritiesSection'
+import DocumentEmptyState from './DocumentEmptyState'
 
 interface PreviewState {
   url: string | null
@@ -50,6 +53,28 @@ const initialPreviewState: PreviewState = {
   content: null,
 }
 
+const formatDocumentTypeLabel = (value?: string | null) => {
+  if (!value) return ''
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+const normalizeDocumentTypeInput = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+const fallbackTypeFromFilename = (filename?: string) => {
+  if (!filename) return 'Unknown type'
+  const ext = filename.split('.').pop()
+  return ext ? ext.toUpperCase() : 'Unknown type'
+}
+
 export default function DocumentView() {
   const selectedDocumentId = useChatStore((state) => state.selectedDocumentId)
   const selectedChunkId = useChatStore((state) => state.selectedChunkId)
@@ -61,7 +86,10 @@ export default function DocumentView() {
   // Summary-first loading: lightweight stats before full details
   const [summaryData, setSummaryData] = useState<null | {
     id: string
+    title?: string
     filename: string
+    original_filename?: string
+    document_type?: string | null
     stats: { chunks: number; entities: number; communities: number; similarities: number }
   }>(null)
   const [hasPreview, setHasPreview] = useState<boolean | null>(null)
@@ -84,6 +112,11 @@ export default function DocumentView() {
   const [newHashtagInput, setNewHashtagInput] = useState('')
   const [isEditingMetadata, setIsEditingMetadata] = useState(false)
   const [editedMetadata, setEditedMetadata] = useState('')
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [isEditingType, setIsEditingType] = useState(false)
+  const [typeDraft, setTypeDraft] = useState('')
+  const [isSavingDetails, setIsSavingDetails] = useState(false)
   const [settings, setSettings] = useState<{ enable_entity_extraction?: boolean } | null>(null)
   const [isChunksExpanded, setIsChunksExpanded] = useState(false)
   const [isEntitiesExpanded, setIsEntitiesExpanded] = useState(false)
@@ -114,6 +147,24 @@ export default function DocumentView() {
 
   const CHUNKS_LIMIT = 10
   const ENTITIES_PER_TYPE_LIMIT = 5
+  const activeDocumentId = documentData?.id || summaryData?.id || selectedDocumentId
+
+  const displayTitle = useMemo(() => {
+    return (
+      documentData?.title ||
+      summaryData?.title ||
+      documentData?.original_filename ||
+      documentData?.file_name ||
+      summaryData?.original_filename ||
+      summaryData?.filename ||
+      'Document Details'
+    )
+  }, [documentData, summaryData])
+
+  const currentDocumentType = documentData?.document_type || summaryData?.document_type || ''
+  const displayType = currentDocumentType
+    ? formatDocumentTypeLabel(currentDocumentType)
+    : fallbackTypeFromFilename(summaryData?.filename || documentData?.file_name || documentData?.original_filename)
 
   // On mount, support deep-linking via URL query params: ?doc=<id>&chunk=<index|id>
   useEffect(() => {
@@ -197,7 +248,14 @@ export default function DocumentView() {
         performance.mark('document-summary-fetch-end')
         performance.measure('document-summary-fetch', 'document-summary-fetch-start', 'document-summary-fetch-end')
         if (isSubscribed) {
-          setSummaryData({ id: summary.id, filename: summary.filename, stats: summary.stats })
+          setSummaryData({
+            id: summary.id,
+            title: summary.title,
+            filename: summary.filename,
+            original_filename: summary.original_filename,
+            document_type: summary.document_type,
+            stats: summary.stats,
+          })
           setHasPreview(null)
         }
       } catch (e) {
@@ -229,6 +287,13 @@ export default function DocumentView() {
     }
   }, [refreshProcessingState, refreshSettings, selectedDocumentId])
 
+  useEffect(() => {
+    setIsEditingTitle(false)
+    setTitleDraft('')
+    setIsEditingType(false)
+    setTypeDraft('')
+  }, [selectedDocumentId])
+
   // Lazy full-document load when user expands sections
   useEffect(() => {
     const needFull = (selectedDocumentId || summaryData?.id) && !documentData && (isChunksExpanded || isEntitiesExpanded || isMetadataExpanded)
@@ -238,15 +303,15 @@ export default function DocumentView() {
       if (summaryData && !documentData) {
         const minimal: any = {
           id: summaryData.id,
-          title: summaryData.filename,
+          title: summaryData.title || summaryData.filename,
           file_name: summaryData.filename,
-          original_filename: summaryData.filename,
+          original_filename: summaryData.original_filename || summaryData.filename,
           mime_type: undefined,
           preview_url: undefined,
           uploaded_at: undefined,
           uploader: undefined,
           summary: undefined,
-          document_type: undefined,
+          document_type: summaryData.document_type,
           hashtags: [],
           chunks: [],
           entities: [],
@@ -303,15 +368,15 @@ export default function DocumentView() {
           if (prev) return { ...prev, chunks }
           return {
             id: id,
-            title: summaryData?.filename ?? id,
+            title: (summaryData?.title || summaryData?.filename) ?? id,
             file_name: summaryData?.filename ?? id,
-            original_filename: summaryData?.filename ?? id,
+            original_filename: (summaryData?.original_filename || summaryData?.filename) ?? id,
             mime_type: undefined,
             preview_url: undefined,
             uploaded_at: undefined,
             uploader: undefined,
             summary: undefined,
-            document_type: undefined,
+            document_type: summaryData?.document_type,
             hashtags: [],
             chunks,
             entities: [],
@@ -665,6 +730,159 @@ export default function DocumentView() {
     }
   }, [handleAddHashtag])
 
+  const applyDetailsUpdate = useCallback((updates: { title?: string; document_type?: string }) => {
+    if (!activeDocumentId) return
+    setDocumentData((prev) => {
+      const base = prev ?? {
+        id: activeDocumentId,
+        title: summaryData?.title || summaryData?.filename || activeDocumentId,
+        file_name: summaryData?.filename || activeDocumentId,
+        original_filename: summaryData?.original_filename || summaryData?.filename || activeDocumentId,
+        mime_type: undefined,
+        preview_url: undefined,
+        uploaded_at: undefined,
+        uploader: undefined,
+        summary: undefined,
+        document_type: summaryData?.document_type,
+        hashtags: [],
+        chunks: [],
+        entities: [],
+        quality_scores: undefined,
+        related_documents: [],
+        metadata: {},
+      }
+      const baseMetadata = base.metadata ?? {}
+      const nextMetadata = {
+        ...baseMetadata,
+        ...(updates.title ? { title: updates.title } : {}),
+        ...(updates.document_type ? { document_type: updates.document_type } : {}),
+      }
+      return {
+        ...base,
+        ...updates,
+        metadata: nextMetadata,
+      }
+    })
+    setSummaryData((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        title: updates.title ?? prev.title,
+        document_type: updates.document_type ?? prev.document_type,
+      }
+    })
+  }, [activeDocumentId, summaryData])
+
+  const handleStartEditTitle = useCallback(() => {
+    setTitleDraft(displayTitle === 'Document Details' ? '' : displayTitle)
+    setIsEditingTitle(true)
+    setActionError(null)
+  }, [displayTitle])
+
+  const handleCancelEditTitle = useCallback(() => {
+    setIsEditingTitle(false)
+    setTitleDraft('')
+    setActionError(null)
+  }, [])
+
+  const handleSaveTitle = useCallback(async () => {
+    if (!activeDocumentId) return
+    const nextTitle = titleDraft.trim()
+    if (!nextTitle) {
+      setActionError('Title cannot be empty')
+      return
+    }
+    const existingTitle = documentData?.title || summaryData?.title || ''
+    if (nextTitle === existingTitle) {
+      setIsEditingTitle(false)
+      return
+    }
+    setIsSavingDetails(true)
+    setActionError(null)
+    try {
+      const response = await api.updateDocumentDetails(activeDocumentId, { title: nextTitle })
+      applyDetailsUpdate({ title: response.title || nextTitle })
+      setActionMessage('Title updated successfully')
+      setIsEditingTitle(false)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('documents:metadata-updated', { detail: { document_id: activeDocumentId } }))
+      }
+    } catch (saveError) {
+      setActionError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to update title'
+      )
+    } finally {
+      setIsSavingDetails(false)
+    }
+  }, [activeDocumentId, titleDraft, documentData?.title, summaryData?.title, applyDetailsUpdate])
+
+  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void handleSaveTitle()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      handleCancelEditTitle()
+    }
+  }, [handleSaveTitle, handleCancelEditTitle])
+
+  const handleStartEditType = useCallback(() => {
+    const existingLabel = currentDocumentType ? formatDocumentTypeLabel(currentDocumentType) : ''
+    setTypeDraft(existingLabel)
+    setIsEditingType(true)
+    setActionError(null)
+  }, [currentDocumentType])
+
+  const handleCancelEditType = useCallback(() => {
+    setIsEditingType(false)
+    setTypeDraft('')
+    setActionError(null)
+  }, [])
+
+  const handleSaveType = useCallback(async () => {
+    if (!activeDocumentId) return
+    const normalizedType = normalizeDocumentTypeInput(typeDraft)
+    if (!normalizedType) {
+      setActionError('Document type cannot be empty')
+      return
+    }
+    if (normalizedType === currentDocumentType) {
+      setIsEditingType(false)
+      return
+    }
+    setIsSavingDetails(true)
+    setActionError(null)
+    try {
+      const response = await api.updateDocumentDetails(activeDocumentId, { document_type: normalizedType })
+      applyDetailsUpdate({ document_type: response.document_type || normalizedType })
+      setActionMessage('Document type updated successfully')
+      setIsEditingType(false)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('documents:metadata-updated', { detail: { document_id: activeDocumentId } }))
+      }
+    } catch (saveError) {
+      setActionError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'Failed to update document type'
+      )
+    } finally {
+      setIsSavingDetails(false)
+    }
+  }, [activeDocumentId, typeDraft, currentDocumentType, applyDetailsUpdate])
+
+  const handleTypeKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void handleSaveType()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      handleCancelEditType()
+    }
+  }, [handleSaveType, handleCancelEditType])
+
   const handleStartEditMetadata = useCallback(() => {
     if (documentData?.metadata) {
       setEditedMetadata(JSON.stringify(documentData.metadata, null, 2))
@@ -728,7 +946,14 @@ export default function DocumentView() {
         )
         // Refresh document data
         const summary = await api.getDocumentSummary(selectedDocumentId)
-        setSummaryData({ id: summary.id, filename: summary.filename, stats: summary.stats })
+        setSummaryData({
+          id: summary.id,
+          title: summary.title,
+          filename: summary.filename,
+          original_filename: summary.original_filename,
+          document_type: summary.document_type,
+          stats: summary.stats,
+        })
         if (documentData) {
           const doc = await api.getDocument(selectedDocumentId)
           setDocumentData(doc)
@@ -776,7 +1001,14 @@ export default function DocumentView() {
           try {
             // Refresh summary stats (entities, relationships, communities, similarities)
             const updatedSummary = await api.getDocumentSummary(selectedDocumentId)
-            setSummaryData({ id: updatedSummary.id, filename: updatedSummary.filename, stats: updatedSummary.stats })
+            setSummaryData({
+              id: updatedSummary.id,
+              title: updatedSummary.title,
+              filename: updatedSummary.filename,
+              original_filename: updatedSummary.original_filename,
+              document_type: updatedSummary.document_type,
+              stats: updatedSummary.stats,
+            })
 
             // Also refresh full document data if it's loaded
             if (documentData) {
@@ -891,103 +1123,7 @@ export default function DocumentView() {
   }, [selectedDocumentId]);
 
   if (!selectedDocumentId) {
-    return (
-      <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-        {/* Header */}
-        <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '8px',
-              backgroundColor: '#f27a0320',
-              border: '1px solid #f27a03',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              <DatabaseIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                Database
-              </h1>
-              <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-                Document repository with chunks, entities, and relationships
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats Cards */}
-        <div className="flex-1 p-6">
-          <h2 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-            Knowledge Base Overview
-          </h2>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div
-              className="rounded-lg p-5 border"
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                borderColor: 'var(--border)'
-              }}
-            >
-              <div className="text-3xl font-bold mb-1" style={{ color: 'var(--accent-primary)' }}>
-                {globalStats?.total_documents || 0}
-              </div>
-              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Documents</div>
-            </div>
-            <div
-              className="rounded-lg p-5 border"
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                borderColor: 'var(--border)'
-              }}
-            >
-              <div className="text-3xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
-                {globalStats?.total_chunks || 0}
-              </div>
-              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Chunks</div>
-            </div>
-            <div
-              className="rounded-lg p-5 border"
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                borderColor: 'var(--border)'
-              }}
-            >
-              <div className="text-3xl font-bold mb-1" style={{ color: '#32D74B' }}>
-                {globalStats?.total_entities || 0}
-              </div>
-              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Entities</div>
-            </div>
-            <div
-              className="rounded-lg p-5 border"
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                borderColor: 'var(--border)'
-              }}
-            >
-              <div className="text-3xl font-bold mb-1" style={{ color: '#BF5AF2' }}>
-                {globalStats?.total_relationships || 0}
-              </div>
-              <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>Relationships</div>
-            </div>
-          </div>
-
-          {/* Empty State */}
-          <div className="flex flex-col items-center justify-center py-16 mt-8 rounded-lg border" style={{ borderColor: 'var(--border)', borderStyle: 'dashed' }}>
-            <DocumentTextIcon className="w-12 h-12 mb-3" style={{ color: 'var(--text-tertiary)' }} />
-            <p className="text-base font-medium" style={{ color: 'var(--text-secondary)' }}>
-              Select a document from the sidebar to view its details
-            </p>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-tertiary)' }}>
-              Or upload a new document to get started
-            </p>
-          </div>
-        </div>
-      </div>
-    )
+    return <DocumentEmptyState />
   }
 
   // Previously we returned early to show only the summary. Instead, render the
@@ -1004,22 +1140,124 @@ export default function DocumentView() {
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <DocumentIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+            <FileText className="w-6 h-6" style={{ color: 'var(--accent-primary)' }} />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              {documentData?.title || documentData?.original_filename || documentData?.file_name || summaryData?.filename || 'Document Details'}
+              {isEditingTitle ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onKeyDown={handleTitleKeyDown}
+                    disabled={isSavingDetails}
+                    autoFocus
+                    className="w-full min-w-[220px] rounded-md border px-2 py-1 font-display"
+                    style={{
+                      borderColor: 'var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      fontSize: 'var(--text-2xl)',
+                      fontWeight: 700,
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveTitle}
+                      disabled={isSavingDetails || !titleDraft.trim()}
+                      className="rounded-md px-3 py-1 text-xs font-semibold text-white"
+                      style={{ backgroundColor: 'var(--accent-primary)' }}
+                    >
+                      {isSavingDetails ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelEditTitle}
+                      disabled={isSavingDetails}
+                      className="rounded-md px-3 py-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleStartEditTitle}
+                  disabled={isSavingDetails}
+                  className="group inline-flex items-center gap-2 border-0 bg-transparent p-0 text-left"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  <span>{displayTitle}</span>
+                  <SquarePen className="h-4 w-4 opacity-0 transition-opacity group-hover:opacity-60" />
+                </button>
+              )}
             </h1>
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-              {documentData?.document_type ? documentData?.document_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : (summaryData?.filename ? (summaryData.filename.split('.').pop()?.toUpperCase() || 'Unknown type') : 'Unknown type')}
-              {documentData?.uploaded_at && ` • Uploaded ${new Date(documentData?.uploaded_at).toLocaleString()}`}
-            </p>
+            <div className="flex flex-wrap items-center gap-2" style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              {isEditingType ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={typeDraft}
+                    onChange={(e) => setTypeDraft(e.target.value)}
+                    onKeyDown={handleTypeKeyDown}
+                    disabled={isSavingDetails}
+                    autoFocus
+                    className="min-w-[160px] rounded-md border px-2 py-1 text-xs"
+                    style={{
+                      borderColor: 'var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveType}
+                      disabled={isSavingDetails || !typeDraft.trim()}
+                      className="rounded-md px-3 py-1 text-xs font-semibold text-white"
+                      style={{ backgroundColor: 'var(--accent-primary)' }}
+                    >
+                      {isSavingDetails ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelEditType}
+                      disabled={isSavingDetails}
+                      className="rounded-md px-3 py-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleStartEditType}
+                  disabled={isSavingDetails}
+                  className="group inline-flex items-center gap-2 border-0 bg-transparent p-0"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  <span>{displayType}</span>
+                  <SquarePen className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-60" />
+                </button>
+              )}
+              {documentData?.uploaded_at && (
+                <span>
+                  • Uploaded {new Date(documentData?.uploaded_at).toLocaleString()}
+                </span>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {(hasPreview === null ? documentData?.preview_url : hasPreview) && (
@@ -1028,7 +1266,7 @@ export default function DocumentView() {
                 variant="contained"
                 onClick={handleOpenPreview}
                 disabled={previewState.isLoading}
-                startIcon={<MagnifyingGlassIcon className="w-4 h-4" />}
+                startIcon={<Search className="w-4 h-4" />}
                 style={{
                   textTransform: 'none',
                   backgroundColor: 'var(--accent-primary)',
@@ -1053,7 +1291,7 @@ export default function DocumentView() {
               variant="outlined"
               onClick={() => updateFileInputRef.current?.click()}
               disabled={isUpdating || disableManualActions}
-              startIcon={isUpdating ? undefined : <ArrowUpTrayIcon className="w-4 h-4" />}
+              startIcon={isUpdating ? undefined : <Upload className="w-4 h-4" />}
               title="Upload a new version of this document (only changed chunks will be reprocessed)"
               style={{
                 textTransform: 'none',
@@ -1073,7 +1311,7 @@ export default function DocumentView() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-6" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-0 pb-28" style={{ backgroundColor: 'var(--bg-primary)' }}>
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 text-secondary-500 dark:text-secondary-400">
             <Loader size={40} label="Loading document metadata…" />
@@ -1082,7 +1320,7 @@ export default function DocumentView() {
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 flex items-start gap-2">
-            <ExclamationCircleIcon className="w-5 h-5 flex-shrink-0" />
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <div>
               <p className="font-medium">Failed to load document</p>
               <p className="text-sm">{error}</p>
@@ -1097,7 +1335,7 @@ export default function DocumentView() {
             {/* Inline summary area placed inside the main wrapper so layout is unified */}
             {summaryData && (
               <div>
-                <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>{summaryData.filename}</h2>
+                <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>{summaryData.title || summaryData.filename}</h2>
                 <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>ID: {summaryData.id}</p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-2">
                   <div
@@ -1163,9 +1401,9 @@ export default function DocumentView() {
                   className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
                 >
                   {isChunksExpanded ? (
-                    <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronUp className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   ) : (
-                    <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronDown className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   )}
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Chunks</h3>
                 </button>
@@ -1225,7 +1463,7 @@ export default function DocumentView() {
                                     onClick={() => handleCopyChunk(chunk)}
                                     className="button-ghost text-xs flex items-center gap-1"
                                   >
-                                    <ClipboardIcon className="w-4 h-4" />
+                                    <Clipboard className="w-4 h-4" />
                                     Copy
                                   </button>
                                   <button
@@ -1234,9 +1472,9 @@ export default function DocumentView() {
                                     className="button-secondary text-xs flex items-center gap-1"
                                   >
                                     {expanded ? (
-                                      <ChevronUpIcon className="w-4 h-4" />
+                                      <ChevronUp className="w-4 h-4" />
                                     ) : (
-                                      <ChevronDownIcon className="w-4 h-4" />
+                                      <ChevronDown className="w-4 h-4" />
                                     )}
                                   </button>
                                 </div>
@@ -1310,9 +1548,9 @@ export default function DocumentView() {
                   className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
                 >
                   {isEntitiesExpanded ? (
-                    <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronUp className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   ) : (
-                    <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronDown className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   )}
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Entities</h3>
                 </button>
@@ -1486,9 +1724,9 @@ export default function DocumentView() {
                   className="flex items-center gap-2 hover:bg-secondary-50 dark:hover:bg-secondary-700 rounded px-2 py-1 -mx-2 transition-colors"
                 >
                   {isMetadataExpanded ? (
-                    <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronUp className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   ) : (
-                    <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronDown className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   )}
                   <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Metadata</h3>
                 </button>
@@ -1556,7 +1794,7 @@ export default function DocumentView() {
             <section className="bg-white dark:bg-secondary-800 rounded-lg shadow-sm border border-secondary-200 dark:border-secondary-700">
               <header className="flex items-center justify-between px-5 py-4 border-b border-secondary-200 dark:border-secondary-700">
                 <h3 className="text-sm font-semibold text-secondary-900 dark:text-secondary-50">Graph (document)</h3>
-                <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 3D view of entities in this document</p>
+                <p className="text-xs text-secondary-500 dark:text-secondary-400">Interactive 2D view of entities in this document</p>
               </header>
               <div className="p-5">
                 <DocumentGraph documentId={documentData?.id ?? selectedDocumentId} height={480} />

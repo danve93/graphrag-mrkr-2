@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useChatStore } from '@/store/chatStore'
-import { PaperAirplaneIcon } from '@heroicons/react/24/solid'
-import { ShareIcon } from '@heroicons/react/24/outline'
-import { ShareIcon as ShareIconSolid } from '@heroicons/react/24/solid'
+import { Send, Share2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from '@/lib/api'
@@ -245,17 +243,22 @@ export default function ExternalChatBubble() {
                         onClick={handleToggleShare}
                         disabled={!sessionId || sharing}
                         className={`p-1.5 rounded-full transition-all border-2 ${!sessionId
-                            ? 'opacity-40 cursor-not-allowed border-[#f27a03]/40 text-[#f27a03]/40'
+                            ? 'opacity-40 cursor-not-allowed'
                             : isShared
-                                ? 'bg-[#f27a03] border-[#f27a03] text-white hover:bg-orange-600 hover:border-orange-600'
-                                : 'border-[#f27a03] text-[#f27a03] hover:bg-orange-50 dark:hover:bg-orange-900/20'
+                                ? 'text-white hover:bg-orange-600 hover:border-orange-600'
+                                : 'hover:bg-orange-50 dark:hover:bg-orange-900/20'
                             }`}
+                        style={{
+                            borderColor: `var(--accent-primary)${!sessionId ? '66' : ''}`,
+                            color: !sessionId ? 'var(--accent-primary)' : isShared ? 'white' : 'var(--accent-primary)',
+                            backgroundColor: isShared ? 'var(--accent-primary)' : undefined,
+                        }}
                         title={!sessionId ? "Start chatting to enable sharing" : isShared ? "Click to unshare" : "Share with Admin"}
                     >
                         {isShared ? (
-                            <ShareIconSolid className={`w-5 h-5 ${sharing ? 'animate-pulse' : ''}`} />
+                            <Share2 className={`w-5 h-5 ${sharing ? 'animate-pulse' : ''}`} fill="currentColor" />
                         ) : (
-                            <ShareIcon className={`w-5 h-5 ${sharing ? 'animate-pulse' : ''}`} />
+                            <Share2 className={`w-5 h-5 ${sharing ? 'animate-pulse' : ''}`} />
                         )}
                     </button>
                 </div>
@@ -276,9 +279,10 @@ export default function ExternalChatBubble() {
                             >
                                 <div
                                     className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${msg.role === 'user'
-                                        ? 'bg-[#f27a03] text-white rounded-br-none'
+                                        ? 'text-white rounded-br-none'
                                         : 'bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 text-gray-800 dark:text-gray-200 rounded-bl-none shadow-sm'
                                         }`}
+                                    style={{ backgroundColor: msg.role === 'user' ? 'var(--accent-primary)' : undefined }}
                                 >
                                     <ReactMarkdown remarkPlugins={[remarkGfm]} className="prose dark:prose-invert max-w-none text-sm">
                                         {msg.content}
@@ -326,14 +330,16 @@ export default function ExternalChatBubble() {
                         onChange={(e) => setInput(e.target.value)}
                         placeholder="Type a message..."
                         disabled={sending}
-                        className="w-full pl-4 pr-12 py-3 rounded-full bg-gray-100 dark:bg-neutral-800 border-transparent focus:bg-white dark:focus:bg-neutral-800 focus:border-[#f27a03] focus:ring-0 text-sm transition-all"
+                        className="w-full pl-4 pr-12 py-3 rounded-full bg-gray-100 dark:bg-neutral-800 border-transparent focus:bg-white dark:focus:bg-neutral-800 focus:ring-0 text-sm transition-all"
+                        style={{ outlineColor: 'var(--accent-primary)' }}
                     />
                     <button
                         type="submit"
                         disabled={!input.trim() || sending}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-[#f27a03] text-white rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:bg-orange-600 transition-colors"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-white rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:bg-orange-600 transition-colors"
+                        style={{ backgroundColor: 'var(--accent-primary)' }}
                     >
-                        <PaperAirplaneIcon className="w-4 h-4" />
+                        <Send className="w-4 h-4" />
                     </button>
                 </form>
             </div>

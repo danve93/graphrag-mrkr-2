@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     )
 
     # LLM Provider Configuration
-    llm_provider: str = Field(default="openai", description="LLM provider to use")
+    llm_provider: str = Field(default="openai", description="LLM provider: openai, anthropic, mistral, gemini, ollama, lmstudio")
 
     # OpenAI Configuration
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
@@ -33,6 +33,37 @@ class Settings(BaseSettings):
     )
     openai_proxy: Optional[str] = Field(default=None, description="OpenAI proxy URL")
 
+    # Anthropic/Claude Configuration
+    anthropic_api_key: Optional[str] = Field(
+        default=None, 
+        description="Anthropic API key",
+        validation_alias="CLAUDE_API_KEY"  # Also accept CLAUDE_API_KEY
+    )
+    anthropic_base_url: Optional[str] = Field(default=None, description="Anthropic base URL (optional)")
+    anthropic_model: str = Field(
+        default="claude-sonnet-4-5-20250929", description="Anthropic model name"
+    )
+
+    # Mistral Configuration
+    mistral_api_key: Optional[str] = Field(default=None, description="Mistral API key")
+    mistral_base_url: Optional[str] = Field(default=None, description="Mistral base URL (optional)")
+    mistral_model: str = Field(
+        default="mistral-large-latest", description="Mistral model name"
+    )
+
+    # Gemini Configuration
+    gemini_api_key: Optional[str] = Field(
+        default=None,
+        description="Google Gemini API key",
+        validation_alias="GOOGLE_API_KEY"
+    )
+    gemini_model: str = Field(
+        default="gemini-3-flash-preview", description="Gemini model name (e.g., gemini-3-flash-preview, gemini-3-pro-preview)"
+    )
+    gemini_embedding_model: str = Field(
+        default="models/text-embedding-004", description="Gemini embedding model"
+    )
+
     # Ollama Configuration
     ollama_base_url: Optional[str] = Field(
         default="http://localhost:11434", description="Ollama base URL"
@@ -41,8 +72,17 @@ class Settings(BaseSettings):
         default="llama2", description="Ollama model name"
     )
     ollama_embedding_model: Optional[str] = Field(
-        default="nomic-embed-text", description="Ollama embedding model"
+        default="nomic-embed-text", description="Ollama embedding model (e.g., nomic-embed-text)"
     )
+
+    # LM Studio Configuration (OpenAI-compatible local server)
+    lmstudio_base_url: str = Field(
+        default="http://localhost:1234/v1", description="LM Studio base URL"
+    )
+    lmstudio_model: str = Field(
+        default="local-model", description="LM Studio model name (as loaded in LM Studio)"
+    )
+
 
     # Neo4j Configuration
     neo4j_uri: str = Field(
@@ -53,7 +93,7 @@ class Settings(BaseSettings):
 
     # Embedding Configuration
     embedding_model: str = Field(
-        default="text-embedding-ada-002", description="Embedding model"
+        default="text-embedding-ada-002", description="Embedding model (e.g. text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large)"
     )
 
     # Streaming Configuration
@@ -97,6 +137,32 @@ class Settings(BaseSettings):
     # Document Processing Configuration
     chunk_size: int = Field(default=1200, description="Document chunk size")
     chunk_overlap: int = Field(default=150, description="Document chunk overlap")
+    chunk_target_tokens: int = Field(
+        default=800, description="Target tokens per chunk for token-aware chunkers"
+    )
+    chunk_min_tokens: int = Field(
+        default=180, description="Minimum tokens per chunk for token-aware chunkers"
+    )
+    chunk_max_tokens: int = Field(
+        default=1000, description="Maximum tokens per chunk for token-aware chunkers"
+    )
+    chunk_overlap_tokens: int = Field(
+        default=100, description="Token overlap for token-aware chunkers"
+    )
+    chunk_tokenizer: str = Field(
+        default="cl100k_base", description="Tokenizer name for token-aware chunking"
+    )
+    chunk_include_heading_path: bool = Field(
+        default=True, description="Prefix HTML heading path into chunk text"
+    )
+    chunker_strategy_pdf: str = Field(
+        default="docling_hybrid",
+        description="Chunking strategy for PDF files: docling_hybrid|legacy",
+    )
+    chunker_strategy_html: str = Field(
+        default="html_heading",
+        description="Chunking strategy for HTML files: html_heading|docling_hybrid|legacy",
+    )
 
     # Similarity Configuration
     similarity_threshold: float = Field(default=0.7, description="Similarity threshold")
@@ -747,6 +813,12 @@ class Settings(BaseSettings):
         description="Enable summarization caching to avoid re-summarizing identical descriptions (default: True)"
     )
 
+    # Document Conversion Provider
+    document_conversion_provider: str = Field(
+        default="auto",
+        description="Document conversion engine: auto|native|marker|docling"
+    )
+
     # Marker Conversion (PDF/Image) Configuration
     use_marker_for_pdf: bool = Field(
         default=True,
@@ -795,7 +867,7 @@ class Settings(BaseSettings):
             "snake_case": r'\b[a-z]+_[a-z_]+\b',
             "tech_id": r'\b[A-Z]{2,}-\d+\b',
             "config_key": r'\b[A-Z][A-Z_]{2,}\b|\b[a-z]+[A-Z][a-zA-Z]+\b',
-            "error_code": r'\b(ERROR|WARN|INFO|DEBUG|FATAL|Exception|Error)\b|\b0x[0-9a-fA-F]+\b|\b[A-Z]+_[A-Z]+\b',
+            "error_code": r'\b(ERROR|WARN|INFO|DEBUG|FATAL|Exception|Error)\b|\b0x[0-9a-fA-F]+\b|\b[A-Z]+_[A-Z0-9]+\b',
             "file_ext": r'\b\w+\.(conf|json|yaml|yml|xml|py|js|ts|java|go|rs|c|cpp|h|hpp|sql|sh|bat|ps1|ini|env|properties)\b',
             "file_path": r'/\w+/[\w/\.]+'
         },
@@ -943,6 +1015,7 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "embedding_delay_min": "embedding_delay_min",
         "embedding_delay_max": "embedding_delay_max",
         # === PDF Processing ===
+        "document_conversion_provider": "document_conversion_provider",
         "use_marker_for_pdf": "use_marker_for_pdf",
         "marker_output_format": "marker_output_format",
         "marker_use_llm": "marker_use_llm",
@@ -958,6 +1031,15 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "keyword_search_weight": "keyword_search_weight",
         "hybrid_chunk_weight": "hybrid_chunk_weight",
         "hybrid_entity_weight": "hybrid_entity_weight",
+        # === Chunking ===
+        "chunk_target_tokens": "chunk_target_tokens",
+        "chunk_min_tokens": "chunk_min_tokens",
+        "chunk_max_tokens": "chunk_max_tokens",
+        "chunk_overlap_tokens": "chunk_overlap_tokens",
+        "chunk_tokenizer": "chunk_tokenizer",
+        "chunk_include_heading_path": "chunk_include_heading_path",
+        "chunker_strategy_pdf": "chunker_strategy_pdf",
+        "chunker_strategy_html": "chunker_strategy_html",
         "enable_stale_job_cleanup": "enable_stale_job_cleanup",
         "flashrank_enabled": "flashrank_enabled",
         "flashrank_model_name": "flashrank_model_name",
@@ -993,7 +1075,15 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
                 setattr(settings_instance, settings_attr, rag_config[config_key])
             except Exception as e:
                 logger.warning(f"Failed to apply RAG config override for {settings_attr}: {e}")
-    
+
+    provider_override = rag_config.get("document_conversion_provider")
+    if provider_override:
+        provider = str(provider_override).strip().lower()
+        if provider == "marker":
+            settings_instance.use_marker_for_pdf = True
+        elif provider in {"docling", "native"}:
+            settings_instance.use_marker_for_pdf = False
+
     # Issue S7: Propagate default_llm_model to provider-specific settings
     # This ensures the UI model selection overrides all provider defaults
     default_model = rag_config.get("default_llm_model")
@@ -1073,12 +1163,23 @@ try:
     else:
         logger.info(f"Entity extraction format: {settings.entity_extraction_format}")
 
+    # Validate document conversion provider
+    provider = getattr(settings, "document_conversion_provider", "auto")
+    if provider not in {"auto", "native", "marker", "docling"}:
+        logger.warning(f"Invalid document_conversion_provider '{provider}', defaulting to 'auto'")
+        settings.document_conversion_provider = "auto"
+        provider = "auto"
+    if provider == "docling":
+        logger.info("Docling conversion enabled")
+    elif provider == "native":
+        logger.info("Native conversion enabled (built-in loaders)")
+
     # Validate Marker output format
     marker_fmt = getattr(settings, "marker_output_format", "markdown")
     if marker_fmt not in ["markdown", "json", "html", "chunks"]:
         logger.warning(f"Invalid marker_output_format '{marker_fmt}', defaulting to 'markdown'")
         settings.marker_output_format = "markdown"
-    if getattr(settings, "use_marker_for_pdf", False):
+    if provider in {"marker", "auto"} and getattr(settings, "use_marker_for_pdf", False):
         logger.info("Marker PDF conversion enabled")
 except Exception:
     pass

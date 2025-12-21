@@ -270,15 +270,35 @@ Provide a concise summary (max {max_summary_length} chars), document type, and h
                 system_message=system_message,
                 temperature=1.0,  # Default temperature for gpt-4o-mini compatibility
                 max_tokens=800,  # Limit response to encourage brevity
-                model_override=self.llm_model
+                model_override=self.llm_model,
+                include_usage=True,
             )
+
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    from config.settings import settings
+                    usage_tracker.record(
+                        operation="ingestion.summarization",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=self.llm_model or "gpt-4o-mini",
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                        document_id=getattr(self, "_current_doc_id", None),
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response_text = response.get("content", "")
+            else:
+                response_text = response or ""
 
             # Parse the JSON response
             import json
             import re
 
             # Extract JSON from response (in case there's extra text)
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
             else:

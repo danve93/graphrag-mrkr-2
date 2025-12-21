@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { UserCircleIcon, ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline'
+import { UserCircle, LogOut } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
 import { api } from '@/lib/api'
-import Tooltip from '@/components/Utils/Tooltip'
+import { AnimatedTooltip as Tooltip } from '@motion-primitives/animated-tooltip'
 
 export default function SidebarUser() {
     const { user, identifyUser, setActiveView, logout } = useChatStore()
@@ -36,7 +36,7 @@ export default function SidebarUser() {
         <div className="flex flex-col p-3 border-t border-[var(--border)] bg-[var(--bg-secondary)]">
             <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2 overflow-hidden">
-                    <UserCircleIcon className="w-5 h-5 text-[var(--accent)] flex-shrink-0" />
+                    <UserCircle className="w-5 h-5 text-[var(--accent)] flex-shrink-0" />
                     <div className="flex flex-col overflow-hidden">
                         <span className="text-xs font-medium text-[var(--text-primary)] truncate max-w-[120px]" title={user.id}>
                             {user.id}
@@ -52,7 +52,7 @@ export default function SidebarUser() {
                         onClick={handleLogout}
                         className="p-1.5 hover:bg-[var(--bg-hover)] rounded-md transition-colors text-[var(--text-secondary)]"
                     >
-                        <ArrowRightOnRectangleIcon className="w-4 h-4" />
+                        <LogOut className="w-4 h-4" />
                     </button>
                 </Tooltip>
             </div>

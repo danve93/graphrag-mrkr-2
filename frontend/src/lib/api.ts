@@ -186,6 +186,80 @@ export const api = {
     return response.json()
   },
 
+  async getFolders() {
+    const response = await fetchWithAuth(`${API_URL}/api/database/folders`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async createFolder(name: string) {
+    const response = await fetchWithAuth(`${API_URL}/api/database/folders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async renameFolder(folderId: string, name: string) {
+    const response = await fetchWithAuth(`${API_URL}/api/database/folders/${folderId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async deleteFolder(folderId: string, mode: 'move_to_root' | 'delete_documents') {
+    const response = await fetchWithAuth(`${API_URL}/api/database/folders/${folderId}?mode=${mode}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async moveDocumentToFolder(documentId: string, folderId: string | null) {
+    const response = await fetchWithAuth(`${API_URL}/api/database/documents/${documentId}/folder`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ folder_id: folderId }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async reorderDocuments(folderId: string | null, documentIds: string[]) {
+    const response = await fetchWithAuth(`${API_URL}/api/database/documents/order`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ folder_id: folderId, document_ids: documentIds }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
   async getStagedDocuments() {
     const response = await fetchWithAuth(`${API_URL}/api/database/staged`)
     if (!response.ok) {
@@ -239,9 +313,13 @@ export const api = {
     return response.json()
   },
 
-  async clearDatabase() {
+  async clearDatabase(options?: { clearKnowledgeBase: boolean; clearConversations: boolean }) {
     const response = await fetchWithAuth(`${API_URL}/api/database/clear`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(options || { clearKnowledgeBase: true, clearConversations: true }),
     })
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
@@ -312,6 +390,7 @@ export const api = {
   // New: lightweight summary fetch
   async getDocumentSummary(documentId: string): Promise<{
     id: string
+    title?: string
     filename: string
     original_filename?: string
     mime_type?: string
@@ -319,6 +398,7 @@ export const api = {
     created_at?: number | string
     link?: string
     uploader?: string | null
+    document_type?: string
     stats: { chunks: number; entities: number; communities: number; similarities: number }
     previews?: {
       top_communities?: Array<{ community_id: number; count: number } | null> | null
@@ -560,6 +640,22 @@ export const api = {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ metadata }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
+  async updateDocumentDetails(documentId: string, details: { title?: string; document_type?: string }) {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/details`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(details),
     })
 
     if (!response.ok) {

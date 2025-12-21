@@ -26,6 +26,7 @@ from ingestion.content_filters import get_content_filter
 # (get_response_cache imported above)
 
 logger = logging.getLogger(__name__)
+HTML_EXTENSIONS = {".html", ".htm", ".xhtml", ".xht"}
 
 
 class EntityExtractionState(Enum):
@@ -630,8 +631,127 @@ class DocumentProcessor:
             ".png": "image",
             ".tiff": "image",
             ".bmp": "image",
+            ".webp": "image",
+            ".vtt": "text",
+            ".mp3": "audio",
+            ".wav": "audio",
         }
         return mapping.get(ext, "unknown")
+
+    def _chunking_settings_snapshot(self) -> Dict[str, Any]:
+        return {
+            "chunk_size_used": settings.chunk_size,
+            "chunk_overlap_used": settings.chunk_overlap,
+            "chunk_target_tokens": getattr(settings, "chunk_target_tokens", 800),
+            "chunk_min_tokens": getattr(settings, "chunk_min_tokens", 180),
+            "chunk_max_tokens": getattr(settings, "chunk_max_tokens", 1000),
+            "chunk_overlap_tokens": getattr(settings, "chunk_overlap_tokens", 100),
+            "chunk_tokenizer": getattr(settings, "chunk_tokenizer", "cl100k_base"),
+            "chunk_include_heading_path": getattr(
+                settings, "chunk_include_heading_path", True
+            ),
+            "chunker_strategy_pdf": getattr(
+                settings, "chunker_strategy_pdf", "docling_hybrid"
+            ),
+            "chunker_strategy_html": getattr(
+                settings, "chunker_strategy_html", "html_heading"
+            ),
+        }
+
+    def _prepare_classification_content(
+        self, content: str, metadata: Dict[str, Any]
+    ) -> str:
+        ext = (metadata.get("file_extension") or "").lower()
+        if ext in HTML_EXTENSIONS:
+            try:
+                return document_chunker.html_chunker.extract_plain_text(content)
+            except Exception as exc:
+                logger.warning("Failed to strip HTML for classification: %s", exc)
+        return content
+
+    def _resolve_chunking_strategy(
+        self, metadata: Dict[str, Any], docling_document: Any
+    ) -> str:
+        ext = (metadata.get("file_extension") or "").lower()
+        if ext in HTML_EXTENSIONS:
+            strategy = getattr(settings, "chunker_strategy_html", "html_heading")
+            if strategy == "docling_hybrid" and docling_document is None:
+                return "legacy"
+            return strategy
+        if ext == ".pdf":
+            strategy = getattr(settings, "chunker_strategy_pdf", "docling_hybrid")
+            if strategy == "docling_hybrid" and (
+                docling_document is None
+                or not document_chunker.docling_chunker.is_available()
+            ):
+                return "legacy"
+            return strategy
+        return "legacy"
+
+    def _chunking_params_match(
+        self,
+        stored_params: Optional[Dict[str, Any]],
+        metadata: Dict[str, Any],
+        docling_document: Any,
+    ) -> bool:
+        if not stored_params:
+            return True
+        snapshot = self._chunking_settings_snapshot()
+        strategy = self._resolve_chunking_strategy(metadata, docling_document)
+        ext = (metadata.get("file_extension") or "").lower()
+
+        if strategy in {"html_heading", "docling_hybrid"}:
+            keys = [
+                "chunk_target_tokens",
+                "chunk_min_tokens",
+                "chunk_max_tokens",
+                "chunk_overlap_tokens",
+                "chunk_tokenizer",
+            ]
+            if strategy == "html_heading":
+                keys.extend(
+                    [
+                        "chunk_include_heading_path",
+                        "chunker_strategy_html",
+                    ]
+                )
+            elif strategy == "docling_hybrid":
+                keys.append(
+                    "chunker_strategy_pdf"
+                    if ext == ".pdf"
+                    else "chunker_strategy_html"
+                )
+            return self._compare_chunking_params(
+                stored_params, snapshot, keys, require_all=True
+            )
+
+        return self._compare_chunking_params(
+            stored_params,
+            snapshot,
+            ["chunk_size_used", "chunk_overlap_used"],
+            require_all=False,
+        )
+
+    def _compare_chunking_params(
+        self,
+        stored_params: Dict[str, Any],
+        expected: Dict[str, Any],
+        keys: List[str],
+        require_all: bool,
+    ) -> bool:
+        for key in keys:
+            if key not in stored_params:
+                if require_all:
+                    return False
+                continue
+            stored_value = stored_params.get(key)
+            if stored_value is None:
+                if require_all:
+                    return False
+                continue
+            if stored_value != expected.get(key):
+                return False
+        return True
 
     def _load_category_config(self) -> Dict[str, Any]:
         """Load category configuration from `config/document_categories.json`."""
@@ -680,11 +800,29 @@ class DocumentProcessor:
 
             resp = llm_manager.generate_response(
                 prompt=prompt,
-                model=getattr(settings, "classification_model", "gpt-4o-mini"),
+                model_override=getattr(settings, "classification_model", "gpt-4o-mini"),
                 temperature=0.1,
                 max_tokens=200,
+                include_usage=True,
             )
-            text = (resp or "").strip()
+            
+            # Track token usage
+            if isinstance(resp, dict) and "usage" in resp:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    usage_tracker.record(
+                        operation="ingestion.classification",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=getattr(settings, "classification_model", "gpt-4o-mini"),
+                        input_tokens=resp["usage"].get("input", 0),
+                        output_tokens=resp["usage"].get("output", 0),
+                        document_id=getattr(self, "_current_doc_id", None),
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                text = (resp.get("content") or "").strip()
+            else:
+                text = (resp or "").strip()
             if "```json" in text:
                 text = text.split("```json", 1)[1].split("```", 1)[0].strip()
             elif "```" in text:
@@ -1137,6 +1275,7 @@ class DocumentProcessor:
                 return None
 
             content = conversion_result.get("content", "")
+            docling_document = conversion_result.get("docling_document")
 
             # Generate document ID and extract metadata
             doc_id = document_id or self._generate_document_id(file_path)
@@ -1153,10 +1292,8 @@ class DocumentProcessor:
                 "processing_stage": "conversion",
                 "processing_progress": 5.0,
                 "processing_error": None,
-                # Store chunking parameters for incremental update validation
-                "chunk_size_used": settings.chunk_size,
-                "chunk_overlap_used": settings.chunk_overlap,
             }
+            processing_state.update(self._chunking_settings_snapshot())
 
             # Create document node
             graph_db.create_document_node(doc_id, {**metadata, **processing_state})
@@ -1172,9 +1309,12 @@ class DocumentProcessor:
                     doc_id,
                     {"processing_stage": "classification", "processing_progress": 10.0},
                 )
+                classification_content = self._prepare_classification_content(
+                    content, metadata
+                )
                 classification_result = self.classify_document_categories(
                     filename=metadata.get("filename", ""),
-                    content=content,
+                    content=classification_content,
                 )
                 metadata.update(
                     {
@@ -1198,12 +1338,19 @@ class DocumentProcessor:
                     doc_id,
                     enable_quality_filtering=use_quality_filtering,
                     enable_ocr_enhancement=False,  # OCR already applied by smart loaders
+                    source_metadata=metadata,
+                    docling_document=docling_document,
                 )
                 logger.info(
                     f"Used enhanced chunking (Quality filtering: {use_quality_filtering}) for {doc_id}"
                 )
             else:
-                chunks = document_chunker.chunk_text(content, doc_id)
+                chunks = document_chunker.chunk_text(
+                    content,
+                    doc_id,
+                    source_metadata=metadata,
+                    docling_document=docling_document,
+                )
                 logger.info(f"Used standard chunking for {doc_id}")
 
             # Annotate chunk-level positional metadata
@@ -1244,44 +1391,47 @@ class DocumentProcessor:
             )
             # Document classification and metadata enrichment
             if getattr(settings, "enable_document_classification", False):
-                    graph_db.create_document_node(
-                        doc_id,
-                        {"processing_stage": "metadata_enrichment", "processing_progress": 62.0},
+                graph_db.create_document_node(
+                    doc_id,
+                    {"processing_stage": "metadata_enrichment", "processing_progress": 62.0},
+                )
+
+                if classification_result:
+                    cls = classification_result
+                else:
+                    classification_content = self._prepare_classification_content(
+                        content, metadata
                     )
-                    
-                    if classification_result:
-                        cls = classification_result
-                    else:
-                        cls = self.classify_document_categories(
-                            metadata.get("filename"), content
-                        )
-                    
-                    confidence = cls.get("confidence", 0.0)
-                    categories = cls.get("categories", [])
-                    apply_cls = confidence >= getattr(
-                        settings, "classification_confidence_threshold", 0.7
+                    cls = self.classify_document_categories(
+                        metadata.get("filename"), classification_content
                     )
-                    doc_category = (
-                        categories[0]
-                        if (categories and apply_cls)
-                        else getattr(settings, "classification_default_category", "general")
-                    )
-                    enrich = {
-                        "category": doc_category,
-                        "categories": categories,
-                        "classification_confidence": confidence,
-                        "keywords": cls.get("keywords", []),
-                        "difficulty": cls.get("difficulty", "intermediate"),
-                    }
-                    graph_db.create_document_node(doc_id, enrich)
-                    # Propagate category to chunks in-memory so metadata is stored during embedding persist
-                    for c in chunks:
-                        md = c.get("metadata", {}) or {}
-                        md["category"] = doc_category
-                        c["metadata"] = md
-                    logger.info(
-                        f"Classified document {doc_id} → {doc_category} (confidence={confidence:.2f})"
-                    )
+
+                confidence = cls.get("confidence", 0.0)
+                categories = cls.get("categories", [])
+                apply_cls = confidence >= getattr(
+                    settings, "classification_confidence_threshold", 0.7
+                )
+                doc_category = (
+                    categories[0]
+                    if (categories and apply_cls)
+                    else getattr(settings, "classification_default_category", "general")
+                )
+                enrich = {
+                    "category": doc_category,
+                    "categories": categories,
+                    "classification_confidence": confidence,
+                    "keywords": cls.get("keywords", []),
+                    "difficulty": cls.get("difficulty", "intermediate"),
+                }
+                graph_db.create_document_node(doc_id, enrich)
+                # Propagate category to chunks in-memory so metadata is stored during embedding persist
+                for c in chunks:
+                    md = c.get("metadata", {}) or {}
+                    md["category"] = doc_category
+                    c["metadata"] = md
+                logger.info(
+                    f"Classified document {doc_id} → {doc_category} (confidence={confidence:.2f})"
+                )
             logger.info(
                 f"Summary extracted for {doc_id}: type={summary_data.get('document_type')}, "
                 f"hashtags={len(summary_data.get('hashtags', []))}"
@@ -1710,15 +1860,11 @@ class DocumentProcessor:
     ):
         """Complete background worker for handling the entire document update lifecycle."""
         try:
-            # 1. Validate chunking parameters
+            from config.settings import apply_rag_tuning_overrides
+            apply_rag_tuning_overrides(settings)
+
+            # 1. Fetch stored chunking parameters
             stored_params = graph_db.get_document_chunking_params(doc_id)
-            if (
-                stored_params and (
-                    stored_params.get("chunk_size_used") != settings.chunk_size or
-                    stored_params.get("chunk_overlap_used") != settings.chunk_overlap
-                )
-            ):
-                raise ValueError("Chunking parameters have changed; incremental update not possible.")
 
             # 2. Conversion Phase
             graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_stage": "conversion", "processing_progress": 5.0})
@@ -1727,7 +1873,19 @@ class DocumentProcessor:
                 raise ValueError("No content extracted from file")
             
             content = conversion_result.get("content", "")
-            new_chunks = document_chunker.chunk_text(content, doc_id)
+            docling_document = conversion_result.get("docling_document")
+            metadata = self._extract_metadata(file_path, original_filename)
+            metadata.update(conversion_result.get("metadata", {}))
+
+            if not self._chunking_params_match(stored_params, metadata, docling_document):
+                raise ValueError("Chunking parameters have changed; incremental update not possible.")
+
+            new_chunks = document_chunker.chunk_text(
+                content,
+                doc_id,
+                source_metadata=metadata,
+                docling_document=docling_document,
+            )
 
             # 3. Diffing Phase
             graph_db.create_document_node(doc_id, {"processing_status": "processing", "processing_stage": "chunking", "processing_progress": 15.0})
@@ -2128,7 +2286,7 @@ class DocumentProcessor:
         # Find all supported files
         pattern = "**/*" if recursive else "*"
         for file_path in directory_path.glob(pattern):
-            if file_path.is_file() and file_path.suffix.lower() in self.loaders:
+            if file_path.is_file() and self.converter.supports_extension(file_path.suffix.lower()):
                 result = self.process_file(file_path)
                 if result:
                     results.append(result)
@@ -2179,6 +2337,10 @@ class DocumentProcessor:
             Processing result dictionary or None if failed
         """
         try:
+            # Apply RAG tuning config overrides (runtime sync from UI)
+            from config.settings import apply_rag_tuning_overrides
+            apply_rag_tuning_overrides(settings)
+
             use_quality_filtering = (
                 enable_quality_filtering
                 if enable_quality_filtering is not None
@@ -2202,6 +2364,7 @@ class DocumentProcessor:
                 return None
 
             content = conversion_result.get("content", "")
+            docling_document = conversion_result.get("docling_document")
             metadata.update(conversion_result.get("metadata", {}))
 
             # Ensure content_primary_type is set (derive from file extension if missing)
@@ -2214,6 +2377,7 @@ class DocumentProcessor:
                 doc_id,
                 {
                     **metadata,
+                    **self._chunking_settings_snapshot(),
                     "processing_status": "processing",
                     "processing_stage": "chunking",
                     "processing_progress": 15.0,
@@ -2237,9 +2401,12 @@ class DocumentProcessor:
                     doc_id,
                     {"processing_stage": "classification", "processing_progress": 10.0},
                 )
+                classification_content = self._prepare_classification_content(
+                    content, metadata
+                )
                 classification_result = self.classify_document_categories(
                     filename=metadata.get("filename", ""),
-                    content=content,
+                    content=classification_content,
                 )
                 metadata.update(
                     {
@@ -2275,12 +2442,19 @@ class DocumentProcessor:
                     doc_id,
                     enable_quality_filtering=use_quality_filtering,
                     enable_ocr_enhancement=False,  # OCR already applied by smart loaders
+                    source_metadata=metadata,
+                    docling_document=docling_document,
                 )
                 logger.info(
                     f"Used enhanced chunking (Quality filtering: {use_quality_filtering}) for {doc_id}"
                 )
             else:
-                chunks = document_chunker.chunk_text(content, doc_id)
+                chunks = document_chunker.chunk_text(
+                    content,
+                    doc_id,
+                    source_metadata=metadata,
+                    docling_document=docling_document,
+                )
                 logger.info(f"Used standard chunking for {doc_id}")
 
             for chunk in chunks:
@@ -2926,7 +3100,7 @@ class DocumentProcessor:
 
     def get_supported_extensions(self) -> List[str]:
         """Get list of supported file extensions."""
-        return list(self.loaders.keys())
+        return self.converter.get_supported_extensions()
 
     def estimate_chunks_from_files(self, uploaded_files: List[Any]) -> int:
         """
@@ -2945,11 +3119,11 @@ class DocumentProcessor:
         for uploaded_file in uploaded_files:
             try:
                 file_ext = Path(uploaded_file.name).suffix.lower()
-                loader = self.loaders.get(file_ext)
-
-                if not loader:
-                    logger.warning(f"No loader available for file type: {file_ext}")
+                if not self.converter.supports_extension(file_ext):
+                    logger.warning(f"No converter available for file type: {file_ext}")
                     continue
+
+                loader = self.loaders.get(file_ext)
 
                 # Save file temporarily to load content
                 with tempfile.NamedTemporaryFile(
@@ -2959,16 +3133,28 @@ class DocumentProcessor:
                     tmp_path = Path(tmp_file.name)
 
                 try:
-                    # Load content and estimate chunks
-                    content = loader.load(tmp_path)
-                    if content:
-                        # Use the same chunking logic to get accurate count
-                        chunks = document_chunker.chunk_text(
-                            content, f"temp_{uploaded_file.name}"
+                    if loader:
+                        # Load content and estimate chunks
+                        content = loader.load(tmp_path)
+                        if content:
+                            # Use the same chunking logic to get accurate count
+                            chunks = document_chunker.chunk_text(
+                                content,
+                                f"temp_{uploaded_file.name}",
+                                source_metadata={"file_extension": file_ext},
+                            )
+                            total_chunks += len(chunks)
+                            logger.debug(
+                                f"Estimated {len(chunks)} chunks for {uploaded_file.name}"
+                            )
+                    else:
+                        file_size = len(uploaded_file.getvalue())
+                        estimated_chunks = max(
+                            1, file_size // (settings.chunk_size * 2)
                         )
-                        total_chunks += len(chunks)
+                        total_chunks += estimated_chunks
                         logger.debug(
-                            f"Estimated {len(chunks)} chunks for {uploaded_file.name}"
+                            f"Fallback estimated {estimated_chunks} chunks for {uploaded_file.name}"
                         )
                 finally:
                     # Clean up temporary file

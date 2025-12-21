@@ -20,6 +20,7 @@ def generate_response(
     llm_model: str | None = None,
     custom_prompt: str | None = None,
     memory_context: Any = None,
+    session_id: str | None = None,
 ) -> Dict[str, Any]:
     """
     Generate response using retrieved context and query analysis.
@@ -30,6 +31,10 @@ def generate_response(
         query_analysis: Query analysis results
         temperature: LLM temperature for response generation
         chat_history: Optional conversation history for follow-up questions
+        llm_model: Optional LLM model to use
+        custom_prompt: Optional custom prompt with query/context formatted
+        memory_context: Optional memory context for personalization
+        session_id: Optional session ID for token tracking
 
     Returns:
         Dictionary containing response and metadata
@@ -116,6 +121,7 @@ def generate_response(
             chat_history=chat_history if query_analysis.get("is_follow_up") else None,
             model_override=llm_model,
             custom_prompt=custom_prompt,
+            session_id=session_id,
         )
 
         # Prepare sources information with entity support
@@ -177,6 +183,9 @@ def generate_response(
                             "entity_id": f"entity_{hash(entity_name) % 10000}",
                             "relevance_score": source_info["similarity"],
                             "content": chunk.get("content", ""),
+                            "chunk_id": source_info.get("chunk_id"),
+                            "chunk_index": source_info.get("chunk_index"),
+                            "document_id": source_info.get("document_id"),
                             "related_chunks": [
                                 {
                                     "chunk_id": chunk.get("chunk_id"),
@@ -264,6 +273,7 @@ def stream_generate_response(
     temperature: float = 0.7,
     chat_history: List[Dict[str, str]] = None,
     llm_model: str | None = None,
+    session_id: str | None = None,
 ):
     """
     Stream generation tokens for a RAG response. This is a synchronous
@@ -310,6 +320,7 @@ def stream_generate_response(
                 temperature=temperature,
                 chat_history=chat_history if query_analysis.get("is_follow_up") else None,
                 model_override=llm_model,
+                session_id=session_id,
             ):
                 # Yield each token fragment as-is
                 buffer.append(token)

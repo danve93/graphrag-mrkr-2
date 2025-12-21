@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { flushSync } from 'react-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Message } from '@/types'
 import { api, API_URL } from '@/lib/api'
-import { Button } from '@mui/material'
-import { Chat as ChatIconMui } from '@mui/icons-material'
+import { MessageSquare } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
 import FollowUpQuestions from './FollowUpQuestions'
@@ -223,7 +223,10 @@ export default function ChatInterface() {
     let routingInfo: any = null
     let newSessionId = sessionId
     let messageId: string | undefined = undefined
+    let inputTokens = 0
+    let outputTokens = 0
     let streamCompleted = false
+    const streamStartTime = Date.now()
     let animationFrameId: number | null = null
     let contentBuffer: string[] = []
     let effectiveContextDocs = [...contextDocuments]
@@ -362,6 +365,8 @@ export default function ChatInterface() {
               } else if (data.type === 'metadata') {
                 newSessionId = data.content.session_id
                 messageId = data.content.message_id
+                inputTokens = data.content.input_tokens || 0
+                outputTokens = data.content.output_tokens || 0
                 if (Array.isArray(data.content.context_documents)) {
                   effectiveContextDocs = data.content.context_documents
                   effectiveContextDocLabels = data.content.context_documents.map(
@@ -399,8 +404,8 @@ export default function ChatInterface() {
         checkComplete()
       })
 
-      // Calculate total duration from stages
-      const totalDuration = stageUpdates.reduce((sum, stage) => sum + (stage.duration_ms || 0), 0)
+      // Calculate total duration using wall-clock time
+      const totalDuration = Date.now() - streamStartTime
 
       // Final update with all metadata
       updateLastMessage((prev) => ({
@@ -417,6 +422,8 @@ export default function ChatInterface() {
         message_id: messageId,
         session_id: newSessionId,
         routing_info: routingInfo,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
       }))
 
       if (newSessionId && !sessionId) {
@@ -470,7 +477,34 @@ export default function ChatInterface() {
   }
 
   const handleFollowUpClick = (question: string) => {
-    handleSendMessage(question, [], [])
+    // Prefer explicit context documents from the last assistant message,
+    // fall back to sources if needed.
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant')
+
+    const contextDocIds = (lastAssistantMsg?.context_documents || []).filter(
+      (id): id is string => !!id
+    )
+    const contextLabels = (lastAssistantMsg?.context_document_labels || []).filter(
+      (label): label is string => !!label
+    )
+
+    const sourceDocIds =
+      lastAssistantMsg?.sources
+        ?.map((source) => source.document_id)
+        .filter((id): id is string => !!id) || []
+    const uniqueSourceDocIds = [...new Set(sourceDocIds)]
+
+    const sourceLabels =
+      lastAssistantMsg?.sources
+        ?.map((source) => source.document_name || source.filename)
+        .filter((label): label is string => !!label) || []
+    const uniqueSourceLabels = [...new Set(sourceLabels)]
+
+    const effectiveDocIds = contextDocIds.length > 0 ? contextDocIds : uniqueSourceDocIds
+    const effectiveLabels =
+      contextLabels.length > 0 ? contextLabels : uniqueSourceLabels
+
+    handleSendMessage(question, effectiveDocIds, effectiveLabels)
   }
 
   const handleRetryWithCategories = (query: string, categories: string[]) => {
@@ -495,13 +529,13 @@ export default function ChatInterface() {
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <ChatIconMui style={{ fontSize: '24px', color: '#f27a03' }} />
+            <MessageSquare size={24} style={{ color: 'var(--accent-primary)' }} />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -527,23 +561,27 @@ export default function ChatInterface() {
       {/* Messages */}
       <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-6 pt-6 pb-32">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: 'var(--neon-glow)' }}>
-              <svg
-                className="w-8 h-8"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                style={{ color: 'var(--primary-500)' }}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-                />
-              </svg>
-            </div>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: 'easeOut' }}
+            className="flex flex-col items-center justify-center h-full text-center"
+          >
+            <motion.div
+              animate={{
+                scale: [1, 1.05, 1],
+                opacity: [0.8, 1, 0.8],
+              }}
+              transition={{
+                duration: 3,
+                repeat: Infinity,
+                ease: 'easeInOut',
+              }}
+              className="w-16 h-16 rounded-full flex items-center justify-center mb-4"
+              style={{ backgroundColor: 'var(--accent-subtle)' }}
+            >
+              <MessageSquare className="w-8 h-8" style={{ color: 'var(--accent-primary)' }} />
+            </motion.div>
             <h2 className="text-xl font-semibold text-secondary-700 dark:text-secondary-300 mb-2">
               Start a Conversation
             </h2>
@@ -551,40 +589,38 @@ export default function ChatInterface() {
               Upload some documents and start asking questions. I&apos;ll help you find
               relevant information and provide intelligent answers.
             </p>
-          </div>
+          </motion.div>
         ) : (
           <div className="max-w-4xl mx-auto space-y-4">
-            {messages.map((message, index) => (
-              <div key={index}>
-                <MessageBubble message={message} onRetryWithCategories={handleRetryWithCategories} />
-                {message.role === 'assistant' &&
-                  !message.isStreaming &&
-                  message.follow_up_questions &&
-                  message.follow_up_questions.length > 0 &&
-                  index === messages.length - 1 && (
-                    <FollowUpQuestions
-                      questions={message.follow_up_questions}
-                      onQuestionClick={handleFollowUpClick}
-                    />
-                  )}
-                {/* Show completed stages from the last assistant message */}
-                {message.role === 'assistant' &&
-                  !message.isStreaming &&
-                  index === messages.length - 1 &&
-                  completedStages.length > 0 && (
-                    <div className="mt-4">
-                      <LoadingIndicator
-                        currentStage={completedStages[completedStages.length - 1]}
-                        completedStages={completedStages}
-                        stageUpdates={stageUpdates}
-                        isLoading={false}
-                        enableQualityScoring={settings?.enable_quality_scoring ?? true}
+            <AnimatePresence mode="popLayout">
+              {messages.map((message, index) => (
+                <motion.div
+                  key={message.message_id || `msg-${index}`}
+                  initial={{ opacity: 0, y: 20, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.98 }}
+                  transition={{
+                    type: 'spring',
+                    stiffness: 400,
+                    damping: 30,
+                    delay: index < 5 ? index * 0.05 : 0, // Only stagger first 5 messages
+                  }}
+                  layout={!message.isStreaming}
+                >
+                  <MessageBubble message={message} onRetryWithCategories={handleRetryWithCategories} currentStage={message.isStreaming ? currentStage : undefined} />
+                  {message.role === 'assistant' &&
+                    !message.isStreaming &&
+                    message.follow_up_questions &&
+                    message.follow_up_questions.length > 0 &&
+                    index === messages.length - 1 && (
+                      <FollowUpQuestions
+                        questions={message.follow_up_questions}
+                        onQuestionClick={handleFollowUpClick}
                       />
-                    </div>
-                  )}
-              </div>
-            ))}
-            {(isLoading || isHistoryLoading) && <LoadingIndicator currentStage={currentStage} completedStages={completedStages} stageUpdates={stageUpdates} isLoading={isLoading || isHistoryLoading} enableQualityScoring={settings?.enable_quality_scoring ?? true} />}
+                    )}
+                </motion.div>
+              ))}
+            </AnimatePresence>
             <div ref={messagesEndRef} />
           </div>
         )}

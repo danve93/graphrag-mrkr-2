@@ -1,11 +1,11 @@
 
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { SlidersHorizontal, Info } from 'lucide-react'
 import { Button } from '@mui/material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
-import Tooltip from '@/components/Utils/Tooltip'
+import { AnimatedTooltip as Tooltip } from '@motion-primitives/animated-tooltip'
 import Loader from '@/components/Utils/Loader'
 import { API_URL } from '@/lib/api'
 
@@ -40,7 +40,9 @@ const LLM_MODEL_OPTIONS = [
   'gpt-4o',
   'gpt-4-turbo',
   'claude-3-5-sonnet-20241022',
-  'claude-3-5-haiku-20241022'
+  'claude-3-5-haiku-20241022',
+  'gemini-3-flash-preview',
+  'gemini-3-pro-preview'
 ]
 
 export default function RAGTuningPanel() {
@@ -51,6 +53,19 @@ export default function RAGTuningPanel() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<string>('default')
   const [hasChanges, setHasChanges] = useState(false)
+  const [highlightedParam, setHighlightedParam] = useState<string | null>(null)
+
+  // Ref for scrolling to highlighted element
+  const highlightedRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (highlightedParam && highlightedRef.current) {
+      highlightedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // Clear highlight after animation
+      const timer = setTimeout(() => setHighlightedParam(null), 2000)
+      return () => clearTimeout(timer)
+    }
+  }, [highlightedParam, activeSection])
 
   useEffect(() => {
     loadConfig()
@@ -72,6 +87,19 @@ export default function RAGTuningPanel() {
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('rag-tuning-active-section-changed', { detail: activeSection }));
   }, [activeSection])
+
+  // Listen for highlight events from sidebar search
+  useEffect(() => {
+    const handleHighlightSection = (event: CustomEvent<string>) => {
+      // The sidebar dispatches the section key, we just acknowledge it
+      // The actual section navigation is handled by onSectionClick in sidebar
+    };
+
+    window.addEventListener('rag-tuning-highlight-section', handleHighlightSection as EventListener);
+    return () => {
+      window.removeEventListener('rag-tuning-highlight-section', handleHighlightSection as EventListener);
+    };
+  }, []);
 
   const loadConfig = async () => {
     try {
@@ -219,13 +247,13 @@ export default function RAGTuningPanel() {
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <SlidersHorizontal size={24} color="#f27a03" />
+            <SlidersHorizontal size={24} color="var(--accent-primary)" />
           </div>
           <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
             RAG Tuning
@@ -276,7 +304,7 @@ export default function RAGTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto pb-28 p-[var(--space-6)]">
         {/* Default LLM Model Section */}
         {activeSection === 'default' && (
           <div>
@@ -352,7 +380,20 @@ export default function RAGTuningPanel() {
 
                   {/* Parameters */}
                   {section.parameters.map((param) => (
-                    <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div
+                      key={param.key}
+                      ref={param.key === highlightedParam ? highlightedRef : null}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        transition: 'background-color 0.3s ease',
+                        backgroundColor: param.key === highlightedParam ? 'rgba(var(--accent-primary-rgb), 0.1)' : 'transparent',
+                        borderRadius: '8px',
+                        padding: param.key === highlightedParam ? '8px' : '0',
+                        margin: param.key === highlightedParam ? '-8px' : '0'
+                      }}
+                    >
                       <div className="flex items-center" style={{ gap: '8px' }}>
                         <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
                           {param.label}

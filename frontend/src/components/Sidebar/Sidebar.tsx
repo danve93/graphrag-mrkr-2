@@ -2,11 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
-import {
-  Bars3Icon,
-  XMarkIcon,
-} from '@heroicons/react/24/outline'
-import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
+import { Menu, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import SidebarUser from './SidebarUser'
 import SidebarHeader from './SidebarHeader'
 import ChatSidebarContent from './ChatSidebarContent'
@@ -19,7 +15,7 @@ import MetricsSidebarContent from './MetricsSidebarContent'
 import CategoriesSidebarContent from './CategoriesSidebarContent'
 import StatusIndicator from '@/components/Theme/StatusIndicator'
 import { useChatStore } from '@/store/chatStore'
-import Tooltip from '@/components/Utils/Tooltip'
+import { AnimatedTooltip as Tooltip } from '@motion-primitives/animated-tooltip'
 
 interface SidebarProps {
   open: boolean
@@ -126,7 +122,7 @@ export default function Sidebar({
           style={{ minWidth: '44px', minHeight: '44px', padding: '10px' }}
           aria-label={open ? 'Close sidebar' : 'Open sidebar'}
         >
-          {open ? <XMarkIcon className="w-6 h-6" /> : <Bars3Icon className="w-6 h-6" />}
+          {open ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
       </Tooltip>
 
@@ -150,9 +146,9 @@ export default function Sidebar({
               style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border)' }}
             >
               {collapsed ? (
-                <ChevronRightIcon className="w-5 h-5" />
+                <ChevronRight className="w-5 h-5" />
               ) : (
-                <ChevronLeftIcon className="w-5 h-5" />
+                <ChevronLeft className="w-5 h-5" />
               )}
             </button>
           </Tooltip>

@@ -187,7 +187,8 @@ export default function BenchmarkRunner({ onComplete }: BenchmarkRunnerProps) {
       <button
         onClick={runBenchmark}
         disabled={isRunning || selectedVariants.length === 0}
-        className="w-full px-4 py-2 bg-[#f27a03] text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#d96d03] transition-colors flex items-center justify-center gap-2"
+        className="w-full px-4 py-2 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-colors flex items-center justify-center gap-2"
+        style={{ backgroundColor: 'var(--accent-primary)' }}
       >
         {isRunning ? (
           <>
@@ -211,8 +212,8 @@ export default function BenchmarkRunner({ onComplete }: BenchmarkRunnerProps) {
           </div>
           <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
             <div
-              className="h-full bg-[#f27a03] transition-all duration-300"
-              style={{ width: `${progress}%` }}
+              className="h-full transition-all duration-300"
+              style={{ width: `${progress}%`, backgroundColor: 'var(--accent-primary)' }}
             />
           </div>
         </div>
@@ -221,11 +222,10 @@ export default function BenchmarkRunner({ onComplete }: BenchmarkRunnerProps) {
       {/* Status Message */}
       {status !== 'idle' && !isRunning && (
         <div
-          className={`flex items-center gap-2 p-3 rounded-lg ${
-            status === 'success'
+          className={`flex items-center gap-2 p-3 rounded-lg ${status === 'success'
               ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
               : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
-          }`}
+            }`}
         >
           {status === 'success' ? (
             <CheckCircle className="w-5 h-5" />

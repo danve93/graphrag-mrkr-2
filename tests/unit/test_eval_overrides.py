@@ -1,6 +1,13 @@
 """Test evaluation feature flag overrides."""
 import pytest
+import sys
 from unittest.mock import AsyncMock, patch, MagicMock
+
+# Mock neo4j driver before any imports that use it
+mock_neo4j = MagicMock()
+mock_neo4j.GraphDatabase.driver.return_value = MagicMock()
+sys.modules['neo4j'] = mock_neo4j
+
 from api.models import ChatRequest
 from api.routers.chat import _prepare_chat_context
 from config.settings import settings
@@ -38,11 +45,13 @@ async def test_eval_override_applies_and_restores():
 
     # Mock graph_rag.query and chat history service
     with patch("api.routers.chat.graph_rag.query", side_effect=mock_query):
-        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_history:
-            mock_history.return_value = MagicMock(messages=[])
-            with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
-                with patch("api.routers.chat.quality_scorer.calculate_quality_score", return_value=None):
-                    await _prepare_chat_context(request)
+        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = MagicMock(messages=[])
+            with patch("api.routers.chat.chat_history_service.create_session", new_callable=AsyncMock):
+                with patch("api.routers.chat.chat_history_service.save_message", new_callable=AsyncMock):
+                    with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
+                        with patch("api.routers.chat.quality_scorer.calculate_quality_score", return_value=None):
+                            await _prepare_chat_context(request)
 
     # Verify overrides were applied during query
     assert captured_routing == True, "enable_query_routing should be True during query"
@@ -76,11 +85,13 @@ async def test_eval_override_restored_on_exception():
         raise ValueError("Test error")
 
     with patch("api.routers.chat.graph_rag.query", side_effect=mock_raises):
-        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_history:
-            mock_history.return_value = MagicMock(messages=[])
-            with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
-                with pytest.raises(ValueError, match="Test error"):
-                    await _prepare_chat_context(request)
+        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = MagicMock(messages=[])
+            with patch("api.routers.chat.chat_history_service.create_session", new_callable=AsyncMock):
+                with patch("api.routers.chat.chat_history_service.save_message", new_callable=AsyncMock):
+                    with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
+                        with pytest.raises(ValueError, match="Test error"):
+                            await _prepare_chat_context(request)
 
     # Verify override was applied
     assert captured_value == True, "enable_structured_kg should be True during query"
@@ -121,11 +132,13 @@ async def test_multiple_overrides_work_together():
         return {"response": "ok", "sources": [], "metadata": {}, "stages": []}
 
     with patch("api.routers.chat.graph_rag.query", side_effect=mock_query):
-        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_history:
-            mock_history.return_value = MagicMock(messages=[])
-            with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
-                with patch("api.routers.chat.quality_scorer.calculate_quality_score", return_value=None):
-                    await _prepare_chat_context(request)
+        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = MagicMock(messages=[])
+            with patch("api.routers.chat.chat_history_service.create_session", new_callable=AsyncMock):
+                with patch("api.routers.chat.chat_history_service.save_message", new_callable=AsyncMock):
+                    with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
+                        with patch("api.routers.chat.quality_scorer.calculate_quality_score", return_value=None):
+                            await _prepare_chat_context(request)
 
     # All overrides should have been applied
     assert captured['routing'] == False
@@ -162,11 +175,13 @@ async def test_none_values_dont_override():
         return {"response": "ok", "sources": [], "metadata": {}, "stages": []}
 
     with patch("api.routers.chat.graph_rag.query", side_effect=mock_query):
-        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_history:
-            mock_history.return_value = MagicMock(messages=[])
-            with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
-                with patch("api.routers.chat.quality_scorer.calculate_quality_score", return_value=None):
-                    await _prepare_chat_context(request)
+        with patch("api.routers.chat.chat_history_service.get_conversation", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = MagicMock(messages=[])
+            with patch("api.routers.chat.chat_history_service.create_session", new_callable=AsyncMock):
+                with patch("api.routers.chat.chat_history_service.save_message", new_callable=AsyncMock):
+                    with patch("api.routers.chat.load_chat_tuning_config", return_value={}):
+                        with patch("api.routers.chat.quality_scorer.calculate_quality_score", return_value=None):
+                            await _prepare_chat_context(request)
 
     # Should remain at original value
     assert captured == True, "Setting should not be overridden when eval field is None"

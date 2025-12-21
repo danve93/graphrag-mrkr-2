@@ -55,13 +55,13 @@ export default function AdminSharedChats() {
                         width: '40px',
                         height: '40px',
                         borderRadius: '8px',
-                        backgroundColor: '#f27a0320',
-                        border: '1px solid #f27a03',
+                        backgroundColor: 'var(--accent-subtle)',
+                        border: '1px solid var(--accent-primary)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center'
                     }}>
-                        <Users className="text-[#f27a03]" size={24} />
+                        <Users style={{ color: 'var(--accent-primary)' }} size={24} />
                     </div>
                     <div style={{ flex: 1 }}>
                         <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -75,7 +75,7 @@ export default function AdminSharedChats() {
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-6 pb-28">
                 {error && (
                     <div className="mb-4 p-4 rounded-md border text-sm"
                         style={{ background: '#FECACA30', borderColor: '#FECACA', color: '#DC2626' }}>
@@ -85,7 +85,7 @@ export default function AdminSharedChats() {
 
                 {loading ? (
                     <div className="flex items-center justify-center h-48">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#f27a03]"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2" style={{ borderColor: 'var(--accent-primary)' }}></div>
                     </div>
                 ) : sessions.length === 0 ? (
                     <div className="flex flex-col items-center justify-center p-12 text-center border rounded-lg border-dashed"
@@ -108,8 +108,10 @@ export default function AdminSharedChats() {
                                 <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2 mb-1">
-                                            <h3 className="text-lg font-semibold truncate hover:text-[#f27a03] transition-colors"
-                                                style={{ color: 'var(--text-primary)' }}>
+                                            <h3 className="text-lg font-semibold truncate transition-colors"
+                                                style={{ color: 'var(--text-primary)' }}
+                                                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--accent-primary)')}
+                                                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}>
                                                 {session.title || 'Untitled Conversation'}
                                             </h3>
                                             <span className="px-2 py-0.5 rounded-full text-[10px] font-medium border"

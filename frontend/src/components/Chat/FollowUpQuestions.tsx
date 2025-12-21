@@ -1,6 +1,6 @@
 'use client'
 
-import { SparklesIcon } from '@heroicons/react/24/outline'
+import { Sparkles } from 'lucide-react'
 
 interface FollowUpQuestionsProps {
   questions: string[]
@@ -14,7 +14,7 @@ export default function FollowUpQuestions({
   return (
     <div className="mt-4 ml-0">
       <div className="flex items-center text-sm font-medium text-secondary-700 dark:text-secondary-300 mb-2">
-        <SparklesIcon className="w-4 h-4 mr-1" />
+        <Sparkles className="w-4 h-4 mr-1" />
         Follow-up questions
       </div>
       <div className="space-y-2">

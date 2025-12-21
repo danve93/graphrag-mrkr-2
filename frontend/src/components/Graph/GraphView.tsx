@@ -2,8 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Info, Network, Box, Grid2X2 } from 'lucide-react'
-import { Button } from '@mui/material'
+import { AlertTriangle, Info, Network, Search } from 'lucide-react'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
 import Loader from '@/components/Utils/Loader'
 
@@ -13,6 +12,8 @@ import type { GraphCommunity, GraphEdge, GraphNode } from '@/types/graph'
 import { GraphToolbar } from './GraphToolbar'
 import NodeSidebar from './NodeSidebar'
 import FocusedChatPanel from './FocusedChatPanel'
+import { HealingSuggestionsModal } from './HealingSuggestionsModal'
+import { useGraphEditorStore } from './useGraphEditorStore'
 
 
 // Dynamic import for the new Cytoscape component to avoid SSR issues
@@ -25,17 +26,8 @@ const CytoscapeGraph = dynamic(() => import('./CytoscapeGraph'), {
   ),
 })
 
-// Dynamic import for 3D graph (heavier, only load when needed)
-const ThreeGraph = dynamic(() => import('./ThreeGraph'), {
-  ssr: false,
-  loading: () => (
-    <div className="flex h-full w-full items-center justify-center bg-[var(--bg-primary)]">
-      <Loader size={28} label="Loading 3D visualization..." />
-    </div>
-  ),
-})
-
 export default function GraphView() {
+  const { mode } = useGraphEditorStore()
   const [graphData, setGraphData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>({
     nodes: [],
     edges: [],
@@ -53,9 +45,15 @@ export default function GraphView() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [dimensions, setDimensions] = useState({ width: 600, height: 600 })
   const [expanded, setExpanded] = useState(false)
-  const [show3DView, setShow3DView] = useState(false)
-
-  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set(['filters']))
+  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set())
+  const [searchTerm, setSearchTerm] = useState('')
+  const handleNodeEdit = useCallback((updatedNode: GraphNode) => {
+    setGraphData((prev) => ({
+      ...prev,
+      nodes: prev.nodes.map((node) => (node.id === updatedNode.id ? updatedNode : node)),
+    }))
+    setSelectedNode(updatedNode)
+  }, [])
 
   const togglePanel = (panel: string) => {
     setExpandedPanels((prev) => {
@@ -76,7 +74,7 @@ export default function GraphView() {
       const response = await api.getGraph({
         community_id: selectedCommunity !== 'all' ? Number(selectedCommunity) : undefined,
         node_type: selectedNodeType !== 'all' ? selectedNodeType : undefined,
-        limit: 100,
+        limit: 500,
       })
       setGraphData({ nodes: response.nodes, edges: response.edges })
       setCommunities(response.communities)
@@ -126,6 +124,44 @@ export default function GraphView() {
     }
   }, [])
 
+  const normalizedSearch = useMemo(() => searchTerm.trim().toLowerCase(), [searchTerm])
+
+  const filteredGraphData = useMemo(() => {
+    if (!normalizedSearch) {
+      return graphData
+    }
+
+    const matchesSearch = (node: GraphNode) => {
+      const label = node.label?.toLowerCase() ?? ''
+      const id = node.id?.toLowerCase() ?? ''
+      const type = node.type?.toLowerCase() ?? ''
+      const description = node.description?.toLowerCase() ?? ''
+      return (
+        label.includes(normalizedSearch) ||
+        id.includes(normalizedSearch) ||
+        type.includes(normalizedSearch) ||
+        description.includes(normalizedSearch)
+      )
+    }
+
+    const nodes = graphData.nodes.filter(matchesSearch)
+    const allowedIds = new Set(nodes.map((node) => node.id))
+    const edges = graphData.edges.filter((edge) => allowedIds.has(edge.source) && allowedIds.has(edge.target))
+    return { nodes, edges }
+  }, [graphData, normalizedSearch])
+
+  useEffect(() => {
+    if (!selectedNode) return
+    if (!filteredGraphData.nodes.some((node) => node.id === selectedNode.id)) {
+      setSelectedNode(null)
+    }
+  }, [filteredGraphData.nodes, selectedNode])
+
+  const isSearchActive = normalizedSearch.length > 0
+  const countLabel = isSearchActive
+    ? `${filteredGraphData.nodes.length} of ${graphData.nodes.length} nodes · ${filteredGraphData.edges.length} edges`
+    : `${graphData.nodes.length} nodes · ${graphData.edges.length} edges`
+
   return (
     <div className="h-full flex flex-col bg-[var(--bg-primary)]">
       {/* Header */}
@@ -136,27 +172,65 @@ export default function GraphView() {
           </div>
           <div className="flex-1">
             <h1 className="font-display text-2xl font-bold text-[var(--heading-text)]">
-              Graph Explorer
+              Graph Editor
             </h1>
             <p className="text-sm text-[var(--text-secondary)]">
-              Interactive 2D layout with filtering and analysis tools
+              Curate entities and relationships that power retrieval and reasoning.
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] px-3 py-1.5 rounded-md bg-[var(--bg-secondary)]">
             <Info className="h-4 w-4" />
-            <span>Scroll to zoom · Drag to pan</span>
+            <span>Drag to pan · Scroll to zoom · Click a node to inspect</span>
+          </div>
+        </div>
+        <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--systemOrange)]/40 bg-[var(--systemOrange)]/10 px-3 py-2 text-xs">
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-[var(--systemOrange)]" />
+          <div className="text-[var(--text-primary)]">
+            <p className="font-semibold">Curation mode: edits are applied directly to the graph.</p>
+            <p className="text-[var(--text-secondary)]">Use Backup before large changes. Prune is destructive and cannot be undone.</p>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-[var(--space-6)] flex flex-col gap-3 relative">
+      <div className="flex-1 min-h-0 overflow-y-auto p-[var(--space-6)] pb-28 flex flex-col gap-3 relative">
+
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
+          <label className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wide">
+            Search entities
+          </label>
+          <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-secondary)]" />
+              <input
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Search by name, id, type, or description"
+                className="input-field w-full py-2 pl-9 text-sm"
+              />
+            </div>
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="button-secondary text-xs py-2 px-3"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="mt-2 text-xs text-[var(--text-secondary)]">
+            {countLabel}
+          </div>
+        </div>
 
         {/* Filters Panel - Refactored for density */}
         <ExpandablePanel
-          title="Filters & Controls"
+          title="Scope & Filters"
           expanded={expandedPanels.has('filters')}
           onToggle={() => togglePanel('filters')}
         >
+          <p className="px-2 pb-2 text-xs text-[var(--text-secondary)]">
+            Narrow the view before editing to reduce the blast radius of changes.
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-4 items-end p-2">
             <div className="flex flex-col gap-1.5 min-w-[150px]">
               <label className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wide">Community</label>
@@ -194,10 +268,10 @@ export default function GraphView() {
             <div className="flex items-center gap-3">
               <div className="flex gap-2 text-xs font-mono text-[var(--text-secondary)]">
                 <span className="bg-[var(--bg-tertiary)] px-2 py-1 rounded">
-                  {graphData.nodes.length} nodes
+                  {filteredGraphData.nodes.length} nodes
                 </span>
                 <span className="bg-[var(--bg-tertiary)] px-2 py-1 rounded">
-                  {graphData.edges.length} edges
+                  {filteredGraphData.edges.length} edges
                 </span>
               </div>
               <button
@@ -230,16 +304,18 @@ export default function GraphView() {
           )}
 
           <CytoscapeGraph
-            nodes={graphData.nodes}
-            edges={graphData.edges}
+            nodes={filteredGraphData.nodes}
+            edges={filteredGraphData.edges}
             width={dimensions.width}
             height={dimensions.height}
             backgroundColor={backgroundColorResolved}
             onGraphUpdate={fetchGraph}
-            onNodeClick={setSelectedNode}
+            onNodeClick={(node) => setSelectedNode(node)}
+            editable
           />
 
-          <GraphToolbar onFit={() => { /* Future: Fit */ }} />
+          {/* Graph Toolbar - visible in both modes */}
+          <GraphToolbar />
 
           {/* Expand button */}
           <button
@@ -255,9 +331,11 @@ export default function GraphView() {
             <NodeSidebar
               node={selectedNode}
               onClose={() => setSelectedNode(null)}
-              onEdit={(node) => console.log('Edit node', node)} // TODO: Implement edit
-              onDelete={(nodeId) => console.log('Delete node', nodeId)} // TODO: Implement delete
+              onEdit={handleNodeEdit}
               onChat={(node) => setChatNode(node)}
+              allNodes={filteredGraphData.nodes}
+              allEdges={filteredGraphData.edges}
+              onNodeSelect={setSelectedNode}
             />
           )}
         </div>
@@ -270,36 +348,15 @@ export default function GraphView() {
           <div className="h-14 border-b border-[var(--border)] flex items-center justify-between px-6 bg-[var(--bg-secondary)]">
             <div className="flex items-center gap-2">
               <Network size={20} className="text-accent-primary" />
-              <h2 className="font-display font-bold text-[var(--heading-text)]">Graph Explorer</h2>
+              <h2 className="font-display font-bold text-[var(--heading-text)]">Graph Editor</h2>
               <span className="text-xs px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
-                {show3DView ? '3D View' : 'Fullscreen'}
+                Fullscreen
               </span>
             </div>
             <div className="flex items-center gap-2">
-              {/* 3D/2D Toggle Button */}
-              <button
-                onClick={() => setShow3DView(!show3DView)}
-                className={`small-button flex items-center gap-2 ${show3DView
-                    ? 'bg-[var(--accent-primary)] text-white border-[var(--accent-primary)]'
-                    : 'bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border-[var(--border)]'
-                  }`}
-              >
-                {show3DView ? (
-                  <>
-                    <Grid2X2 size={16} />
-                    <span>2D View</span>
-                  </>
-                ) : (
-                  <>
-                    <Box size={16} />
-                    <span>3D View</span>
-                  </>
-                )}
-              </button>
               <button
                 onClick={() => {
                   setExpanded(false)
-                  setShow3DView(false)
                 }}
                 className="small-button bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border-[var(--border)]"
               >
@@ -309,36 +366,31 @@ export default function GraphView() {
           </div>
 
           <div className="flex-1 relative w-full h-full overflow-hidden">
-            {show3DView ? (
-              <ThreeGraph
-                nodes={graphData.nodes}
-                edges={graphData.edges}
-                onNodeClick={setSelectedNode}
-                gestureEnabled={true}
-              />
-            ) : (
-              <CytoscapeGraph
-                nodes={graphData.nodes}
-                edges={graphData.edges}
-                backgroundColor={backgroundColorResolved}
-                onGraphUpdate={fetchGraph}
-                onNodeClick={setSelectedNode}
-              />
-            )}
+            <CytoscapeGraph
+              nodes={filteredGraphData.nodes}
+              edges={filteredGraphData.edges}
+              backgroundColor={backgroundColorResolved}
+              onGraphUpdate={fetchGraph}
+              onNodeClick={(node) => setSelectedNode(node)}
+              editable
+            />
 
-            {/* Toolbar in Fullscreen (2D only) */}
-            {!show3DView && <GraphToolbar onFit={() => { }} />}
+            {/* Toolbar in Fullscreen */}
+            <GraphToolbar />
 
             {/* Node Sidebar in Fullscreen */}
             {selectedNode && (
               <NodeSidebar
                 node={selectedNode}
                 onClose={() => setSelectedNode(null)}
-                onEdit={(node) => console.log('Edit node', node)}
-                onDelete={(nodeId) => console.log('Delete node', nodeId)}
+                onEdit={handleNodeEdit}
                 onChat={(node) => setChatNode(node)}
+                allNodes={filteredGraphData.nodes}
+                allEdges={filteredGraphData.edges}
+                onNodeSelect={setSelectedNode}
               />
             )}
+
 
             {/* Focused Chat Panel needs to be here too or at root with high Z-index */}
           </div>

@@ -169,7 +169,7 @@ export default function RagasSubPanel() {
       </div>
 
       {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
+      <div className="flex-1 overflow-y-auto p-6 pb-28 space-y-8">
         {/* Section 1: Run Benchmark */}
         <section>
           <h3 className="text-lg font-semibold mb-4">Run Benchmark</h3>

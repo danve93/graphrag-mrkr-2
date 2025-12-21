@@ -1,0 +1,235 @@
+# Usage: start the entire stack from the repository root with Docker Compose v2
+# Recommended for demos/local testing:
+#   docker compose up -d
+# To rebuild images after changing Dockerfiles:
+#   docker compose up -d --build
+
+services:
+  neo4j:
+    image: neo4j:5.21
+    container_name: neo4j
+    environment:
+      # Use the combined NEO4J_AUTH (user/password) to initialize the DB
+      # Avoid exporting NEO4J_USERNAME / NEO4J_PASSWORD into the container
+      # because the image will translate those into invalid config keys
+      # (e.g. `PASSWORD`) and write them into `neo4j.conf`.
+      - NEO4J_AUTH=${NEO4J_AUTH}
+      - NEO4J_PLUGINS=graph-data-science
+      # Memory tuning (reduced defaults for local/dev Docker Desktop)
+      # Adjust these if you have more host memory available.
+      - NEO4J_dbms_memory_heap_max__size=512M
+      - NEO4J_dbms_memory_pagecache_size=512M
+      - NEO4J_dbms_memory_transaction_total_max=1G
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_plugins:/plugins
+    networks:
+      - graphrag_network
+    restart: unless-stopped
+    # Use cypher-shell for healthcheck (curl isn't installed in the base image)
+    healthcheck:
+      # Use explicit username/password for the healthcheck to avoid consuming the
+      # combined NEO4J_AUTH value (which is of the form 'neo4j/<password>'). This
+      # makes the healthcheck deterministic and avoids authentication failures
+      # when the composed var is interpreted differently.
+      test: [ "CMD-SHELL", "bin/cypher-shell -u \"${NEO4J_USERNAME:-neo4j}\" -p \"${NEO4J_PASSWORD:-neo4j}\" \"RETURN 1\" >/dev/null 2>&1 || exit 1" ]
+      interval: 45s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: graphrag-backend
+    env_file:
+      - ./.env
+    environment:
+      # LLM provider selection: 'openai' or 'ollama'
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      # Neo4j Configuration - connecting to the neo4j service
+      # Use the container-internal Neo4j address by default. This avoids
+      # accidental host-level overrides (e.g. NEO4J_URI=bolt://localhost:7687)
+      # being propagated into containers which would make them try to
+      # connect to their own localhost. To intentionally point services
+      # at a different Neo4j instance, set `NEO4J_URI` in the service
+      # `env_file` or override the compose file at deploy time.
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=${NEO4J_USERNAME}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      # Application Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-104857600}
+      - ENABLE_CLUSTERING=${ENABLE_CLUSTERING:-true}
+      - ENABLE_GRAPH_CLUSTERING=${ENABLE_GRAPH_CLUSTERING:-true}
+      - SUMMARIZATION_BATCH_SIZE=${SUMMARIZATION_BATCH_SIZE:-20}
+      - ENABLE_DOCUMENT_CLASSIFICATION=${ENABLE_DOCUMENT_CLASSIFICATION:-1}
+      - CLASSIFICATION_MODEL=${CLASSIFICATION_MODEL:-gpt-4o-mini}
+      - CLASSIFICATION_CONFIDENCE_THRESHOLD=${CLASSIFICATION_CONFIDENCE_THRESHOLD:-0.7}
+      # CORS Configuration - allow frontend origins
+      # Override with CORS_ORIGINS in .env or docker-compose.prod.yml for production
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001"]}
+    ports:
+      - "8000:8000" # FastAPI port
+    volumes:
+      - ./data:/app/data # Mount data directory for file uploads
+      - ./:/app # Mount source code for development (hot reload)
+    networks:
+      - graphrag_network
+    depends_on:
+      - neo4j
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    user: "0:0" # Run as root to ensure data directory write permissions
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # Default to localhost for local development
+        # Override with docker-compose.prod.yml for production
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: graphrag-frontend
+    env_file:
+      - ./.env
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL_SERVER=http://backend:8000
+    ports:
+      - "3000:3000" # Next.js port
+    networks:
+      - graphrag_network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:3000 || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Redis removed: background job queueing is optional and falls back to
+  # in-process execution when `REDIS_URL` is not set. The dedicated Redis
+  # service was removed to simplify local stacks.
+
+  # The dedicated `worker` service (Redis job processor) was removed because
+  # Redis is not present in this Compose configuration. Background jobs will
+  # be handled in-process by the `backend` when `REDIS_URL` is not set.
+
+  flashrank-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: graphrag-flashrank-worker
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=${NEO4J_USERNAME}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FLASHRANK_PREWARM_IN_PROCESS=${FLASHRANK_PREWARM_IN_PROCESS:-false}
+    volumes:
+      - ./:/app
+      - ./data/flashrank_cache:/app/data/flashrank_cache
+    working_dir: /app
+    networks:
+      - graphrag_network
+    depends_on:
+      - neo4j
+    restart: "no"
+    command: [ "python", "-m", "scripts.flashrank_prewarm_worker" ]
+    user: "0:0"
+
+  # TruLens PostgreSQL Database (continuous monitoring storage)
+  # Optional service for TruLens continuous monitoring
+  # Only needed if ENABLE_TRULENS_MONITORING=1
+  postgres-trulens:
+    image: postgres:16-alpine
+    container_name: postgres-trulens
+    environment:
+      - POSTGRES_DB=${TRULENS_DB_NAME:-trulens}
+      - POSTGRES_USER=${TRULENS_DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${TRULENS_DB_PASSWORD:-trulens_password}
+    ports:
+      - "5433:5432" # Use 5433 to avoid conflicts with any existing PostgreSQL
+    volumes:
+      - postgres_trulens_data:/var/lib/postgresql/data
+    networks:
+      - graphrag_network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${TRULENS_DB_USER:-postgres} -d ${TRULENS_DB_NAME:-trulens}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  trulens-dashboard:
+    image: amber-backend:latest
+    container_name: graphrag-trulens-dashboard
+    env_file:
+      - ./.env
+    environment:
+      - ENABLE_TRULENS_MONITORING=1
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8501:8501"
+    networks:
+      - graphrag_network
+    depends_on:
+      - neo4j
+      - postgres-trulens
+    restart: unless-stopped
+    command: [ "python", "evals/trulens/dashboard_launcher.py", "--host", "0.0.0.0", "--db", "/app/data/trulens.db" ]
+    user: "1000:1000"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8501/_stcore/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # Grafana Tempo (distributed tracing backend)
+  # Optional: Set ENABLE_OPENTELEMETRY=1 to enable
+  tempo:
+    image: grafana/tempo:latest
+    container_name: graphrag-tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo.yaml
+      - tempo_data:/tmp/tempo
+    ports:
+      - "3200:3200" # Tempo HTTP API
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+    networks:
+      - graphrag_network
+    restart: unless-stopped
+    profiles:
+      - observability
+    user: "0:0"
+
+networks:
+  graphrag_network:
+    driver: bridge
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_plugins:
+  postgres_trulens_data:
+  tempo_data:

@@ -22,45 +22,66 @@ logger = logging.getLogger(__name__)
 class TokenManager:
     """Manages token counting and context splitting for LLM requests."""
 
-    # Model context sizes (in tokens) - conservative estimates
+    # Model context sizes (in tokens) - updated for 2024-2025 models
     MODEL_CONTEXT_SIZES = {
-        # OpenAI models
-        "gpt-4": 8192,
-        "gpt-4-32k": 32768,
-        "gpt-4-turbo": 128000,
-        "gpt-4-turbo-preview": 128000,
-        "gpt-4-0125-preview": 128000,
-        "gpt-4-1106-preview": 128000,
-        "gpt-oss-120b": 128000,
+        # OpenAI models (2024-2025)
+        "gpt-5": 262144,
+        "gpt-5.2": 262144,
+        "gpt-5.2-pro": 262144,
+        "gpt-5-mini": 128000,
+        "gpt-5-nano": 65536,
+        "o3-mini": 128000,
+        "o1-mini": 128000,
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         "gpt-4-turbo": 128000,
         "gpt-4-turbo-preview": 128000,
-        # GPT-5 family placeholders (models don't exist yet)
-        # "gpt-5": 262144,
-        # "gpt-5-mini": 65536,
-        # "gpt-5-nano": 16384,
+        "gpt-4-0125-preview": 128000,
+        "gpt-4-1106-preview": 128000,
+        "gpt-4": 8192,
+        "gpt-4-32k": 32768,
         "gpt-3.5-turbo": 16385,
         "gpt-3.5-turbo-16k": 16385,
-        "gpt-3.5-turbo-1106": 16385,
-        "gpt-3.5-turbo-0125": 16385,
-        # Common Ollama models (approximate)
-        "llama2": 4096,
-        "llama2:7b": 4096,
-        "llama2:13b": 4096,
-        "llama2:70b": 4096,
-        "codellama": 16384,
-        "mistral": 8192,
-        "mixtral": 32768,
-        "gemma": 8192,
-        "qwen": 262000,
-        "dolphin-mixtral": 32768,
+        
+        # Anthropic/Claude models (2024-2025) - 200K default, 1M with beta
+        "claude-sonnet-4-5-20250929": 200000,
+        "claude-haiku-4-5-20250929": 200000,
+        "claude-sonnet-4-20250514": 200000,
+        "claude-3-5-sonnet-20241022": 200000,
+        "claude-3-5-haiku-20241022": 200000,
+        "claude-3-opus-20240229": 200000,
+        "claude-3-sonnet-20240229": 200000,
+        "claude-3-haiku-20240307": 200000,
+        
+        # Mistral models (2024-2025)
+        "mistral-large-latest": 128000,
+        "mistral-medium-latest": 128000,
+        "mistral-small-latest": 32768,
+        "ministral-8b-latest": 128000,
+        "ministral-3b-latest": 128000,
+        "magistral-medium-latest": 128000,
+        "magistral-small-latest": 128000,
+        "codestral-latest": 32768,
+        "pixtral-large-latest": 128000,
+        
+        # Ollama / Local models (updated)
+        "llama3.2": 128000,
+        "llama3.1": 128000,
         "llama3": 8192,
         "llama3:8b": 8192,
         "llama3:70b": 8192,
-        "tinyllama-64": 64000,
+        "llama2": 4096,
+        "qwen2.5": 128000,
+        "qwen": 262000,
+        "deepseek-r1": 128000,
+        "mistral": 32768,
+        "mixtral": 32768,
+        "codellama": 16384,
+        "gemma": 8192,
+        "phi-3": 128000,
+        
         # Default fallback
-        "default": 4096,
+        "default": 8192,
     }
 
     def __init__(self):

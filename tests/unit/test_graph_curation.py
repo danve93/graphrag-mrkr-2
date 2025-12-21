@@ -51,6 +51,7 @@ class TestHealNode:
             "e.id": "node1",
             "e.name": "Test Entity",
             "e.description": "A test entity",
+            "e.type": "COMPONENT",
             "e.embedding": [0.1, 0.2, 0.3]
         }[key]
         
@@ -78,11 +79,15 @@ class TestHealNode:
             mock_ctx.__exit__ = MagicMock(return_value=False)
             mock_scope.return_value = mock_ctx
             
-            candidates = mock_graph_db.heal_node("node1", top_k=5)
-            
-            assert len(candidates) == 2
-            assert candidates[0]["id"] == "node2"
-            assert candidates[0]["score"] == 0.95
+            # Mock LLM to approve candidates
+            with patch('core.llm.llm_manager') as mock_llm:
+                mock_llm.generate_response.return_value = "YES: These entities are related"
+                
+                candidates = mock_graph_db.heal_node("node1", top_k=5)
+                
+                assert len(candidates) == 2
+                assert candidates[0]["id"] == "node2"
+                assert candidates[0]["score"] == 0.95
 
 
 class TestMergeNodes:

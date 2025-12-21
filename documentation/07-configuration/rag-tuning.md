@@ -10,7 +10,7 @@ RAG tuning allows runtime adjustment of parameters **without restarting the serv
 
 Configuration can be set via:
 
-1. **RAG Tuning UI** - Frontend panel for ingestion parameters (Content Filtering, Entity Extraction, PDF Processing)
+1. **RAG Tuning UI** - Frontend panel for ingestion parameters (Content Filtering, Chunking, Entity Extraction, PDF Processing)
 2. **Chat Tuning UI** - Frontend panel for retrieval parameters (Reranking, Weights, Temperature)
 3. **JSON Configuration** - `config/rag_tuning_config.json` (ingestion) and `config/chat_tuning_config.json` (retrieval)
 4. **Per-Request Parameters** - ChatRequest model fields
@@ -86,13 +86,53 @@ Enable LLM-based entity and relationship extraction.
 
 Enable multi-pass entity extraction for improved quality.
 
-#### use_marker_for_pdf
-**Type**: `toggle` | **Default**: `true`
+#### document_conversion_provider
+**Type**: `select` | **Options**: `auto`, `native`, `marker`, `docling` | **Default**: `auto`
 
-Use Marker for advanced PDF conversion (better table/equation extraction).
+Select the conversion engine used during ingestion. Marker is PDF-only; Docling supports more formats and runs for all supported files when selected. `auto` respects `use_marker_for_pdf`.
 
 > [!TIP]
 > See all 90+ configurable parameters in `config/rag_tuning_config.json`
+
+#### chunk_target_tokens
+**Type**: `slider` | **Default**: `800`
+
+Target token size for token-aware chunkers (HTML heading and Docling hybrid).
+
+#### chunk_min_tokens
+**Type**: `slider` | **Default**: `180`
+
+Minimum tokens per chunk for token-aware chunkers.
+
+#### chunk_max_tokens
+**Type**: `slider` | **Default**: `1000`
+
+Maximum tokens per chunk for token-aware chunkers.
+
+#### chunk_overlap_tokens
+**Type**: `slider` | **Default**: `100`
+
+Token overlap between chunks for token-aware chunkers.
+
+#### chunk_tokenizer
+**Type**: `select` | **Default**: `cl100k_base`
+
+Tokenizer used for token-aware chunking.
+
+#### chunk_include_heading_path
+**Type**: `toggle` | **Default**: `true`
+
+Prefix HTML heading paths into chunk text for additional context.
+
+#### chunker_strategy_pdf
+**Type**: `select` | **Options**: `docling_hybrid`, `legacy` | **Default**: `docling_hybrid`
+
+Select the PDF chunking strategy.
+
+#### chunker_strategy_html
+**Type**: `select` | **Options**: `html_heading`, `docling_hybrid`, `legacy` | **Default**: `html_heading`
+
+Select the HTML chunking strategy.
 
 ---
 

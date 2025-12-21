@@ -122,6 +122,7 @@ class DocumentRetriever:
         search_query: Optional[str] = None,
         top_k: int = 5,
         allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
         query_embedding: Optional[List[float]] = None,
         time_decay_weight: float = 0.0,
         temporal_window: Optional[int] = None,
@@ -149,7 +150,13 @@ class DocumentRetriever:
 
             # Generate query embedding if not provided
             if query_embedding is None:
-                query_embedding = embedding_manager.get_embedding(effective_query)
+                if embedding_model:
+                    query_embedding = embedding_manager.get_embedding(
+                        effective_query,
+                        model=embedding_model,
+                    )
+                else:
+                    query_embedding = embedding_manager.get_embedding(effective_query)
 
             # Determine if two-stage retrieval should be used
             use_two_stage = False
@@ -260,6 +267,7 @@ class DocumentRetriever:
         search_query: Optional[str] = None,
         top_k: int = 5,
         allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Entity-based retrieval using entity similarity and relationships.
@@ -302,7 +310,13 @@ class DocumentRetriever:
                 return []
 
             # Calculate similarity scores for chunks based on contextualized query
-            query_embedding = embedding_manager.get_embedding(effective_query)
+            if embedding_model:
+                query_embedding = embedding_manager.get_embedding(
+                    effective_query,
+                    model=embedding_model,
+                )
+            else:
+                query_embedding = embedding_manager.get_embedding(effective_query)
 
             # Enhance chunks with entity information and similarity scores
             for chunk in relevant_chunks:
@@ -526,6 +540,7 @@ class DocumentRetriever:
         beam_size: int = 8,
         use_hybrid_seeding: bool = True,
         allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Multi-hop reasoning retrieval using path traversal.
@@ -557,7 +572,13 @@ class DocumentRetriever:
 
             if use_hybrid_seeding:
                 # Hybrid seeding: get chunks first, then extract entities
-                query_embedding = embedding_manager.get_embedding(effective_query)
+                if embedding_model:
+                    query_embedding = embedding_manager.get_embedding(
+                        effective_query,
+                        model=embedding_model,
+                    )
+                else:
+                    query_embedding = embedding_manager.get_embedding(effective_query)
                 similar_chunks = graph_db.vector_similarity_search(
                     query_embedding, seed_top_k * 2
                 )
@@ -599,7 +620,13 @@ class DocumentRetriever:
                 return []
 
             # Step 3: Compose path contexts and score
-            query_embedding = embedding_manager.get_embedding(query)
+            if embedding_model:
+                query_embedding = embedding_manager.get_embedding(
+                    query,
+                    model=embedding_model,
+                )
+            else:
+                query_embedding = embedding_manager.get_embedding(query)
             path_results = []
 
             for path in paths:
@@ -624,7 +651,7 @@ class DocumentRetriever:
                         OPTIONAL MATCH (d:Document)-[:HAS_CHUNK]->(c)
                         RETURN c.id as chunk_id, c.content as content,
                                c.embedding as embedding,
-                               d.filename as document_name, d.id as document_id
+                               coalesce(d.title, d.original_filename, d.filename) as document_name, d.id as document_id
                         """,
                         chunk_ids=unique_chunk_ids,
                     ).data()
@@ -730,6 +757,7 @@ class DocumentRetriever:
         beam_size: Optional[int] = None,
         restrict_to_context: bool = True,
         allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid retrieval with result caching and contextualized query support.
@@ -765,7 +793,8 @@ class DocumentRetriever:
             return await self._hybrid_retrieval_direct(
                 query, search_query, top_k, chunk_weight, entity_weight, path_weight,
                 use_multi_hop, max_hops, beam_size, restrict_to_context,
-                allowed_document_ids
+                allowed_document_ids,
+                embedding_model=embedding_model,
             )
         
         # Normalize parameters for cache key
@@ -790,7 +819,7 @@ class DocumentRetriever:
             beam_size=beam_size,
             restrict_to_context=restrict_to_context,
             allowed_document_ids=allowed_document_ids,
-            embedding_model=settings.embedding_model,
+            embedding_model=embedding_model or settings.embedding_model,
             enable_rrf=settings.enable_rrf,
             flashrank_enabled=settings.flashrank_enabled,
             routing_categories=allowed_document_ids,  # Include routing context in cache key
@@ -808,7 +837,8 @@ class DocumentRetriever:
         results = await self._hybrid_retrieval_direct(
             query, search_query, top_k, chunk_weight, entity_weight, path_weight,
             use_multi_hop, max_hops, beam_size, restrict_to_context,
-            allowed_document_ids
+            allowed_document_ids,
+            embedding_model=embedding_model,
         )
         
         # Store in cache (thread-safe write)
@@ -830,6 +860,7 @@ class DocumentRetriever:
         beam_size: Optional[int] = None,
         restrict_to_context: bool = True,
         allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Direct hybrid retrieval without caching.
@@ -996,12 +1027,17 @@ class DocumentRetriever:
                 search_query,
                 chunk_count,
                 allowed_document_ids=allowed_document_ids,
+                embedding_model=embedding_model,
                 time_decay_weight=time_decay_weight,
                 temporal_window=temporal_window,
                 fuzzy_distance=fuzzy_distance,
             )
             entity_results = await self.entity_based_retrieval(
-                query, search_query, entity_count, allowed_document_ids=allowed_document_ids
+                query,
+                search_query,
+                entity_count,
+                allowed_document_ids=allowed_document_ids,
+                embedding_model=embedding_model,
             )
             
             # Get keyword search results if enabled
@@ -1032,6 +1068,7 @@ class DocumentRetriever:
                     beam_size=beam_size or settings.multi_hop_beam_size,
                     use_hybrid_seeding=True,
                     allowed_document_ids=allowed_document_ids,
+                    embedding_model=embedding_model,
                 )
                 # Limit path results, but be more generous if we have high-quality results
                 if len(path_results) > path_count:
@@ -1367,6 +1404,7 @@ class DocumentRetriever:
         )
 
         allowed_document_ids = kwargs.pop("allowed_document_ids", None)
+        embedding_model = kwargs.pop("embedding_model", None)
 
         if mode == RetrievalMode.CHUNK_ONLY:
             # Note: query here is already contextualized if it came from retrieval.py
@@ -1374,7 +1412,8 @@ class DocumentRetriever:
                 query=query,
                 search_query=query,  # Pass same value - already contextualized
                 top_k=top_k,
-                allowed_document_ids=allowed_document_ids
+                allowed_document_ids=allowed_document_ids,
+                embedding_model=embedding_model,
             )
         elif mode == RetrievalMode.ENTITY_ONLY:
             # Note: query here is already contextualized if it came from retrieval.py
@@ -1382,7 +1421,8 @@ class DocumentRetriever:
                 query=query,
                 search_query=query,  # Pass same value - already contextualized
                 top_k=top_k,
-                allowed_document_ids=allowed_document_ids
+                allowed_document_ids=allowed_document_ids,
+                embedding_model=embedding_model,
             )
         elif mode == RetrievalMode.HYBRID:
             # Note: query here is already contextualized if it came from retrieval.py
@@ -1399,6 +1439,7 @@ class DocumentRetriever:
                 beam_size=beam_size,
                 restrict_to_context=restrict_to_context,
                 allowed_document_ids=allowed_document_ids,
+                embedding_model=embedding_model,
             )
         else:
             logger.error(f"Unknown retrieval mode: {mode}")
@@ -1418,6 +1459,7 @@ class DocumentRetriever:
         beam_size: Optional[int] = None,
         restrict_to_context: bool = True,
         allowed_document_ids: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve chunks and expand using graph relationships.
@@ -1446,6 +1488,7 @@ class DocumentRetriever:
                 beam_size=beam_size,
                 restrict_to_context=restrict_to_context,
                 allowed_document_ids=allowed_document_ids,
+                embedding_model=embedding_model,
             )
 
             if not initial_chunks:

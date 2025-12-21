@@ -3,7 +3,8 @@ Follow-up question generation service.
 """
 
 import logging
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Set
 
 from core.llm import llm_manager
 
@@ -13,6 +14,35 @@ logger = logging.getLogger(__name__)
 class FollowUpService:
     """Service for generating follow-up questions."""
 
+    _STOPWORDS: Set[str] = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
+        "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was",
+        "what", "when", "where", "which", "who", "why", "with", "your",
+    }
+
+    def _is_low_signal_chunk(self, content: str) -> bool:
+        stripped = (content or "").strip()
+        if len(stripped) < 80:
+            return True
+        if re.match(r"^##\\s*Page\\s*\\d+\\b", stripped, re.IGNORECASE):
+            return True
+        if re.match(r"^Page\\s*\\d+\\b", stripped, re.IGNORECASE):
+            return True
+        alpha = sum(1 for c in stripped if c.isalpha())
+        return alpha / max(len(stripped), 1) < 0.2
+
+    def _question_grounded_in_chunk(self, question: str, content: str) -> bool:
+        text = (question or "").lower()
+        keywords = [
+            token
+            for token in re.findall(r"[a-z0-9]{4,}", text)
+            if token not in self._STOPWORDS
+        ]
+        if not keywords:
+            return False
+        content_lower = (content or "").lower()
+        return any(keyword in content_lower for keyword in keywords)
+
     async def generate_follow_ups(
         self,
         query: str,
@@ -21,6 +51,7 @@ class FollowUpService:
         chat_history: List[Dict[str, str]],
         max_questions: int = 3,
         alternative_chunks: List[Dict[str, Any]] = None,
+        session_id: str = None,
     ) -> List[str]:
         """
         Generate follow-up questions from alternative retrieval chunks.
@@ -57,18 +88,24 @@ class FollowUpService:
                 # Extract key information from the chunk
                 content = chunk.get("content", "")
                 document_name = chunk.get("document_name", chunk.get("filename", ""))
+
+                if self._is_low_signal_chunk(content):
+                    logger.info("Skipping low-signal chunk for follow-up generation")
+                    continue
                 
                 # Extract entities if available
                 entities = chunk.get("contained_entities", []) or chunk.get("relevant_entities", [])
                 
                 # Generate a question based on the chunk content
                 question = await self._generate_question_from_chunk(
-                    content, entities, document_name, query
+                    content, entities, document_name, query, session_id
                 )
                 
-                if question:
+                if question and self._question_grounded_in_chunk(question, content):
                     follow_ups.append(question)
                     logger.debug(f"Generated follow-up from alternative chunk: {question}")
+                elif question:
+                    logger.info("Skipping ungrounded follow-up question")
             
             logger.info(f"Generated {len(follow_ups)} follow-up questions from alternative chunks")
             return follow_ups
@@ -78,7 +115,7 @@ class FollowUpService:
             return []
     
     async def _generate_question_from_chunk(
-        self, content: str, entities: List[str], document_name: str, original_query: str
+        self, content: str, entities: List[str], document_name: str, original_query: str, session_id: str = None
     ) -> str:
         """
         Generate a follow-up question from a chunk using LLM.
@@ -119,10 +156,27 @@ Return ONLY the question, nothing else."""
                 prompt=prompt,
                 temperature=0.7,
                 max_tokens=50,
+                include_usage=True,
             )
-            
-            # Clean up the result
-            question = result.strip()
+
+            # Track token usage
+            if isinstance(result, dict) and "usage" in result:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    from config.settings import settings
+                    usage_tracker.record(
+                        operation="rag.follow_up",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=settings.openai_model,
+                        input_tokens=result["usage"].get("input", 0),
+                        output_tokens=result["usage"].get("output", 0),
+                        conversation_id=session_id,
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                question = (result.get("content") or "").strip()
+            else:
+                question = (result or "").strip()
             
             # Remove numbering or prefixes
             for prefix in ["1.", "2.", "3.", "- ", "• ", "* ", "Question:", "Follow-up:"]:

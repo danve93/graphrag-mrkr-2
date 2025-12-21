@@ -282,16 +282,16 @@ export default function CategoriesView() {
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
             {activeTab === 'categories' ? (
-              <FolderTree className="w-6 h-6" style={{ color: '#f27a03' }} />
+              <FolderTree className="w-6 h-6" style={{ color: 'var(--accent-primary)' }} />
             ) : (
-              <MessageSquare className="w-6 h-6" style={{ color: '#f27a03' }} />
+              <MessageSquare className="w-6 h-6" style={{ color: 'var(--accent-primary)' }} />
             )}
           </div>
           <div style={{ flex: 1 }}>
@@ -349,7 +349,7 @@ export default function CategoriesView() {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 pb-28">
         {activeTab === 'categories' ? renderCategoriesTab() : renderPromptsTab()}
       </div>
     </div>

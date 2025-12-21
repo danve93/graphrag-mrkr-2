@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Wand2, Link2, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useGraphEditorStore } from './useGraphEditorStore';
+import { API_URL } from '@/lib/api';
 
 interface Suggestion {
     id: string;
@@ -28,7 +29,7 @@ export const HealingSuggestionsModal: React.FC<HealingSuggestionsModalProps> = (
             setError(null);
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/graph/editor/heal', {
+                const response = await fetch(`${API_URL}/api/graph/editor/heal`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -62,7 +63,7 @@ export const HealingSuggestionsModal: React.FC<HealingSuggestionsModalProps> = (
         setConnectingId(targetId);
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch('/api/graph/editor/edge', {
+            const response = await fetch(`${API_URL}/api/graph/editor/edge`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

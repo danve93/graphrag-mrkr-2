@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ChevronDownIcon } from '@heroicons/react/24/outline'
+import { ChevronDown } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface SimilarityPair {
@@ -95,7 +95,7 @@ export default function ChunkSimilaritiesSection({ documentId }: ChunkSimilariti
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
           style={{ color: 'var(--text-primary)' }}
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Chunk Similarities</span>
           <span
             className="ml-auto text-xs px-2 py-1 rounded"
@@ -119,7 +119,7 @@ export default function ChunkSimilaritiesSection({ documentId }: ChunkSimilariti
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
           style={{ color: '#FF453A' }}
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Chunk Similarities</span>
           <span className="ml-auto text-xs" style={{ color: '#FF453A' }}>{error}</span>
         </button>
@@ -138,7 +138,7 @@ export default function ChunkSimilaritiesSection({ documentId }: ChunkSimilariti
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
           style={{ color: 'var(--text-primary)' }}
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Chunk Similarities</span>
           <span
             className="ml-auto text-xs px-2 py-1 rounded"
@@ -161,7 +161,7 @@ export default function ChunkSimilaritiesSection({ documentId }: ChunkSimilariti
         className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
         style={{ color: 'var(--text-primary)' }}
       >
-        <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
         <span>Chunk Similarities</span>
         <span
           className="ml-auto text-xs px-2 py-1 rounded"

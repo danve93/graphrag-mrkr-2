@@ -126,7 +126,10 @@ The following implementation highlights summarize factual, developer-facing feat
 
 - Multi-layer caching system: long-lived service instances include multiple caches — an entity-label TTL cache to reduce Neo4j lookups, an embeddings cache keyed by text+model to avoid duplicate embedding API calls, and a short-TTL retrieval cache for recent query results. Cache metrics are exported via an API endpoint for observation.
 
-- Document conversion integration: the ingestion pipeline supports a high-accuracy document conversion tool integration that can be used in-process, via CLI, or via a small server. Modes include LLM-assisted extraction, OCR, and table merging, and the integration is configurable for device and runtime settings.
+- Document conversion integration: ingestion can switch between Marker (PDF-only) and Docling (multi-format) via `document_conversion_provider`, routed in `ingestion/converters.py` with adapters in `vendor/`.
+- Token-aware chunking for docs: HTML pages use a heading-aware chunker (`core/html_chunker.py`) and Docling conversions can use the Hybrid chunker (`core/docling_chunker.py`), both wired through `core/chunking.py` with budgets in `config/settings.py` and UI overrides in `config/rag_tuning_config.json`.
+
+- Token management infrastructure: comprehensive token counting and context management across the platform. `core/token_counter.py` provides a dedicated utility with tiktoken integration (count/encode/decode/tail_text methods) used by both chunkers. `core/token_manager.py` handles context splitting when requests exceed limits, with updated context sizes for 2024-2025 models (GPT-5, Claude 4.5, Gemini, Mistral, Qwen, DeepSeek-R1), intelligent batch splitting, and LLM-based response merging for multi-batch queries. All LLM provider methods in `core/llm.py` now support `include_usage=True` to return structured token usage data `{"content": str, "usage": {"input": int, "output": int}}`, enabling automatic tracking via `core/llm_usage_tracker.py` for the LLM Token Usage Metrics panel. Global OpenAI compatibility patch translates `max_tokens`/`max_completion_tokens` parameters automatically for modern vs legacy models, preventing third-party library failures.
 
 - UI robustness and design updates: layout corrections (removal of top padding on scroll containers), tooltip refactor to avoid adding positional wrapper elements, defensive color parsing, and community-color rendering improvements. The UI also adopts a tokenized design system (spacing, typography, color tokens) and simplified animations. See [UI Kit Reference](documentation/09-development/ui-kit.md) for details.
 
@@ -185,8 +188,9 @@ State Management: the pipeline uses plain dict-based `state` objects; each node 
 `ingestion/document_processor.py` implements a robust pipeline for multi-format document ingestion and enrichment:
 
 - **Format loaders** (`ingestion/loaders/`): PDF, DOCX, TXT, MD, PPTX, XLSX, CSV, images; loaders convert content to text/Markdown and apply OCR selectively when warranted.
+- **Conversion engine selection** (`ingestion/converters.py`): optional Docling conversion for all supported formats when `document_conversion_provider=docling`; Marker remains PDF-only when selected.
 - **Conversion & Preprocessing**: normalization, metadata extraction, and filename handling.
-- **Chunking** (`core/chunking.py`): configurable chunk size/overlap with provenance in chunk metadata.
+- **Chunking** (`core/chunking.py`): legacy char-based chunking plus token-aware HTML heading chunking (`core/html_chunker.py`) and Docling hybrid chunking (`core/docling_chunker.py`) with budgets in `config/settings.py`.
 - **Embedding generation** (`core/embeddings.py`): asynchronous manager with concurrency controls and model selection support.
 - **Entity extraction** (`core/entity_extraction.py`): optional LLM-based extraction that creates Entity nodes, chunk-entity relationships, and entity embeddings. Extraction may run synchronously for tests or asynchronously in background threads for production ingestion.
 - **Quality scoring & filtering** (`core/quality_scorer.py`): filters or marks low-quality chunks to improve retrieval and grounding.
@@ -261,6 +265,7 @@ Settings live in `config/settings.py` and can be set through environment variabl
 - **RRF Fusion**: `enable_rrf`, `rrf_k` (rank discount constant; higher is flatter influence).
 - **Reranking**: `flashrank_enabled`, `flashrank_model_name`, `flashrank_max_candidates`, `flashrank_blend_weight`, `flashrank_batch_size`.
 - **Caching**: `enable_caching`, `entity_label_cache_size`, `entity_label_cache_ttl`, `embedding_cache_size`, `retrieval_cache_size`, `retrieval_cache_ttl`, `neo4j_max_connection_pool_size`.
+- **Document Conversion**: `document_conversion_provider` (auto|native|marker|docling), `use_marker_for_pdf`.
 - **Entity / OCR**: `enable_entity_extraction`, `SYNC_ENTITY_EMBEDDINGS`, `enable_ocr`, `ocr_quality_threshold`.
 - **Clustering**: `enable_clustering`, `enable_graph_clustering`, `clustering_resolution`, `clustering_min_edge_weight`, `clustering_relationship_types`, `clustering_level`.
 

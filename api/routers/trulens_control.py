@@ -90,8 +90,27 @@ async def control_monitoring(request: ControlAction) -> Dict[str, Any]:
                     detail="TruLens not initialized. Enable it first."
                 )
 
+        # Helper to update config file
+        def update_config_enabled(enabled: bool):
+            try:
+                import yaml
+                config_path = Path("evals/trulens/config.yaml")
+                config = {}
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        config = yaml.safe_load(f) or {}
+                
+                if 'trulens' not in config: config['trulens'] = {}
+                config['trulens']['enabled'] = enabled
+                
+                with open(config_path, 'w') as f:
+                    yaml.safe_dump(config, f)
+            except Exception as e:
+                logger.error(f"Failed to persist TruLens state to config: {e}")
+
         if request.action == "enable":
             monitor.enabled = True
+            update_config_enabled(True)
             return {
                 "status": "success",
                 "message": "TruLens monitoring enabled",
@@ -100,6 +119,7 @@ async def control_monitoring(request: ControlAction) -> Dict[str, Any]:
 
         elif request.action == "disable":
             monitor.enabled = False
+            update_config_enabled(False)
             return {
                 "status": "success",
                 "message": "TruLens monitoring disabled",

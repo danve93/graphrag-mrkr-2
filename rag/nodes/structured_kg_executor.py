@@ -38,6 +38,44 @@ from core.embeddings import embedding_manager
 
 logger = logging.getLogger(__name__)
 
+# Security validation patterns
+INJECTION_RE = re.compile(
+    r"(ignore (all|previous) instructions|system prompt|developer message|reveal|jailbreak|DAN|prompt injection)",
+    re.IGNORECASE
+)
+
+FORBIDDEN_CYPHER_RE = re.compile(
+    r"\b(CREATE|MERGE|DELETE|DETACH|SET|DROP|CALL|LOAD\s+CSV|APOC)\b",
+    re.IGNORECASE
+)
+
+
+def assess_input_risk(text: str) -> str:
+    """Classify input risk: 'low', 'medium', 'high'."""
+    t = (text or "").strip()
+    if not t or len(t) > 4000:
+        return "high"
+    if INJECTION_RE.search(t):
+        return "high"
+    if t.count("```") >= 2 or t.count("<") > 200 or t.count("{") > 200:
+        return "medium"
+    return "low"
+
+
+def validate_readonly_cypher(cypher: str) -> bool:
+    """Ensure Cypher is read-only and safe."""
+    if not cypher or ";" in cypher:
+        return False
+    u = cypher.upper()
+    if FORBIDDEN_CYPHER_RE.search(cypher):
+        return False
+    if not any(k in u for k in ("MATCH", "RETURN", "WITH")):
+        return False
+    is_agg = any(k in u for k in ("COUNT(", "SUM(", "AVG(", "MIN(", "MAX("))
+    if (not is_agg) and ("LIMIT" not in u):
+        return False
+    return True
+
 
 class StructuredKGExecutor:
     """Executes structured graph queries via Text-to-Cypher translation."""
@@ -51,7 +89,8 @@ class StructuredKGExecutor:
     async def execute_query(
         self,
         query: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a structured graph query via Text-to-Cypher translation.
@@ -59,12 +98,24 @@ class StructuredKGExecutor:
         Args:
             query: Natural language query
             context: Optional context (conversation history, entities, etc.)
+            session_id: Optional session ID for token tracking
             
         Returns:
             Dictionary with results, cypher, metadata
         """
         start_time = time.time()
         context = context or {}
+        
+        # Security gate: assess input risk
+        risk = assess_input_risk(query)
+        if risk == "high":
+            logger.warning(f"Input rejected by security gate: {query[:100]}...")
+            return {
+                "success": False,
+                "error": "Input rejected by security gate",
+                "fallback_recommended": True,
+                "duration_ms": int((time.time() - start_time) * 1000)
+            }
         
         try:
             # Step 1: Detect query type and check if suitable for structured path
@@ -79,10 +130,10 @@ class StructuredKGExecutor:
                 }
             
             # Step 2: Entity linking - find entities mentioned in query
-            entities = await self._link_entities(query, context)
+            entities = await self._link_entities(query, context, session_id)
             
             # Step 3: Generate Cypher query
-            cypher_result = await self._generate_cypher(query, entities, query_type, context)
+            cypher_result = await self._generate_cypher(query, entities, query_type, context, session_id)
             
             if not cypher_result["success"]:
                 return {
@@ -94,6 +145,18 @@ class StructuredKGExecutor:
                 }
             
             cypher = cypher_result["cypher"]
+            
+            # Security gate: validate generated Cypher is read-only
+            if not validate_readonly_cypher(cypher):
+                logger.warning(f"Generated Cypher blocked by security policy: {cypher[:200]}")
+                return {
+                    "success": False,
+                    "error": "Generated Cypher blocked by security policy",
+                    "query_type": query_type,
+                    "entities": entities,
+                    "fallback_recommended": True,
+                    "duration_ms": int((time.time() - start_time) * 1000)
+                }
             
             # Step 4: Execute with iterative correction
             execution_result = await self._execute_with_correction(
@@ -180,7 +243,8 @@ class StructuredKGExecutor:
     async def _link_entities(
         self,
         query: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Link entities mentioned in the query to graph nodes.
@@ -188,6 +252,7 @@ class StructuredKGExecutor:
         Args:
             query: Natural language query
             context: Optional context with conversation history
+            session_id: Optional session ID for token tracking
             
         Returns:
             List of linked entities with confidence scores
@@ -204,13 +269,32 @@ Entity names:"""
                 prompt=extraction_prompt,
                 system_message="You are an entity extraction system. Extract only explicitly mentioned entity names.",
                 temperature=0.1,
-                max_tokens=200
+                max_tokens=200,
+                include_usage=True,
             )
+
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    usage_tracker.record(
+                        operation="rag.structured_kg_entity_extraction",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=settings.openai_model,
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                        conversation_id=session_id,
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response = (response.get("content") or "").strip()
+            else:
+                response = (response or "").strip()
             
             # Parse entity names
             entity_names = [
                 line.strip().strip('-').strip('*').strip()
-                for line in response.strip().split('\n')
+                for line in response.split('\n')
                 if line.strip() and not line.strip().startswith('#')
             ]
             
@@ -267,7 +351,8 @@ Entity names:"""
         query: str,
         entities: List[Dict[str, Any]],
         query_type: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate Cypher query from natural language.
@@ -277,6 +362,7 @@ Entity names:"""
             entities: Linked entities
             query_type: Detected query type
             context: Optional context
+            session_id: Optional session ID for token tracking
             
         Returns:
             Dictionary with cypher query and success status
@@ -327,8 +413,27 @@ Generate ONLY the Cypher query, no explanations:"""
                 prompt=cypher_prompt,
                 system_message="You are a Cypher query generator for Neo4j. Generate only valid Cypher syntax.",
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=500,
+                include_usage=True,
             )
+
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    usage_tracker.record(
+                        operation="rag.text_to_cypher",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=settings.openai_model,
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                        conversation_id=session_id,
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response = (response.get("content") or "").strip()
+            else:
+                response = (response or "").strip()
             
             # Extract and clean Cypher
             cypher = self._extract_cypher(response)
@@ -400,6 +505,16 @@ Generate ONLY the Cypher query, no explanations:"""
         current_cypher = cypher
         
         for attempt in range(self.max_correction_attempts + 1):
+            # Security gate: validate Cypher before execution
+            if not validate_readonly_cypher(current_cypher):
+                logger.warning(f"Cypher blocked by security policy: {current_cypher[:200]}")
+                return {
+                    "success": False,
+                    "error": "Cypher blocked by security policy",
+                    "final_cypher": current_cypher,
+                    "corrections": corrections
+                }
+            
             try:
                 # Execute query
                 with graph_db.driver.session() as session:
@@ -434,7 +549,8 @@ Generate ONLY the Cypher query, no explanations:"""
                     error=error_msg,
                     query=query,
                     entities=entities,
-                    query_type=query_type
+                    query_type=query_type,
+                    session_id=session_id,
                 )
                 
                 if not correction_result["success"]:
@@ -446,6 +562,17 @@ Generate ONLY the Cypher query, no explanations:"""
                     }
                 
                 current_cypher = correction_result["corrected_cypher"]
+                
+                # Security gate: validate corrected Cypher
+                if not validate_readonly_cypher(current_cypher):
+                    logger.warning(f"Corrected Cypher blocked by security policy: {current_cypher[:200]}")
+                    return {
+                        "success": False,
+                        "error": "Corrected Cypher blocked by security policy",
+                        "final_cypher": current_cypher,
+                        "corrections": corrections
+                    }
+                
                 corrections += 1
                 logger.info(f"Attempting correction {corrections}: {current_cypher}")
         
@@ -462,7 +589,8 @@ Generate ONLY the Cypher query, no explanations:"""
         error: str,
         query: str,
         entities: List[Dict[str, Any]],
-        query_type: str
+        query_type: str,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Attempt to correct a failed Cypher query.
@@ -473,6 +601,7 @@ Generate ONLY the Cypher query, no explanations:"""
             query: Original natural language query
             entities: Linked entities
             query_type: Query type
+            session_id: Optional session ID for token tracking
             
         Returns:
             Dictionary with corrected cypher or error
@@ -495,8 +624,27 @@ Generate a corrected Cypher query that fixes the error. Return ONLY the correcte
                 prompt=correction_prompt,
                 system_message="You are a Cypher query debugger. Fix syntax errors and logic issues in Cypher queries.",
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=500,
+                include_usage=True,
             )
+
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    usage_tracker.record(
+                        operation="rag.cypher_correction",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=settings.openai_model,
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                        conversation_id=session_id,
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response = (response.get("content") or "").strip()
+            else:
+                response = (response or "").strip()
             
             corrected = self._extract_cypher(response)
             

@@ -21,8 +21,18 @@ def test_routing_cache_hit_and_stats(monkeypatch):
     assert stats["size"] == 1
 
 
-def test_routing_metrics_compute_rates():
+def test_routing_metrics_compute_rates(monkeypatch):
+    # Prevent loading from file by patching the load method
+    monkeypatch.setattr(RoutingMetrics, "load_metrics", lambda self: None)
     metrics = RoutingMetrics()
+    # Ensure clean state
+    metrics._total_queries = 0
+    metrics._cache_hits = 0
+    metrics._fallback_count = 0
+    metrics._multi_category_count = 0
+    metrics._failure_point_counts = {}
+    metrics._user_feedback_correct = 0
+    metrics._user_feedback_total = 0
 
     metrics.record_routing(categories=["install", "configure", "extra"], confidence=0.8, latency_ms=120, used_cache=True)
     metrics.record_routing(categories=["install"], confidence=0.5, latency_ms=80, used_cache=False, fallback_used=True)

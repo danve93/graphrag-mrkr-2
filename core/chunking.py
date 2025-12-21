@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from config.settings import settings
+from core.docling_chunker import DoclingHybridChunker
+from core.html_chunker import HtmlHeadingChunker
 from core.ocr import ocr_processor
 
 logger = logging.getLogger(__name__)
@@ -84,11 +86,8 @@ class DocumentChunker:
         if co < 0:
             raise ValueError("settings.chunk_overlap must be >= 0")
 
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=cs,
-            chunk_overlap=co,
-            separators=["\n\n", "\n", " ", ""],
-        )
+        self._last_chunker_settings: Dict[str, Any] = {}
+        self._refresh_chunkers_if_needed(force=True)
 
         # OCR and quality settings
         self.enable_quality_filtering = True
@@ -100,6 +99,8 @@ class DocumentChunker:
         document_id: str,
         enable_quality_filtering: Optional[bool] = None,
         enable_ocr_enhancement: Optional[bool] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        docling_document: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Split text into chunks with quality assessment and OCR enhancement.
@@ -122,6 +123,7 @@ class DocumentChunker:
             - per-chunk content hash
         """
         try:
+            self._refresh_chunkers_if_needed()
             # Determine settings to use (provided parameters or instance defaults)
             use_quality_filtering = (
                 enable_quality_filtering
@@ -133,6 +135,27 @@ class DocumentChunker:
                 if enable_ocr_enhancement is not None
                 else self.enable_ocr_enhancement
             )
+
+            strategy = self._resolve_chunking_strategy(source_metadata, docling_document)
+            if strategy == "html_heading":
+                custom_chunks = self.html_chunker.chunk_html(text)
+                return self._wrap_custom_chunks(
+                    custom_chunks,
+                    document_id,
+                    use_quality_filtering,
+                    use_ocr_enhancement,
+                    processing_method="html_heading",
+                )
+            if strategy == "docling_hybrid" and docling_document is not None:
+                custom_chunks = self.docling_chunker.chunk_document(docling_document)
+                if custom_chunks:
+                    return self._wrap_custom_chunks(
+                        custom_chunks,
+                        document_id,
+                        use_quality_filtering,
+                        use_ocr_enhancement,
+                        processing_method="docling_hybrid",
+                    )
 
             chunks = self.text_splitter.split_text(text)
             chunk_data = []
@@ -172,41 +195,12 @@ class DocumentChunker:
                 )
                 chunk_info = text_unit.to_chunk_payload()
                 # Assess chunk quality (only if quality filtering is enabled)
-                if use_quality_filtering:
-                    quality_assessment = ocr_processor.assess_chunk_quality(chunk)
-                else:
-                    # Default quality assessment when filtering is disabled
-                    quality_assessment = {
-                        "quality_score": 1.0,
-                        "reason": "Quality filtering disabled",
-                        "needs_ocr": False,
-                        "metrics": {
-                            "total_chars": len(chunk),
-                            "text_ratio": 1.0,
-                            "whitespace_ratio": 0.0,
-                            "fragmentation_ratio": 0.0,
-                            "has_artifacts": False,
-                        },
-                    }
-
-                # Augment TextUnit metadata with quality information
-                chunk_info["metadata"].update(
-                    {
-                        "total_chunks": len(chunks),
-                        "quality_score": quality_assessment["quality_score"],
-                        "quality_reason": quality_assessment["reason"],
-                        # Flatten quality metrics for Neo4j compatibility
-                        "total_chars": quality_assessment["metrics"]["total_chars"],
-                        "text_ratio": quality_assessment["metrics"]["text_ratio"],
-                        "whitespace_ratio": quality_assessment["metrics"][
-                            "whitespace_ratio"
-                        ],
-                        "fragmentation_ratio": quality_assessment["metrics"][
-                            "fragmentation_ratio"
-                        ],
-                        "has_artifacts": quality_assessment["metrics"]["has_artifacts"],
-                        "processing_method": "standard",
-                    }
+                quality_assessment = self._apply_quality_metadata(
+                    chunk_info,
+                    chunk,
+                    use_quality_filtering,
+                    len(chunks),
+                    processing_method="standard",
                 )
 
                 # Apply quality filtering if enabled
@@ -243,6 +237,191 @@ class DocumentChunker:
         except Exception as e:
             logger.error(f"Failed to chunk document {document_id}: {e}")
             raise
+
+    def _current_chunker_settings(self) -> Dict[str, Any]:
+        return {
+            "chunk_size": int(settings.chunk_size),
+            "chunk_overlap": int(settings.chunk_overlap),
+            "chunk_target_tokens": int(getattr(settings, "chunk_target_tokens", 800)),
+            "chunk_min_tokens": int(getattr(settings, "chunk_min_tokens", 180)),
+            "chunk_max_tokens": int(getattr(settings, "chunk_max_tokens", 1000)),
+            "chunk_overlap_tokens": int(getattr(settings, "chunk_overlap_tokens", 100)),
+            "chunk_tokenizer": str(getattr(settings, "chunk_tokenizer", "cl100k_base")),
+            "chunk_include_heading_path": bool(
+                getattr(settings, "chunk_include_heading_path", True)
+            ),
+        }
+
+    def _refresh_chunkers_if_needed(self, force: bool = False) -> None:
+        current = self._current_chunker_settings()
+        if not force and current == self._last_chunker_settings:
+            return
+        self._last_chunker_settings = current
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=current["chunk_size"],
+            chunk_overlap=current["chunk_overlap"],
+            separators=["\n\n", "\n", " ", ""],
+        )
+        self.html_chunker = HtmlHeadingChunker(
+            target_tokens=current["chunk_target_tokens"],
+            min_tokens=current["chunk_min_tokens"],
+            max_tokens=current["chunk_max_tokens"],
+            overlap_tokens=current["chunk_overlap_tokens"],
+            tokenizer_name=current["chunk_tokenizer"],
+            include_heading_path=current["chunk_include_heading_path"],
+        )
+        self.docling_chunker = DoclingHybridChunker(
+            target_tokens=current["chunk_target_tokens"],
+            min_tokens=current["chunk_min_tokens"],
+            max_tokens=current["chunk_max_tokens"],
+            overlap_tokens=current["chunk_overlap_tokens"],
+            tokenizer_name=current["chunk_tokenizer"],
+            include_heading_path=current["chunk_include_heading_path"],
+        )
+
+    def _resolve_chunking_strategy(
+        self, source_metadata: Optional[Dict[str, Any]], docling_document: Any
+    ) -> str:
+        ext = (source_metadata or {}).get("file_extension", "").lower()
+        if ext in {".html", ".htm", ".xhtml", ".xht"}:
+            return getattr(settings, "chunker_strategy_html", "html_heading")
+        if ext == ".pdf":
+            strategy = getattr(settings, "chunker_strategy_pdf", "docling_hybrid")
+            if strategy == "docling_hybrid" and docling_document is None:
+                return "legacy"
+            if strategy == "docling_hybrid" and not self.docling_chunker.is_available():
+                return "legacy"
+            return strategy
+        return "legacy"
+
+    def _wrap_custom_chunks(
+        self,
+        chunks: List[Dict[str, Any]],
+        document_id: str,
+        use_quality_filtering: bool,
+        use_ocr_enhancement: bool,
+        processing_method: str,
+    ) -> List[Dict[str, Any]]:
+        chunk_data: List[Dict[str, Any]] = []
+        processed_chunks = 0
+        filtered_chunks = 0
+        current_offset = 0
+        total_chunks = len(chunks)
+
+        for idx, chunk in enumerate(chunks):
+            content = chunk.get("text", "").strip()
+            if not content:
+                continue
+            start_offset = current_offset
+            end_offset = start_offset + len(content)
+            current_offset = end_offset
+
+            metadata = chunk.get("metadata", {}) or {}
+            page = metadata.get("page", 1)
+            content_hash = self._hash_content(content)
+            text_unit = TextUnit(
+                id=self._build_text_unit_id(
+                    document_id, start_offset, end_offset, content_hash
+                ),
+                document_id=document_id,
+                content=content,
+                page=page,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                chunk_index=idx,
+                chunk_size_chars=len(content),
+                chunk_overlap_chars=0,
+                content_hash=content_hash,
+            )
+            chunk_info = text_unit.to_chunk_payload()
+            chunk_info["metadata"].update(metadata)
+            chunk_info["metadata"].update(
+                {
+                    "total_chunks": total_chunks,
+                    "chunking_strategy": processing_method,
+                    "chunk_target_tokens": getattr(settings, "chunk_target_tokens", 800),
+                    "chunk_min_tokens": getattr(settings, "chunk_min_tokens", 180),
+                    "chunk_max_tokens": getattr(settings, "chunk_max_tokens", 1000),
+                    "chunk_overlap_tokens": getattr(settings, "chunk_overlap_tokens", 100),
+                }
+            )
+
+            quality_assessment = self._apply_quality_metadata(
+                chunk_info,
+                content,
+                use_quality_filtering,
+                total_chunks,
+                processing_method=processing_method,
+            )
+
+            if use_quality_filtering and quality_assessment["needs_ocr"]:
+                chunk_info["metadata"]["needs_review"] = True
+                chunk_info["metadata"]["quality_warning"] = quality_assessment["reason"]
+                filtered_chunks += 1
+
+            if use_ocr_enhancement and (
+                "OCR" in content or "Images/Diagrams" in content
+            ):
+                chunk_info["metadata"]["processing_method"] = "ocr_enhanced"
+                chunk_info["metadata"]["contains_ocr"] = True
+            elif not use_ocr_enhancement:
+                chunk_info["metadata"]["processing_method"] = processing_method
+                chunk_info["metadata"]["contains_ocr"] = False
+
+            chunk_data.append(chunk_info)
+            processed_chunks += 1
+
+        logger.info(
+            "Successfully chunked document %s into %s chunks (%s flagged for review) using %s",
+            document_id,
+            processed_chunks,
+            filtered_chunks,
+            processing_method,
+        )
+
+        return chunk_data
+
+    def _apply_quality_metadata(
+        self,
+        chunk_info: Dict[str, Any],
+        chunk_text: str,
+        use_quality_filtering: bool,
+        total_chunks: int,
+        processing_method: str,
+    ) -> Dict[str, Any]:
+        if use_quality_filtering:
+            quality_assessment = ocr_processor.assess_chunk_quality(chunk_text)
+        else:
+            quality_assessment = {
+                "quality_score": 1.0,
+                "reason": "Quality filtering disabled",
+                "needs_ocr": False,
+                "metrics": {
+                    "total_chars": len(chunk_text),
+                    "text_ratio": 1.0,
+                    "whitespace_ratio": 0.0,
+                    "fragmentation_ratio": 0.0,
+                    "has_artifacts": False,
+                },
+            }
+
+        chunk_info["metadata"].update(
+            {
+                "total_chunks": total_chunks,
+                "quality_score": quality_assessment["quality_score"],
+                "quality_reason": quality_assessment["reason"],
+                "total_chars": quality_assessment["metrics"]["total_chars"],
+                "text_ratio": quality_assessment["metrics"]["text_ratio"],
+                "whitespace_ratio": quality_assessment["metrics"]["whitespace_ratio"],
+                "fragmentation_ratio": quality_assessment["metrics"][
+                    "fragmentation_ratio"
+                ],
+                "has_artifacts": quality_assessment["metrics"]["has_artifacts"],
+                "processing_method": processing_method,
+            }
+        )
+
+        return quality_assessment
 
     def chunk_documents(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

@@ -35,7 +35,7 @@ export default function ComparisonChart({ data, bestVariant }: ComparisonChartPr
   const maxScore = Math.max(...variants.map(v => v.score), 1);
 
   const getBarColor = (score: number, index: number) => {
-    if (index === 0) return 'bg-[#f27a03]'; // Best variant - orange
+    if (index === 0) return ''; // Best variant - use style prop for accent color
     if (score >= 0.75) return 'bg-green-500';
     if (score >= 0.60) return 'bg-yellow-500';
     return 'bg-red-500';
@@ -57,11 +57,11 @@ export default function ComparisonChart({ data, bestVariant }: ComparisonChartPr
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">Best Overall Variant</p>
-              <p className="text-xl font-bold text-[#f27a03]">{bestVariant.name}</p>
+              <p className="text-xl font-bold" style={{ color: 'var(--accent-primary)' }}>{bestVariant.name}</p>
             </div>
             <div className="text-right">
               <p className="text-sm text-gray-600 dark:text-gray-400">Average Score</p>
-              <p className="text-2xl font-bold text-[#f27a03]">
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>
                 {(bestVariant.average_score * 100).toFixed(1)}%
               </p>
             </div>
@@ -77,7 +77,7 @@ export default function ComparisonChart({ data, bestVariant }: ComparisonChartPr
               <span className="font-medium flex items-center gap-2">
                 {variant.name}
                 {index === 0 && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-[#f27a03]">
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/30" style={{ color: 'var(--accent-primary)' }}>
                     Best
                   </span>
                 )}
@@ -92,6 +92,7 @@ export default function ComparisonChart({ data, bestVariant }: ComparisonChartPr
                 animate={{ width: `${(variant.score / maxScore) * 100}%` }}
                 transition={{ duration: 0.8, ease: 'easeOut', delay: index * 0.1 }}
                 className={`h-full ${getBarColor(variant.score, index)} rounded-lg flex items-center justify-end pr-3`}
+                style={{ backgroundColor: index === 0 ? 'var(--accent-primary)' : undefined }}
               >
                 {variant.score / maxScore > 0.3 && (
                   <span className="text-white text-xs font-semibold">
@@ -107,7 +108,7 @@ export default function ComparisonChart({ data, bestVariant }: ComparisonChartPr
       {/* Legend */}
       <div className="flex items-center gap-4 text-xs text-gray-600 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-1">
-          <div className="w-3 h-3 rounded bg-[#f27a03]"></div>
+          <div className="w-3 h-3 rounded" style={{ backgroundColor: 'var(--accent-primary)' }}></div>
           <span>Best</span>
         </div>
         <div className="flex items-center gap-1">

@@ -29,6 +29,7 @@ from api.routers import (
     feedback,
     documentation,
     metrics,
+    llm_metrics,
     memory,
     trulens_metrics,
     trulens_control,
@@ -272,6 +273,7 @@ app.include_router(documentation.router, tags=["documentation"])
 app.include_router(admin_user_management.router, prefix="/api/admin/user-management", tags=["admin"])
 app.include_router(api_keys.router, prefix="/api/admin/api-keys", tags=["admin"])
 app.include_router(system.router, prefix="/api", tags=["system"])
+app.include_router(llm_metrics.router, prefix="/api/metrics", tags=["llm-metrics"])
 
 
 @app.get("/api/health")

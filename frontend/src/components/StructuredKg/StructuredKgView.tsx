@@ -129,13 +129,13 @@ export default function StructuredKgView() {
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <Network size={24} color="#f27a03" />
+            <Network size={24} color="var(--accent-primary)" />
           </div>
           <div style={{ flex: 1 }}>
             <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -149,7 +149,7 @@ export default function StructuredKgView() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto pb-28 p-[var(--space-6)]" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
         {/* Configuration Panel */}
         {config && (
@@ -181,7 +181,7 @@ export default function StructuredKgView() {
                 <span style={{ color: 'var(--text-secondary)' }}>Supported Query Types:</span>
                 <div style={{ marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                   {config.supported_query_types.map((type) => (
-                    <span key={type} style={{ padding: '4px 8px', fontSize: '0.75rem', backgroundColor: '#f27a0320', color: '#f27a03', borderRadius: '4px' }}>
+                    <span key={type} style={{ padding: '4px 8px', fontSize: '0.75rem', backgroundColor: 'var(--accent-subtle)', color: 'var(--accent-primary)', borderRadius: '4px' }}>
                       {type}
                     </span>
                   ))}

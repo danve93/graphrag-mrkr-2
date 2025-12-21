@@ -49,7 +49,7 @@ export default function DocumentationView() {
         <div className="max-w-4xl mx-auto p-8">
           {isLoading ? (
             <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#f27a03]"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2" style={{ borderColor: 'var(--accent-primary)' }}></div>
             </div>
           ) : (
             <article className="prose prose-neutral dark:prose-invert max-w-none">
@@ -71,9 +71,9 @@ export default function DocumentationView() {
                       {children}
                     </h3>
                   ),
-                  code: ({ inline, children, ...props }: any) => 
+                  code: ({ inline, children, ...props }: any) =>
                     inline ? (
-                      <code className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-neutral-800 text-[#f27a03] text-sm font-mono" {...props}>
+                      <code className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-neutral-800 text-sm font-mono" style={{ color: 'var(--accent-primary)' }} {...props}>
                         {children}
                       </code>
                     ) : (
@@ -87,35 +87,37 @@ export default function DocumentationView() {
                   a: ({ href, children }) => {
                     // Check if link is to another documentation file
                     const isDocLink = href?.endsWith('.md');
-                    
+
                     if (isDocLink && href) {
                       // Extract the documentation path - must be exact path
                       let docPath = href;
-                      
+
                       // Remove .md extension (backend will add it back)
                       docPath = docPath.replace(/\.md$/, '');
-                      
+
                       // Remove leading ./ or / if present (but keep directory structure)
                       docPath = docPath.replace(/^\.\//, '');
                       docPath = docPath.replace(/^\//, '');
-                      
+
                       return (
                         <button
                           onClick={() => loadFile(docPath)}
-                          className="text-[#f27a03] hover:underline cursor-pointer"
+                          className="hover:underline cursor-pointer"
+                          style={{ color: 'var(--accent-primary)' }}
                         >
                           {children}
                         </button>
                       );
                     }
-                    
+
                     // External links open in new tab
                     return (
                       <a
                         href={href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-[#f27a03] hover:underline inline-flex items-center gap-1"
+                        className="hover:underline inline-flex items-center gap-1"
+                        style={{ color: 'var(--accent-primary)' }}
                       >
                         {children}
                         <ExternalLink className="w-3 h-3" />
@@ -150,7 +152,7 @@ export default function DocumentationView() {
         <div className="flex items-center justify-center h-full">
           <div className="text-center max-w-md">
             <div className="w-16 h-16 rounded-full bg-orange-50 dark:bg-orange-900/20 flex items-center justify-center mx-auto mb-4">
-              <BookOpen className="w-8 h-8 text-[#f27a03]" />
+              <BookOpen className="w-8 h-8" style={{ color: 'var(--accent-primary)' }} />
             </div>
             <h3 className="text-xl font-bold mb-2 text-secondary-900 dark:text-secondary-100">
               Welcome to Documentation

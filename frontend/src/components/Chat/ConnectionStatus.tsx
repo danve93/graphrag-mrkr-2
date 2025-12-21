@@ -1,7 +1,7 @@
 'use client'
 
 import { useChatStore } from '@/store/chatStore'
-import { ExclamationTriangleIcon } from '@heroicons/react/24/solid'
+import { AlertTriangle } from 'lucide-react'
 
 export default function ConnectionStatus() {
   const isConnected = useChatStore((state) => state.isConnected)
@@ -12,7 +12,7 @@ export default function ConnectionStatus() {
 
   return (
     <div className="flex items-center justify-center gap-3 px-4 py-3 bg-red-50 dark:bg-red-900/30 border-b border-red-200 dark:border-red-800">
-      <ExclamationTriangleIcon className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
+      <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
       <div className="flex-1">
         <p className="text-sm font-medium text-red-800 dark:text-red-200">
           Unable to connect to server

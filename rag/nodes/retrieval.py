@@ -124,6 +124,7 @@ async def retrieve_documents_async(
                 restrict_to_context=restrict_to_context,
                 expand_depth=expansion_depth or settings.max_expansion_depth,
                 allowed_document_ids=allowed_ids,
+                embedding_model=embedding_model,
             )
         else:
             # Pass chunk_weight and multi_hop through to hybrid retriever if present

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { ChatSession } from '@/types'
 import { formatDistanceToNow } from 'date-fns'
-import { TrashIcon } from '@heroicons/react/24/outline'
+import { Trash2 } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
 
 export default function HistoryTab() {
@@ -16,10 +16,11 @@ export default function HistoryTab() {
   const clearChat = useChatStore((state) => state.clearChat)
   const historyRefreshKey = useChatStore((state) => state.historyRefreshKey)
   const activeSessionId = useChatStore((state) => state.sessionId)
+  const user = useChatStore((state) => state.user)
 
   useEffect(() => {
     loadSessions()
-  }, [])
+  }, [user?.id]) // Reload when user changes (after identify)
 
   // Reload history when another part of the app signals a refresh (e.g., New Chat)
   useEffect(() => {
@@ -99,9 +100,8 @@ export default function HistoryTab() {
           {sessions.map((session) => (
             <div
               key={session.session_id}
-              className={`card p-3 flex items-center justify-between transition-all cursor-pointer group ${
-                activeSessionId === session.session_id ? '' : 'hover:shadow-md'
-              }`}
+              className={`card p-3 flex items-center justify-between transition-all cursor-pointer group ${activeSessionId === session.session_id ? '' : 'hover:shadow-md'
+                }`}
               style={
                 activeSessionId === session.session_id
                   ? { borderColor: 'rgba(36,198,230,0.18)', boxShadow: '0 6px 18px rgba(36,198,230,0.12)' }
@@ -137,7 +137,7 @@ export default function HistoryTab() {
                 }}
                 className="text-red-600 hover:text-red-700 p-1 ml-2 flex-shrink-0"
               >
-                <TrashIcon className="w-4 h-4" />
+                <Trash2 className="w-4 h-4" />
               </button>
             </div>
           ))}

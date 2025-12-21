@@ -80,11 +80,29 @@ Return your response as valid JSON only, no additional text."""
                 prompt=prompt,
                 system_message=system_message,
                 temperature=0.3,  # Low temperature for consistent categorization
-                max_tokens=2000
+                max_tokens=2000,
+                include_usage=True,
             )
+
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    usage_tracker.record(
+                        operation="rag.category_analysis",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=settings.openai_model,
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response = (response.get("content") or "").strip()
+            else:
+                response = (response or "").strip()
             
             # Parse LLM response
-            categories_json = response.strip()
+            categories_json = response
             
             # Handle markdown code blocks if present
             if categories_json.startswith("```"):
@@ -490,10 +508,28 @@ Return as JSON: {{"classifications": [{{"category": "Category Name", "confidence
                 prompt=prompt,
                 system_message=system_message,
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=500,
+                include_usage=True,
             )
+
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    usage_tracker.record(
+                        operation="rag.category_classification",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=settings.openai_model,
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response = (response.get("content") or "").strip()
+            else:
+                response = (response or "").strip()
             
-            classifications_json = response.strip()
+            classifications_json = response
             
             # Handle markdown code blocks
             if classifications_json.startswith("```"):

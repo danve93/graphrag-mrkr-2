@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { Source } from '@/types'
-import { ChevronDownIcon, ChevronUpIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
+import { ChevronDown, ChevronUp, FileText } from 'lucide-react'
 import { useChatStore } from '@/store/chatStore'
 
 interface SourcesListProps {
@@ -83,12 +83,12 @@ export default function SourcesList({ sources }: SourcesListProps) {
         onClick={() => setExpanded(!expanded)}
         className="flex items-center text-sm font-medium text-secondary-700 dark:text-secondary-300 hover:text-secondary-900 dark:hover:text-secondary-100"
       >
-        <DocumentTextIcon className="w-4 h-4 mr-1" />
+        <FileText className="w-4 h-4 mr-1" />
         Sources ({groupedSources.length} {groupedSources.length === 1 ? 'document' : 'documents'})
         {expanded ? (
-          <ChevronUpIcon className="w-4 h-4 ml-1" />
+          <ChevronUp className="w-4 h-4 ml-1" />
         ) : (
-          <ChevronDownIcon className="w-4 h-4 ml-1" />
+          <ChevronDown className="w-4 h-4 ml-1" />
         )}
       </button>
 
@@ -129,9 +129,9 @@ export default function SourcesList({ sources }: SourcesListProps) {
                 </div>
                 <div>
                   {selectedDoc === doc.documentId ? (
-                    <ChevronUpIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronUp className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   ) : (
-                    <ChevronDownIcon className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
+                    <ChevronDown className="w-4 h-4 text-secondary-500 dark:text-secondary-400" />
                   )}
                 </div>
               </div>

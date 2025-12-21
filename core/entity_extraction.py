@@ -774,14 +774,15 @@ You are processing TextUnit ID: {text_unit_label}. Always preserve this identifi
             return [], []
 
     async def extract_from_chunk(
-        self, text: str, chunk_id: str
+        self, text: str, chunk_id: str, document_id: str = None
     ) -> Tuple[List[Entity], List[Relationship]]:
         """Extract entities and relationships from a single text chunk with retry logic."""
 
         @retry_with_exponential_backoff(max_retries=5, base_delay=3.0, max_delay=180.0)
         def _generate_response_with_retry(prompt):
             return llm_manager.generate_response(
-                prompt=prompt, max_tokens=4000, temperature=1.0, model_override=self.llm_model
+                prompt=prompt, max_tokens=4000, temperature=1.0, model_override=self.llm_model,
+                include_usage=True
             )
 
         try:
@@ -815,7 +816,26 @@ You are processing TextUnit ID: {text_unit_label}. Always preserve this identifi
                     )
                     return [], []
 
-            return self._parse_extraction_response(response, chunk_id)
+            # Track token usage
+            if isinstance(response, dict) and "usage" in response:
+                try:
+                    from core.llm_usage_tracker import usage_tracker
+                    from config.settings import settings
+                    usage_tracker.record(
+                        operation="ingestion.entity_extraction",
+                        provider=getattr(settings, "llm_provider", "openai"),
+                        model=self.llm_model or settings.openai_model,
+                        input_tokens=response["usage"].get("input", 0),
+                        output_tokens=response["usage"].get("output", 0),
+                        document_id=document_id,
+                    )
+                except Exception as track_err:
+                    logger.debug(f"Token tracking failed: {track_err}")
+                response_text = response.get("content", "")
+            else:
+                response_text = response or ""
+
+            return self._parse_extraction_response(response_text, chunk_id)
 
         except Exception as e:
             logger.error(f"Entity extraction failed for chunk {chunk_id}: {e}")

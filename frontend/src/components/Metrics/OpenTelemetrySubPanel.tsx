@@ -37,8 +37,8 @@ export default function OpenTelemetrySubPanel() {
       <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
         <h3 className="font-medium" style={{ color: 'var(--text-secondary)' }}>Distributed Tracing</h3>
         <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${isEnabled
-            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-            : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+          : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
           }`}>
           <div className={`w-2 h-2 rounded-full ${isEnabled ? 'bg-green-500' : 'bg-gray-400'}`} />
           {isEnabled ? 'Active' : 'Disabled'}
@@ -46,12 +46,12 @@ export default function OpenTelemetrySubPanel() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 pb-28 space-y-6">
 
         {/* Status Card */}
         <div className={`border rounded-lg p-6 ${isEnabled
-            ? 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
-            : 'bg-gray-50 dark:bg-neutral-800/50 border-gray-200 dark:border-gray-700'
+          ? 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
+          : 'bg-gray-50 dark:bg-neutral-800/50 border-gray-200 dark:border-gray-700'
           }`}>
           <div className="flex items-start gap-3">
             {isEnabled ? (

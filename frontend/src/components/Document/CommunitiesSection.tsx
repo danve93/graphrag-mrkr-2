@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ChevronDownIcon } from '@heroicons/react/24/outline'
+import { ChevronDown } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface CommunitiesSectionProps {
@@ -72,7 +72,7 @@ export default function CommunitiesSection({
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
           style={{ color: 'var(--text-primary)' }}
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Communities</span>
           <span
             className="ml-auto text-xs px-2 py-1 rounded"
@@ -110,7 +110,7 @@ export default function CommunitiesSection({
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
           style={{ color: 'var(--text-primary)' }}
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Communities</span>
           <span
             className="ml-auto text-xs px-2 py-1 rounded"
@@ -152,7 +152,7 @@ export default function CommunitiesSection({
         className="w-full flex items-center gap-2 px-4 py-3 font-semibold transition"
         style={{ color: 'var(--text-primary)' }}
       >
-        <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
         <span>Communities</span>
         <span
           className="ml-auto text-xs px-2 py-1 rounded"

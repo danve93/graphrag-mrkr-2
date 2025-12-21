@@ -7,7 +7,7 @@ Embedding generation, caching, and batch processing for semantic search.
 The embeddings component manages text-to-vector transformations using OpenAI or Ollama embedding models. It provides async batch processing, rate limiting, caching, and concurrent request management to optimize API usage and performance.
 
 **Location**: `core/embeddings.py`
-**Models**: OpenAI (text-embedding-3-small/large), Ollama (nomic-embed-text)
+**Models**: OpenAI (text-embedding-3-small/large), Gemini (text-embedding-004), Ollama (nomic-embed-text)
 **Cache**: LRU cache keyed by text+model hash
 
 ## Architecture
@@ -92,6 +92,10 @@ OPENAI_API_KEY=sk-...
 # Ollama settings
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+
+# Gemini settings
+GEMINI_API_KEY=your_key
+GEMINI_EMBEDDING_MODEL=models/text-embedding-004
 
 # Concurrency and rate limiting
 EMBEDDING_CONCURRENCY=10

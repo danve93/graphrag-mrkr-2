@@ -275,32 +275,33 @@ def create_chunks(self, document: Dict) -> List[Dict]:
     Returns:
         List of chunk dicts with metadata
     """
-    from core.chunking import chunk_text
+    from core.chunking import document_chunker
     
     text = document["text"]
     
     # Chunk text
-    chunks = chunk_text(
+    chunks = document_chunker.chunk_text(
         text=text,
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap
+        document_id=document["id"],
+        source_metadata=document.get("metadata", {}),
+        docling_document=document.get("docling_document"),
     )
     
     # Add metadata to each chunk
     chunk_objects = []
-    for i, chunk_text in enumerate(chunks):
-        chunk_id = f"{document['id']}_chunk_{i}"
-        
+    for chunk in chunks:
+        chunk_text = chunk.get("content", "")
+        metadata = chunk.get("metadata", {}) or {}
         chunk_obj = {
-            "id": chunk_id,
+            "id": chunk.get("chunk_id"),
             "text": chunk_text,
             "document_id": document["id"],
-            "chunk_index": i,
-            "start_char": 0,  # Calculate from chunker
-            "end_char": len(chunk_text),
-            "page_number": None,  # Extract from metadata if available
+            "chunk_index": chunk.get("chunk_index"),
+            "start_char": metadata.get("start_offset"),
+            "end_char": metadata.get("end_offset"),
+            "page_number": metadata.get("page"),
             "word_count": len(chunk_text.split()),
-            "quality_score": 1.0  # Will be updated by quality scorer
+            "quality_score": metadata.get("quality_score"),
         }
         
         chunk_objects.append(chunk_obj)

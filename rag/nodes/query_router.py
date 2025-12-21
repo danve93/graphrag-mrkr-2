@@ -18,6 +18,7 @@ def route_query_to_categories(
     query: str,
     query_analysis: Dict[str, Any],
     confidence_threshold: float = 0.7,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Route user query to relevant document categories.
@@ -165,10 +166,28 @@ Respond with JSON:
             system_message=system_message,
             temperature=0.0,
             max_tokens=200,
+            include_usage=True,
         )
 
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                usage_tracker.record(
+                    operation="rag.query_routing",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                    conversation_id=session_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            text = (result.get("content") or "").strip()
+        else:
+            text = (result or "").strip()
+
         # Parse response
-        text = (result or "").strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:

@@ -8,9 +8,9 @@ import logging
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends, Query
 
 from api.models import (
     DatabaseStats,
@@ -20,12 +20,19 @@ from api.models import (
     ProcessProgress,
     ProcessDocumentsRequest,
     ProcessingSummary,
+    FolderListResponse,
+    FolderSummary,
+    CreateFolderRequest,
+    RenameFolderRequest,
+    MoveDocumentRequest,
+    ReorderDocumentsRequest,
 )
 from config.settings import settings
 from core.graph_db import graph_db
 from neo4j.exceptions import ServiceUnavailable
 from ingestion.document_processor import EntityExtractionState, document_processor
 from core.singletons import get_response_cache, get_blocking_executor, SHUTTING_DOWN
+from core.cache_metrics import cache_metrics
 from api.auth import require_admin
 
 logger = logging.getLogger(__name__)
@@ -118,6 +125,22 @@ def _calculate_overall_progress(progress: ProcessProgress) -> float:
 
     # Fallback/Default
     return 0.0
+
+
+def _invalidate_document_cache(document_id: str) -> None:
+    if not getattr(settings, "enable_caching", True):
+        return
+    try:
+        cache = get_response_cache()
+        for key in (f"document_summary:{document_id}", f"document_metadata:{document_id}"):
+            cache.delete(key)
+        try:
+            cache_metrics.record_response_invalidation()
+        except Exception:
+            pass
+    except Exception:
+        # Cache invalidation should never block folder operations.
+        pass
 
 
 def _update_queue_positions() -> None:
@@ -381,7 +404,11 @@ def _estimate_total_chunks_for_path(file_path: Path) -> int:
         if not content:
             return 0
 
-        temp_chunks = document_chunker.chunk_text(content, f"preview_{file_path.stem}")
+        temp_chunks = document_chunker.chunk_text(
+            content,
+            f"preview_{file_path.stem}",
+            source_metadata={"file_extension": file_path.suffix.lower()},
+        )
         return len(temp_chunks)
     except Exception as exc:  # pragma: no cover - advisory logging
         logger.debug("Failed to estimate chunks for %s: %s", file_path, exc)
@@ -1123,8 +1150,14 @@ async def cleanup_orphans():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+from pydantic import BaseModel
+
+class ClearDatabaseRequest(BaseModel):
+    clearKnowledgeBase: bool = True
+    clearConversations: bool = True
+
 @router.post("/clear")
-async def clear_database():
+async def clear_database(request: ClearDatabaseRequest = ClearDatabaseRequest()):
     """
     Clear all data from the database.
 
@@ -1138,7 +1171,10 @@ async def clear_database():
         )
     
     try:
-        graph_db.clear_database()
+        graph_db.clear_database(
+            clear_knowledge_base=request.clearKnowledgeBase,
+            clear_conversations=request.clearConversations
+        )
 
         # Issue #6 Fix: Purge staged_uploads directory
         try:
@@ -1212,6 +1248,129 @@ async def list_hashtags():
         if isinstance(e, ServiceUnavailable):
             raise
         logger.error(f"Failed to list hashtags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/folders", response_model=FolderListResponse)
+async def list_folders():
+    """List all folders with document counts."""
+    try:
+        folders = graph_db.list_folders()
+        return FolderListResponse(folders=[FolderSummary(**folder) for folder in folders])
+    except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
+        logger.error(f"Failed to list folders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/folders", response_model=FolderSummary)
+async def create_folder(request: CreateFolderRequest):
+    """Create a new folder."""
+    try:
+        folder = graph_db.create_folder(request.name)
+        return FolderSummary(**folder)
+    except ValueError as exc:
+        message = str(exc)
+        if "exists" in message:
+            raise HTTPException(status_code=409, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+    except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
+        logger.error(f"Failed to create folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/folders/{folder_id}", response_model=FolderSummary)
+async def rename_folder(folder_id: str, request: RenameFolderRequest):
+    """Rename a folder."""
+    try:
+        folder = graph_db.rename_folder(folder_id, request.name)
+        folder["document_count"] = next(
+            (f.get("document_count", 0) for f in graph_db.list_folders() if f.get("id") == folder_id),
+            0,
+        )
+        return FolderSummary(**folder)
+    except ValueError as exc:
+        message = str(exc)
+        if "exists" in message:
+            raise HTTPException(status_code=409, detail=message)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+    except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
+        logger.error(f"Failed to rename folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/folders/{folder_id}")
+async def delete_folder(
+    folder_id: str,
+    mode: Literal["move_to_root", "delete_documents"] = Query(..., description="Delete mode"),
+):
+    """Delete a folder, optionally deleting documents."""
+    if mode == "delete_documents" and not settings.enable_delete_operations:
+        raise HTTPException(
+            status_code=403,
+            detail="Delete operations are disabled in this configuration",
+        )
+
+    try:
+        result = graph_db.delete_folder(folder_id, mode)
+        for doc_id in result.get("document_ids", []):
+            _invalidate_document_cache(doc_id)
+        return {
+            "status": "success",
+            "folder_id": folder_id,
+            "documents_deleted": result.get("documents_deleted", 0),
+            "documents_moved": result.get("documents_moved", 0),
+        }
+    except ValueError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+    except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
+        logger.error(f"Failed to delete folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/documents/{document_id}/folder")
+async def move_document_to_folder(document_id: str, request: MoveDocumentRequest):
+    """Move a document into a folder or back to root."""
+    try:
+        result = graph_db.assign_document_folder(document_id, request.folder_id)
+        _invalidate_document_cache(document_id)
+        return {"status": "success", "document_id": document_id, **result}
+    except ValueError as exc:
+        message = str(exc)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+    except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
+        logger.error(f"Failed to move document {document_id} to folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/documents/order")
+async def reorder_documents(request: ReorderDocumentsRequest):
+    """Persist manual ordering for documents."""
+    try:
+        updated = graph_db.reorder_documents(request.document_ids, request.folder_id)
+        for doc_id in request.document_ids:
+            _invalidate_document_cache(doc_id)
+        return {"status": "success", "updated": updated}
+    except Exception as e:
+        if isinstance(e, ServiceUnavailable):
+            raise
+        logger.error(f"Failed to reorder documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1605,7 +1764,9 @@ async def _process_documents_task(file_ids: List[str]):
                 if content:
                     # Estimate total chunks
                     temp_chunks = document_chunker.chunk_text(
-                        content, f"temp_{file_id}"
+                        content,
+                        f"temp_{file_id}",
+                        source_metadata={"file_extension": file_ext},
                     )
                     _progress_percentage[file_id].total_chunks = len(temp_chunks)
                     logger.info(

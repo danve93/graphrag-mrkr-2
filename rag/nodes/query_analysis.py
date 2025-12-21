@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_query(
-    query: str, chat_history: Optional[List[Dict[str, str]]] = None
+    query: str,
+    chat_history: Optional[List[Dict[str, str]]] = None,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Analyze user query to extract intent and key concepts.
@@ -20,6 +22,7 @@ def analyze_query(
     Args:
         query: User query string
         chat_history: Optional list of previous messages [{"role": "user/assistant", "content": "..."}]
+        session_id: Optional session ID for token tracking
 
     Returns:
         Dictionary containing query analysis
@@ -330,7 +333,7 @@ def _determine_retrieval_strategy(analysis: Dict[str, Any], query_lower: str) ->
 
 
 def _detect_follow_up_question(
-    query: str, chat_history: List[Dict[str, str]]
+    query: str, chat_history: List[Dict[str, str]], session_id: Optional[str] = None
 ) -> Dict[str, bool]:
     """
     Detect if the current query is a follow-up question that requires previous context.
@@ -338,6 +341,7 @@ def _detect_follow_up_question(
     Args:
         query: Current user query
         chat_history: List of previous messages
+        session_id: Optional session ID for token tracking
 
     Returns:
         Dictionary with is_follow_up and needs_context flags
@@ -445,14 +449,33 @@ Answer with JSON format:
             system_message=system_message,
             temperature=0.3,  # Issue #23: Lower temperature for deterministic JSON parsing
             max_tokens=150,
+            include_usage=True,
         )
+
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                from config.settings import settings
+                usage_tracker.record(
+                    operation="rag.query_analysis",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                    conversation_id=session_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            result = (result.get("content") or "").strip()
+        else:
+            result = (result or "").strip()
 
         # Parse the response
         import json
 
         try:
             # Try to extract JSON from the response
-            result = result.strip()
             if "```json" in result:
                 result = result.split("```json")[1].split("```")[0].strip()
             elif "```" in result:
@@ -478,13 +501,14 @@ Answer with JSON format:
         return {"is_follow_up": False, "needs_context": False}
 
 
-def _create_contextualized_query(query: str, chat_history: List[Dict[str, str]]) -> str:
+def _create_contextualized_query(query: str, chat_history: List[Dict[str, str]], session_id: Optional[str] = None) -> str:
     """
     Create a contextualized version of the query by incorporating relevant previous context.
 
     Args:
         query: Current user query
         chat_history: List of previous messages
+        session_id: Optional session ID for token tracking
 
     Returns:
         Contextualized query string
@@ -522,10 +546,29 @@ Rewritten question:"""
             system_message=system_message,
             temperature=1.0,
             max_tokens=200,
+            include_usage=True,
         )
 
+        # Track token usage
+        if isinstance(contextualized, dict) and "usage" in contextualized:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                from config.settings import settings
+                usage_tracker.record(
+                    operation="rag.query_contextualization",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=contextualized["usage"].get("input", 0),
+                    output_tokens=contextualized["usage"].get("output", 0),
+                    conversation_id=session_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            contextualized = (contextualized.get("content") or "").strip()
+        else:
+            contextualized = (contextualized or "").strip()
+
         # Clean up the response
-        contextualized = contextualized.strip()
         # Remove quotes if present
         if contextualized.startswith('"') and contextualized.endswith('"'):
             contextualized = contextualized[1:-1]

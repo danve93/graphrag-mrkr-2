@@ -65,15 +65,15 @@ Content-Type: multipart/form-data
 
 ### Error Handling
 
-If chunking parameters have changed (different `chunk_size` or `chunk_overlap`):
+If chunking parameters have changed (different `chunk_size`/`chunk_overlap` or token-aware settings/strategy):
 
 ```json
 {
   "status": "error",
   "error": "chunking_params_changed",
-  "details": "Document uses chunk_size=1200, overlap=150. Current settings: chunk_size=1000, overlap=100. Full reprocessing required.",
-  "current_params": { "chunk_size": 1000, "chunk_overlap": 100 },
-  "document_params": { "chunk_size": 1200, "chunk_overlap": 150 }
+  "details": "Document uses chunk_size=1200, overlap=150, target_tokens=800. Current settings: chunk_size=1000, overlap=100, target_tokens=900. Full reprocessing required.",
+  "current_params": { "chunk_size": 1000, "chunk_overlap": 100, "chunk_target_tokens": 900 },
+  "document_params": { "chunk_size": 1200, "chunk_overlap": 150, "chunk_target_tokens": 800 }
 }
 ```
 
@@ -105,8 +105,15 @@ When uploading a file, a dialog prompts you to update or upload as new:
 The following properties are stored to enable incremental updates:
 
 **Document Node:**
-- `chunk_size_used`: Chunk size at initial ingestion
-- `chunk_overlap_used`: Chunk overlap at initial ingestion
+- `chunk_size_used`: Legacy chunk size at initial ingestion
+- `chunk_overlap_used`: Legacy chunk overlap at initial ingestion
+- `chunk_target_tokens`: Token-aware target size (HTML/Docling)
+- `chunk_min_tokens`: Token-aware minimum size
+- `chunk_max_tokens`: Token-aware maximum size
+- `chunk_overlap_tokens`: Token-aware overlap
+- `chunk_tokenizer`: Tokenizer name
+- `chunker_strategy_pdf`: PDF chunking strategy
+- `chunker_strategy_html`: HTML chunking strategy
 
 **Chunk Node:**
 - `content_hash`: SHA-1 hash of chunk content (indexed for fast lookup)

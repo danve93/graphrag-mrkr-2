@@ -23,6 +23,8 @@ import { useSwipeable } from 'react-swipeable'
 export default function AdminPage() {
   const activeView = useChatStore((state) => state.activeView)
   const setActiveView = useChatStore((state) => state.setActiveView)
+  const user = useChatStore((state) => state.user)
+  const identifyUser = useChatStore((state) => state.identifyUser)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const isConnected = useChatStore((s) => s.isConnected)
@@ -104,6 +106,12 @@ export default function AdminPage() {
     }
     checkAuth()
   }, [])
+
+  useEffect(() => {
+    if (!authenticated) return
+    if (user?.role === 'admin') return
+    identifyUser().catch(() => undefined)
+  }, [authenticated, identifyUser, user?.role])
 
   const clampWidth = (next: number) => Math.min(Math.max(next, MIN_WIDTH), MAX_WIDTH)
   const mainMarginLeft = sidebarOpen ? (sidebarCollapsed ? 72 : sidebarWidth) : 0

@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Info, Settings } from 'lucide-react'
 import { Button } from '@mui/material'
 import ExpandablePanel from '@/components/Utils/ExpandablePanel'
-import Tooltip from '@/components/Utils/Tooltip'
+import { AnimatedTooltip as Tooltip } from '@motion-primitives/animated-tooltip'
 import Loader from '@/components/Utils/Loader'
 import { API_URL } from '@/lib/api'
 import AdminApiKeys from '@/components/Admin/AdminApiKeys'
@@ -43,6 +43,31 @@ export default function ChatTuningPanel() {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [activeCategory, setActiveCategory] = useState<string>('model-selection')
+  const [highlightedParam, setHighlightedParam] = useState<string | null>(null)
+
+  // Ref for scrolling to highlighted element
+  const highlightedRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (highlightedParam && highlightedRef.current) {
+      highlightedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // Clear highlight after animation
+      const timer = setTimeout(() => setHighlightedParam(null), 2000)
+      return () => clearTimeout(timer)
+    }
+  }, [highlightedParam, activeCategory])
+
+  // Listen for highlight events from sidebar search
+  useEffect(() => {
+    const handleHighlightParam = (event: CustomEvent<string>) => {
+      setHighlightedParam(event.detail);
+    };
+
+    window.addEventListener('chat-tuning-highlight-param', handleHighlightParam as EventListener);
+    return () => {
+      window.removeEventListener('chat-tuning-highlight-param', handleHighlightParam as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     loadConfig()
@@ -183,18 +208,18 @@ export default function ChatTuningPanel() {
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--border)', padding: 'var(--space-6)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--space-4)' }}>
           <div style={{
             width: '40px',
             height: '40px',
             borderRadius: '8px',
-            backgroundColor: '#f27a0320',
-            border: '1px solid #f27a03',
+            backgroundColor: 'var(--accent-subtle)',
+            border: '1px solid var(--accent-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center'
           }}>
-            <Settings size={24} color="#f27a03" />
+            <Settings size={24} color="var(--accent-primary)" />
           </div>
           <h1 className="font-display" style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
             Chat Tuning
@@ -223,6 +248,7 @@ export default function ChatTuningPanel() {
             </Button>
           </div>
         </div>
+
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           Adjust retrieval and generation parameters for chat responses. Changes apply instantly to new queries.
         </p>
@@ -245,7 +271,7 @@ export default function ChatTuningPanel() {
       )}
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--space-6)' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto pb-28 p-[var(--space-6)]">
         {activeCategory === 'api-keys' ? (
           <AdminApiKeys />
         ) : (
@@ -261,7 +287,20 @@ export default function ChatTuningPanel() {
                   </h2>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     {params.map((param) => (
-                      <div key={param.key} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div
+                        key={param.key}
+                        ref={param.key === highlightedParam ? highlightedRef : null}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                          transition: 'background-color 0.3s ease',
+                          backgroundColor: param.key === highlightedParam ? 'rgba(var(--accent-primary-rgb), 0.1)' : 'transparent',
+                          borderRadius: '8px',
+                          padding: param.key === highlightedParam ? '8px' : '0',
+                          margin: param.key === highlightedParam ? '-8px' : '0'
+                        }}
+                      >
                         <div className="flex items-center" style={{ gap: '8px' }}>
                           <label style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>
                             {param.label}

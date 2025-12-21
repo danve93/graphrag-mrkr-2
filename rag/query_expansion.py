@@ -3,7 +3,7 @@ Optional query expansion utility for sparse retrieval scenarios.
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from core.llm import llm_manager
 from config.settings import settings
@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 def expand_query_terms(
     query: str,
     initial_results_count: int,
-    min_threshold: int = 3
+    min_threshold: int = 3,
+    session_id: Optional[str] = None,
 ) -> List[str]:
     """
     Generate expanded terms (synonyms, related concepts) when initial retrieval is sparse.
@@ -60,11 +61,30 @@ Return ONLY a JSON list of strings, no explanation:
             system_message=system_message,
             temperature=0.3,  # Lower temperature for consistent expansions
             max_tokens=150,
+            include_usage=True,
         )
+
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                from config.settings import settings
+                usage_tracker.record(
+                    operation="rag.query_expansion",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                    conversation_id=session_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            result = (result.get("content") or "").strip()
+        else:
+            result = (result or "").strip()
         
         # Parse JSON response
         import json
-        result = result.strip()
         if "```json" in result:
             result = result.split("```json")[1].split("```")[0].strip()
         elif "```" in result:

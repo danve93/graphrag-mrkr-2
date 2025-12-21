@@ -14,12 +14,17 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def generate_title(messages: List[Dict[str, Any]], max_length: int = 60) -> str:
+def generate_title(
+    messages: List[Dict[str, Any]],
+    max_length: int = 60,
+    conversation_id: str = None,
+) -> str:
     """Generate a concise title for a conversation.
 
     Args:
         messages: List of conversation messages
         max_length: Maximum title length
+        conversation_id: Optional conversation ID for tracking
 
     Returns:
         Generated title (e.g., "Discussion about GraphRAG implementation")
@@ -49,11 +54,30 @@ Conversation excerpt:
 Respond with ONLY the title, no quotes or extra text."""
 
     try:
-        title = llm_manager.generate_response(
+        result = llm_manager.generate_response(
             prompt=prompt,
             max_tokens=50,
             temperature=0.3,
-        ).strip()
+            include_usage=True,
+        )
+
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                usage_tracker.record(
+                    operation="chat.title_generation",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                    conversation_id=conversation_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            title = (result.get("content") or "").strip()
+        else:
+            title = (result or "").strip()
 
         # Clean up quotes if LLM added them
         title = title.strip('"\'')
@@ -75,6 +99,7 @@ def generate_summary(
     messages: List[Dict[str, Any]],
     max_summary_length: int = 500,
     include_key_points: bool = True,
+    conversation_id: str = None,
 ) -> str:
     """Generate a structured summary of a conversation.
 
@@ -82,6 +107,7 @@ def generate_summary(
         messages: List of conversation messages
         max_summary_length: Maximum summary length in characters
         include_key_points: Whether to include bullet points
+        conversation_id: Optional conversation ID for tracking
 
     Returns:
         Generated summary with key points
@@ -115,11 +141,30 @@ Conversation:
 Respond with a structured summary:"""
 
     try:
-        summary = llm_manager.generate_response(
+        result = llm_manager.generate_response(
             prompt=prompt,
             max_tokens=200,
             temperature=0.3,
-        ).strip()
+            include_usage=True,
+        )
+
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                usage_tracker.record(
+                    operation="chat.summarization",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                    conversation_id=conversation_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            summary = (result.get("content") or "").strip()
+        else:
+            summary = (result or "").strip()
 
         # Truncate if needed
         if len(summary) > max_summary_length:
@@ -144,6 +189,7 @@ Respond with a structured summary:"""
 def extract_user_preferences(
     messages: List[Dict[str, Any]],
     existing_facts: List[Dict[str, Any]] = None,
+    conversation_id: str = None,
 ) -> List[Dict[str, str]]:
     """Extract user preferences and facts from conversation.
 
@@ -153,6 +199,7 @@ def extract_user_preferences(
     Args:
         messages: List of conversation messages
         existing_facts: Optional list of existing facts to avoid duplicates
+        conversation_id: Optional conversation ID for tracking
 
     Returns:
         List of extracted facts with content and suggested importance
@@ -204,11 +251,30 @@ If no important facts, respond with: []"""
     try:
         import json
 
-        response = llm_manager.generate_response(
+        result = llm_manager.generate_response(
             prompt=prompt,
             max_tokens=300,
             temperature=0.2,
-        ).strip()
+            include_usage=True,
+        )
+
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                usage_tracker.record(
+                    operation="chat.preference_extraction",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                    conversation_id=conversation_id,
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            response = (result.get("content") or "").strip()
+        else:
+            response = (result or "").strip()
 
         # Parse JSON response
         # Remove markdown code blocks if present

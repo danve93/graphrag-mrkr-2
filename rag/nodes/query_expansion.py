@@ -240,11 +240,27 @@ Respond with a comma-separated list of expansion terms only (no explanations):""
             system_message=system_message,
             temperature=0.3,  # Low temperature for consistency
             max_tokens=100,
+            include_usage=True,
         )
 
-        # Parse the response
-        result = result.strip()
+        # Track token usage
+        if isinstance(result, dict) and "usage" in result:
+            try:
+                from core.llm_usage_tracker import usage_tracker
+                usage_tracker.record(
+                    operation="rag.query_expansion",
+                    provider=getattr(settings, "llm_provider", "openai"),
+                    model=settings.openai_model,
+                    input_tokens=result["usage"].get("input", 0),
+                    output_tokens=result["usage"].get("output", 0),
+                )
+            except Exception as track_err:
+                logger.debug(f"Token tracking failed: {track_err}")
+            result = (result.get("content") or "").strip()
+        else:
+            result = (result or "").strip()
 
+        # Parse the response
         # Split on commas and clean up
         terms = [term.strip().lower() for term in result.split(",")]
 

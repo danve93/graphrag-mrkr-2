@@ -50,8 +50,8 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 | **Frontend** | Next.js 14, TypeScript, Zustand, Tailwind CSS, Force-Graph 3D |
 | **Backend** | FastAPI, LangGraph, Pydantic, asyncio, Neo4j driver |
 | **Database** | Neo4j 5.x with HNSW vector indexes |
-| **AI/ML** | OpenAI (GPT-4/3.5, embeddings), Ollama (optional), FlashRank reranking |
-| **Document Processing** | Multi-format loaders, Marker (optional OCR) |
+| **AI/ML** | OpenAI (GPT-4/3.5, embeddings), Google Gemini (optional), Ollama (optional), FlashRank reranking |
+| **Document Processing** | Multi-format loaders, Docling (optional, PDF/DOCX/PPTX/XLSX/HTML), Marker (optional OCR), HTML heading chunker |
 
 ## Features
 
@@ -65,6 +65,7 @@ This graph-enhanced approach surfaces contextually relevant information that pur
 | **Leiden Community Detection** | Automatic entity clustering into semantic communities |
 | **Entity Extraction with Gleaning** | Multi-pass extraction with 30-40% recall improvement |
 | **Quality Scoring** | Chunk quality assessment for filtering low-quality content |
+| **Token-Aware Chunking** | HTML heading chunker + Docling hybrid with tunable token budgets |
 
 ### Advanced Intelligence
 
@@ -156,6 +157,28 @@ npm run dev
 ```
 
 ### Recent Updates
+
+#### v2.2.0 (December 2025)
+
+**New Features:**
+- **Docling Integration**: Optional Docling library support for state-of-the-art document conversion (PDF, DOCX, PPTX, XLSX, HTML, images) with layout analysis and structure preservation
+- **LLM Token Usage Metrics**: Comprehensive analytics dashboard tracking token usage, costs (USD/EUR), breakdowns by operation/provider/model/conversation, time trends, and efficiency metrics
+- **Selective Database Clearing**: Granular control to clear Knowledge Base or Conversation History independently
+- **Google Gemini Support**: Added Gemini as LLM provider option with full configuration support
+- **HTML Heading Chunker**: New strategy for HTML documents with semantic structure and heading path extraction
+
+**Infrastructure:**
+- **Token Management Enhancements**: Comprehensive token tracking and context management
+  - New `token_counter.py` utility and enhanced `token_manager.py` with intelligent context splitting
+  - Standardized `include_usage` parameter across all LLM providers
+  - Updated model context sizes for 2024-2025 models
+
+**Configuration:**
+- **TruLens Toggle Persistence**: TruLens state now persists to `config.yaml` and defaults to disabled
+
+**UI Improvements:**
+- **Search UI Enhancement**: Added fuzzy search to Chat and RAG Tuning panels
+- **Bottom Panel Padding**: Consistent padding across all scrollable panels
 
 #### v2.1.1 (December 2024)
 

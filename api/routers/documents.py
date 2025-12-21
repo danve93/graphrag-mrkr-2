@@ -11,8 +11,8 @@ from fastapi import APIRouter, HTTPException, Query, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from neo4j.exceptions import ServiceUnavailable
 
-from api.models import DocumentMetadataResponse, UpdateHashtagsRequest, UpdateMetadataRequest
-from core.document_summarizer import document_summarizer
+from api.models import DocumentMetadataResponse, UpdateHashtagsRequest, UpdateMetadataRequest, UpdateDocumentDetailsRequest
+from core.document_summarizer import document_summarizer, DOCUMENT_TYPES
 from core.graph_db import graph_db
 from core.singletons import get_response_cache, ResponseKeyLock
 from core.cache_metrics import cache_metrics
@@ -21,6 +21,22 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _invalidate_document_cache(document_id: str) -> None:
+    if not getattr(settings, "enable_caching", True):
+        return
+    try:
+        cache = get_response_cache()
+        for key in (f"document_summary:{document_id}", f"document_metadata:{document_id}"):
+            cache.delete(key)
+        try:
+            cache_metrics.record_response_invalidation()
+        except Exception:
+            pass
+    except Exception:
+        # Cache invalidation should never block metadata updates.
+        pass
 
 
 # Specific sub-path routes must come BEFORE the generic /{document_id} route
@@ -106,6 +122,7 @@ async def get_document_summary(document_id: str):
                     """
                     MATCH (d:Document {id: $document_id})
                     RETURN d.id AS id,
+                           d.title AS title,
                            d.filename AS filename,
                            d.original_filename AS original_filename,
                            d.mime_type AS mime_type,
@@ -113,6 +130,7 @@ async def get_document_summary(document_id: str):
                            d.created_at AS created_at,
                            d.link AS link,
                            d.uploader AS uploader,
+                           d.document_type AS document_type,
                            d.precomputed_chunk_count AS pre_chunks,
                            d.precomputed_entity_count AS pre_entities,
                            d.precomputed_community_count AS pre_communities,
@@ -206,6 +224,7 @@ async def get_document_summary(document_id: str):
 
                 resp = {
                     "id": rec["id"],
+                    "title": rec.get("title"),
                     "filename": rec["filename"],
                     "original_filename": rec["original_filename"],
                     "mime_type": rec["mime_type"],
@@ -213,6 +232,7 @@ async def get_document_summary(document_id: str):
                     "created_at": rec["created_at"],
                     "link": rec["link"],
                     "uploader": rec["uploader"],
+                    "document_type": rec.get("document_type"),
                     "stats": {
                         "chunks": int(chunks_count or 0),
                         "entities": int(entities_count or 0),
@@ -492,6 +512,48 @@ async def update_document_hashtags(document_id: str, request: UpdateHashtagsRequ
         raise HTTPException(status_code=500, detail="Failed to update hashtags") from exc
 
 
+@router.patch("/{document_id}/details")
+async def update_document_details(document_id: str, request: UpdateDocumentDetailsRequest):
+    """Update document title and/or document_type."""
+    try:
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if request.title is None and request.document_type is None:
+            raise HTTPException(status_code=400, detail="No fields provided to update")
+
+        if request.document_type and request.document_type not in DOCUMENT_TYPES:
+            logger.warning(
+                "Document %s updated with non-standard document_type '%s'",
+                document_id,
+                request.document_type,
+            )
+
+        updated = graph_db.update_document_details(
+            doc_id=document_id,
+            title=request.title,
+            document_type=request.document_type,
+        )
+        _invalidate_document_cache(document_id)
+
+        return {
+            "document_id": document_id,
+            "title": updated.get("title", request.title),
+            "document_type": updated.get("document_type", request.document_type),
+            "status": "success",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
+        logger.error("Failed to update document details for %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update document details") from exc
+
+
 @router.patch("/{document_id}/metadata")
 async def update_document_metadata(document_id: str, request: UpdateMetadataRequest):
     """Update the metadata for a document."""
@@ -504,6 +566,7 @@ async def update_document_metadata(document_id: str, request: UpdateMetadataRequ
 
         # Update metadata
         graph_db.update_document_metadata(doc_id=document_id, metadata=request.metadata)
+        _invalidate_document_cache(document_id)
 
         return {"document_id": document_id, "metadata": request.metadata, "status": "success"}
     except HTTPException:
@@ -718,6 +781,9 @@ async def get_document_metadata(document_id: str) -> DocumentMetadataResponse:
             "summary": details.get("summary"),
             "document_type": details.get("document_type"),
             "hashtags": details.get("hashtags") or [],
+            "folder_id": details.get("folder_id"),
+            "folder_name": details.get("folder_name"),
+            "folder_order": details.get("folder_order"),
             # Avoid sending full chunks/entities on this route; frontend
             # should lazy-load them via the dedicated endpoints.
             "chunks": [],
@@ -758,7 +824,7 @@ async def get_chunk_details(chunk_id: str):
                     c.chunk_index AS index,
                     coalesce(c.offset, 0) AS offset,
                     d.id AS document_id,
-                    d.filename AS document_name
+                    coalesce(d.title, d.original_filename, d.filename) AS document_name
                 """,
                 chunk_id=chunk_id
             ).single()

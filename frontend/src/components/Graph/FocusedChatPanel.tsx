@@ -55,7 +55,8 @@ export default function FocusedChatPanel({ node, onClose }: FocusedChatPanelProp
             }
 
             const data = await response.json()
-            setMessages(prev => [...prev, { role: 'assistant', content: data.response || 'No response received.' }])
+            // API returns 'message' field, not 'response'
+            setMessages(prev => [...prev, { role: 'assistant', content: data.message || 'No response received.' }])
         } catch (error) {
             console.error('Chat error:', error)
             setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }])

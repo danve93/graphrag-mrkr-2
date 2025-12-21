@@ -364,6 +364,166 @@ curl http://localhost:8000/api/database/health
 
 ---
 
+## GET /api/database/folders
+
+List all folders with document counts.
+
+### Response
+
+**Status**: `200 OK`
+
+**Body**:
+```json
+{
+  "folders": [
+    {
+      "id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df",
+      "name": "Release Notes",
+      "created_at": 1717687421.02,
+      "document_count": 4
+    }
+  ]
+}
+```
+
+---
+
+## POST /api/database/folders
+
+Create a new folder.
+
+### Request
+
+**Body**:
+```json
+{
+  "name": "Release Notes"
+}
+```
+
+### Response
+
+**Status**: `200 OK`
+
+**Body**:
+```json
+{
+  "id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df",
+  "name": "Release Notes",
+  "created_at": 1717687421.02,
+  "document_count": 0
+}
+```
+
+---
+
+## PATCH /api/database/folders/{folder_id}
+
+Rename a folder.
+
+### Request
+
+**Body**:
+```json
+{
+  "name": "Updated Release Notes"
+}
+```
+
+### Response
+
+**Status**: `200 OK`
+
+**Body**:
+```json
+{
+  "id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df",
+  "name": "Updated Release Notes",
+  "created_at": 1717687421.02,
+  "document_count": 4
+}
+```
+
+---
+
+## DELETE /api/database/folders/{folder_id}?mode=move_to_root|delete_documents
+
+Delete a folder and choose what happens to its documents.
+
+### Response
+
+**Status**: `200 OK`
+
+**Body**:
+```json
+{
+  "status": "success",
+  "folder_id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df",
+  "documents_deleted": 0,
+  "documents_moved": 4
+}
+```
+
+---
+
+## PATCH /api/database/documents/{document_id}/folder
+
+Move a document into a folder or back to root.
+
+### Request
+
+**Body**:
+```json
+{
+  "folder_id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df"
+}
+```
+
+### Response
+
+**Status**: `200 OK`
+
+**Body**:
+```json
+{
+  "status": "success",
+  "document_id": "doc-123",
+  "folder_id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df",
+  "folder_name": "Release Notes",
+  "folder_order": 3
+}
+```
+
+---
+
+## POST /api/database/documents/order
+
+Persist manual ordering for documents within a folder or root.
+
+### Request
+
+**Body**:
+```json
+{
+  "folder_id": "0c1f2c6e-9a90-4a2f-b1d8-88a0a7a7e6df",
+  "document_ids": ["doc-1", "doc-2", "doc-3"]
+}
+```
+
+### Response
+
+**Status**: `200 OK`
+
+**Body**:
+```json
+{
+  "status": "success",
+  "updated": 3
+}
+```
+
+---
+
 ## Related Documentation
 
 - [Graph Database](03-components/backend/graph-database.md)

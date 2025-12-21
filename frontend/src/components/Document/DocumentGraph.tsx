@@ -1,11 +1,18 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
-import type { GraphResponse } from '@/types/graph'
+import type { GraphNode, GraphResponse } from '@/types/graph'
 import { api } from '@/lib/api'
 
-const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false })
+const CytoscapeGraph = dynamic(() => import('@/components/Graph/CytoscapeGraph'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full w-full items-center justify-center">
+      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+    </div>
+  ),
+})
 
 // Community colors for visual distinction
 const COMMUNITY_COLORS = [
@@ -28,11 +35,12 @@ export default function DocumentGraph({
   // filtering state: node types & communities
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set<string>())
   const [selectedCommunities, setSelectedCommunities] = useState<Set<number | null>>(new Set<number | null>())
-  const [selectedNode, setSelectedNode] = useState<any | null>(null)
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [width, setWidth] = useState(800)
   const [computedHeight, setComputedHeight] = useState(height)
   const [expanded, setExpanded] = useState(false)
   const [modalLoading, setModalLoading] = useState(false)
+  const graphContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     // derive canvas background color from CSS variables so canvas matches panel
@@ -85,7 +93,7 @@ export default function DocumentGraph({
 
   useEffect(() => {
     const handleResize = () => {
-      const container = document.getElementById(`graph-${documentId}`)
+      const container = graphContainerRef.current
       if (container) {
         setWidth(Math.max(300, container.offsetWidth - 2))
       }
@@ -159,47 +167,23 @@ export default function DocumentGraph({
     setSelectedCommunities(new Set<number | null>(availableCommunities))
   }, [graphData, availableTypes, availableCommunities])
 
-  // Build filtered payload for ForceGraph; preserve metadata (level, documents, text_units)
-  const graphPayload = useMemo(() => {
-    if (!graphData) return { nodes: [], links: [] }
+  const filteredNodes = useMemo(() => {
+    if (!graphData) return [] as GraphNode[]
 
-    // first, compute allowed node ids based on selected filters
-    const allowedNodeIds = new Set<string>()
-    graphData.nodes.forEach((node) => {
+    return graphData.nodes.filter((node) => {
       const nodeType = node.type
       const typeOk = selectedTypes.size === 0 || (typeof nodeType === 'string' && selectedTypes.has(nodeType))
       const comm = node.community_id === undefined ? null : node.community_id
       const commOk = selectedCommunities.size === 0 || selectedCommunities.has(comm)
-      if (typeOk && commOk) allowedNodeIds.add(node.id)
+      return typeOk && commOk
     })
-
-    const nodes = graphData.nodes
-      .filter((n) => allowedNodeIds.has(n.id))
-      .map((node) => ({
-        id: node.id,
-        name: node.label,
-        val: Math.max(Math.sqrt(node.degree || 1) * 2, 2),
-        color: getCommunityColor(node.community_id),
-        type: node.type,
-        communityId: node.community_id,
-        degree: node.degree,
-        level: node.level, // preserve level
-        documents: node.documents, // preserve document refs
-      }))
-
-    const links = graphData.edges
-      .filter((edge) => allowedNodeIds.has(edge.source) && allowedNodeIds.has(edge.target))
-      .map((edge) => ({
-        source: edge.source,
-        target: edge.target,
-        value: edge.weight || 1,
-        type: edge.type,
-        description: edge.description,
-        text_units: edge.text_units,
-      }))
-
-    return { nodes, links }
   }, [graphData, selectedTypes, selectedCommunities])
+
+  const filteredEdges = useMemo(() => {
+    if (!graphData) return []
+    const allowedNodeIds = new Set(filteredNodes.map((node) => node.id))
+    return graphData.edges.filter((edge) => allowedNodeIds.has(edge.source) && allowedNodeIds.has(edge.target))
+  }, [graphData, filteredNodes])
 
   if (loading) {
     return (
@@ -354,22 +338,18 @@ export default function DocumentGraph({
 
         {/* Right: graph view (3 columns) */}
         <div
+          ref={graphContainerRef}
           className="col-span-3 relative rounded-lg overflow-hidden"
           style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
         >
-          <ForceGraph3D
-            graphData={graphPayload}
-            nodeLabel={(node: any) => `${node.name} (${node.type})`}
-            nodeColor={(node: any) => node.color}
-            nodeVal={(node: any) => node.val}
-            onNodeClick={(node: any) => setSelectedNode(node)}
-            linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
-            linkColor={() => '#cbd5e1'}
-            linkOpacity={0.5}
+          <CytoscapeGraph
+            nodes={filteredNodes}
+            edges={filteredEdges}
             backgroundColor={canvasBg}
             width={width}
             height={computedHeight}
-            {...({} as any)}
+            onNodeClick={setSelectedNode}
+            editable={false}
           />
 
           {/* Node details panel with slide-in animation */}
@@ -381,8 +361,8 @@ export default function DocumentGraph({
               <>
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <div className="font-semibold text-sm">{selectedNode.name}</div>
-                    <div className="text-[11px] text-slate-600 dark:text-slate-300">{selectedNode.type}</div>
+                    <div className="font-semibold text-sm">{selectedNode.label}</div>
+                    <div className="text-[11px] text-slate-600 dark:text-slate-300">{selectedNode.type || 'Entity'}</div>
                   </div>
                   <button onClick={() => setSelectedNode(null)} className="text-xs ml-2">Close</button>
                 </div>
@@ -393,9 +373,9 @@ export default function DocumentGraph({
                     <div className="mt-2">
                       <div className="font-medium">Documents</div>
                       <ul className="list-disc ml-4 max-h-28 overflow-auto mt-1">
-                        {selectedNode.documents.slice(0, 6).map((d: any) => {
-                          const docId = (d && (d.id || d.document_id)) || (typeof d === 'string' ? d : null)
-                          const title = (d && (d.title || d.name)) || docId || String(d)
+                        {selectedNode.documents.slice(0, 6).map((doc, idx) => {
+                          const docId = doc.document_id
+                          const title = doc.document_name || docId || `Document ${idx + 1}`
                           return (
                             <li key={docId || title} className="flex items-center justify-between">
                               <span className="truncate pr-2">{title}</span>
@@ -467,18 +447,14 @@ export default function DocumentGraph({
                 </div>
               )}
               <div className="absolute inset-0 z-10">
-                <ForceGraph3D
+                <CytoscapeGraph
                   width={Math.floor(window.innerWidth * 0.9)}
                   height={Math.floor(window.innerHeight * 0.9)}
-                  graphData={graphPayload}
-                  nodeLabel={(node: any) => `${node.name} (${node.type})`}
-                  nodeColor={(node: any) => node.color}
-                  nodeVal={(node: any) => node.val}
-                  onNodeClick={(node: any) => setSelectedNode(node)}
-                  linkWidth={(link: any) => Math.sqrt(link.value || 1) * 0.5}
-                  linkColor={() => '#cbd5e1'}
-                  linkOpacity={0.5}
-                  backgroundColor="#f8fafc"
+                  nodes={filteredNodes}
+                  edges={filteredEdges}
+                  backgroundColor={canvasBg}
+                  onNodeClick={setSelectedNode}
+                  editable={false}
                 />
               </div>
             </div>

@@ -38,6 +38,8 @@ export interface Message {
   message_id?: string
   session_id?: string
   routing_info?: RoutingInfo
+  input_tokens?: number
+  output_tokens?: number
 }
 
 export interface Source {
@@ -86,17 +88,29 @@ export interface DatabaseStats {
   processing?: ProcessingSummary
 }
 
+export interface FolderSummary {
+  id: string
+  name: string
+  created_at?: number
+  document_count: number
+}
+
 export interface DocumentSummary {
   document_id: string
+  title?: string
   filename: string
   original_filename?: string
-  created_at: string
+  created_at: string | number
   chunk_count: number
   processing_status?: string
   processing_stage?: string
   processing_progress?: number
   queue_position?: number | null
   hashtags?: string[]
+  document_type?: string
+  folder_id?: string | null
+  folder_name?: string | null
+  folder_order?: number | null
 }
 
 export interface ProcessingSummary {
@@ -148,6 +162,9 @@ export interface DocumentDetails {
   summary?: string | null
   document_type?: string | null
   hashtags?: string[]
+  folder_id?: string | null
+  folder_name?: string | null
+  folder_order?: number | null
   chunks: DocumentChunk[]
   entities: DocumentEntity[]
   quality_scores?: Record<string, any> | null

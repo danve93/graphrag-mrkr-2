@@ -29,6 +29,9 @@ Represents an ingested document file.
   "file_type": str,                   # MIME type (e.g., "application/pdf")
   "file_size": int,                   # Size in bytes
   "title": str,                       # Extracted or inferred title
+  "folder_id": str | null,            # Optional folder id
+  "folder_name": str | null,          # Optional folder name (denormalized)
+  "folder_order": int | null,         # Manual ordering index within folder/root
   "created_at": datetime,             # Ingestion timestamp
   "page_count": int,                  # Number of pages (if applicable)
   "word_count": int,                  # Total word count
@@ -49,6 +52,34 @@ CREATE INDEX document_filename FOR (d:Document) ON (d.filename);
 ```cypher
 MATCH (d:Document {id: "abc123"})
 RETURN d.filename, d.precomputed_chunk_count, d.precomputed_entity_count;
+```
+
+### Folder
+
+Represents a user-facing folder for grouping documents.
+
+**Label**: `Folder`
+
+**Properties**:
+```python
+{
+  "id": str,                  # Unique folder ID (UUID)
+  "name": str,                # Unique folder name
+  "created_at": datetime      # Creation timestamp
+}
+```
+
+**Indexes**:
+```cypher
+CREATE INDEX folder_id FOR (f:Folder) ON (f.id);
+CREATE INDEX folder_name FOR (f:Folder) ON (f.name);
+```
+
+**Example Query**:
+```cypher
+MATCH (f:Folder)
+RETURN f.name
+ORDER BY f.name ASC;
 ```
 
 ### Chunk
@@ -171,6 +202,20 @@ RETURN comm.summary, count(e) as entity_count;
 ```
 
 ## Relationship Types
+
+### IN_FOLDER
+
+Links Document to its folder.
+
+**Type**: `IN_FOLDER`
+
+**Direction**: `(Document)-[:IN_FOLDER]->(Folder)`
+
+**Example Query**:
+```cypher
+MATCH (d:Document {id: "abc123"})-[:IN_FOLDER]->(f:Folder)
+RETURN f.name;
+```
 
 ### HAS_CHUNK
 

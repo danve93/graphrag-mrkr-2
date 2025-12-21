@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from 'react'
-import { ChevronDownIcon } from '@heroicons/react/24/outline'
+import { ChevronDown } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface EntitiesSectionProps {
@@ -44,8 +44,8 @@ export default function EntitiesSection({ documentId }: EntitiesSectionProps) {
         })
         setData({
           total: response.total,
-            entities: response.entities,
-            has_more: response.has_more,
+          entities: response.entities,
+          has_more: response.has_more,
         })
       } catch (e) {
         console.error('Failed to load entities', e)
@@ -64,7 +64,7 @@ export default function EntitiesSection({ documentId }: EntitiesSectionProps) {
           onClick={() => setExpanded(!expanded)}
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Entities</span>
           <span className="ml-auto text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-400">Loading...</span>
         </button>
@@ -79,7 +79,7 @@ export default function EntitiesSection({ documentId }: EntitiesSectionProps) {
           onClick={() => setExpanded(!expanded)}
           className="w-full flex items-center gap-2 px-4 py-3 font-semibold text-red-900 dark:text-red-100 hover:bg-red-100 dark:hover:bg-red-900/40 transition"
         >
-          <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
           <span>Entities</span>
           <span className="ml-auto text-xs text-red-600 dark:text-red-400">{error}</span>
         </button>
@@ -95,7 +95,7 @@ export default function EntitiesSection({ documentId }: EntitiesSectionProps) {
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-4 py-3 font-semibold text-slate-900 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
       >
-        <ChevronDownIcon className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <ChevronDown className={`h-5 w-5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
         <span>Entities</span>
         <span className="ml-auto text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-400">
           {data.total}

@@ -185,9 +185,12 @@ async def stream_response_generator(
                 # Create a minimal source object with only essential fields
                 truncated_source = {
                     "chunk_id": source.get("chunk_id", ""),
+                    "chunk_index": source.get("chunk_index"),
                     "content": source.get("content", "")[:MAX_CONTENT_LENGTH] + ("..." if len(source.get("content", "")) > MAX_CONTENT_LENGTH else ""),
                     "similarity": source.get("similarity", 0.0),
+                    "document_id": source.get("document_id", ""),
                     "document_name": source.get("document_name", ""),
+                    "filename": source.get("filename", ""),
                     "citation": source.get("citation", ""),
                     "preview_url": source.get("preview_url", ""),
                 }
@@ -242,6 +245,8 @@ async def stream_response_generator(
                 "session_id": session_id,
                 "metadata": result.get("metadata", {}),
                 "context_documents": result.get("context_documents", []),
+                "input_tokens": result.get("input_tokens", 0),
+                "output_tokens": result.get("output_tokens", 0),
             },
         }
         try:

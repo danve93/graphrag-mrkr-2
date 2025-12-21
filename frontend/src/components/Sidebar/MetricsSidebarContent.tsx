@@ -8,6 +8,7 @@ interface MetricsSidebarContentProps {
 }
 
 const sections = [
+  { id: 'llmUsage', label: 'LLM Token Usage' },
   { id: 'trulens', label: 'TruLens' },
   { id: 'ragas', label: 'RAGAS' },
   { id: 'routing', label: 'Routing' },
@@ -18,7 +19,7 @@ export default function MetricsSidebarContent({
   onSectionClick,
   activeSection: propActiveSection,
 }: MetricsSidebarContentProps) {
-  const [activeSection, setActiveSection] = useState<string>(propActiveSection || 'trulens');
+  const [activeSection, setActiveSection] = useState<string>(propActiveSection || 'llmUsage');
 
   useEffect(() => {
     const handleActiveSectionChanged = (event: CustomEvent<string>) => {
@@ -43,10 +44,10 @@ export default function MetricsSidebarContent({
                 onSectionClick(section.id);
               }}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${activeSection === section.id
-                  ? 'bg-orange-50 dark:bg-orange-900/20 text-[#f27a03] font-medium'
-                  : 'hover:bg-gray-50 dark:hover:bg-neutral-800'
+                ? 'bg-orange-50 dark:bg-orange-900/20 font-medium'
+                : 'hover:bg-gray-50 dark:hover:bg-neutral-800'
                 }`}
-              style={activeSection !== section.id ? { color: 'var(--text-secondary)' } : {}}
+              style={{ color: activeSection === section.id ? 'var(--accent-primary)' : 'var(--text-secondary)' }}
             >
               {section.label}
             </button>

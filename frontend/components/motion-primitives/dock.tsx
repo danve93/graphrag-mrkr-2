@@ -8,7 +8,7 @@ import {
   useTransform,
   type SpringOptions,
   AnimatePresence,
-} from 'motion/react';
+} from 'framer-motion';
 import {
   Children,
   cloneElement,
