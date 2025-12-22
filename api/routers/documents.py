@@ -16,6 +16,8 @@ from core.document_summarizer import document_summarizer, DOCUMENT_TYPES
 from core.graph_db import graph_db
 from core.singletons import get_response_cache, ResponseKeyLock
 from core.cache_metrics import cache_metrics
+from core.chunk_change_log import get_change_log
+from core.chunk_pattern_learner import get_pattern_learner
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -847,6 +849,413 @@ async def get_chunk_details(chunk_id: str):
             raise
         logger.error("Failed to get chunk details for %s: %s", chunk_id, exc)
         raise HTTPException(status_code=500, detail="Failed to retrieve chunk details") from exc
+
+
+@router.patch("/chunks/{chunk_id}")
+async def update_chunk_content(chunk_id: str, request: dict):
+    """Update chunk text content.
+    
+    Regenerates embedding and removes stale similarity relationships.
+    
+    Request body:
+        {
+            "content": "new chunk text content",
+            "regenerate_embedding": true,  // optional, default true
+            "reasoning": "optional reason for change"
+        }
+    """
+    try:
+        content = request.get("content")
+        if not content or not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="'content' field is required and must be a string")
+        
+        regenerate_embedding = request.get("regenerate_embedding", True)
+        reasoning = request.get("reasoning")
+        
+        # Get original content for change log
+        original_content = None
+        document_id = None
+        with graph_db.session_scope() as session:
+            chunk_data = session.run(
+                """
+                MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk {id: $chunk_id})
+                RETURN c.content as content, d.id as document_id
+                """,
+                chunk_id=chunk_id,
+            ).single()
+            if chunk_data:
+                original_content = chunk_data["content"]
+                document_id = chunk_data["document_id"]
+        
+        result = graph_db.update_chunk_content(
+            chunk_id=chunk_id,
+            new_content=content,
+            regenerate_embedding=regenerate_embedding,
+        )
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        
+        # Log the change
+        try:
+            change_log = get_change_log()
+            change_log.log_change(
+                document_id=result["document_id"],
+                chunk_id=chunk_id,
+                action="edit",
+                before_content=original_content,
+                after_content=content,
+                reasoning=reasoning,
+            )
+        except Exception as log_err:
+            logger.warning("Failed to log chunk change: %s", log_err)
+        
+        # Invalidate document cache
+        _invalidate_document_cache(result["document_id"])
+        
+        return {
+            "status": "success",
+            "chunk": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
+        logger.error("Failed to update chunk %s: %s", chunk_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update chunk") from exc
+
+
+@router.delete("/chunks/{chunk_id}")
+async def delete_chunk(chunk_id: str, cleanup_orphans: bool = Query(default=True)):
+    """Delete a chunk from the database.
+    
+    Removes entity relationships and optionally cleans up orphaned entities.
+    
+    Query params:
+        cleanup_orphans: If true (default), remove entities with no remaining source chunks
+    """
+    try:
+        # Get document_id and content before deletion
+        document_id = None
+        original_content = None
+        with graph_db.session_scope() as session:
+            doc_result = session.run(
+                """
+                MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk {id: $chunk_id})
+                RETURN d.id as document_id, c.content as content
+                """,
+                chunk_id=chunk_id,
+            ).single()
+            if doc_result:
+                document_id = doc_result["document_id"]
+                original_content = doc_result["content"]
+        
+        success = graph_db.delete_chunk(chunk_id=chunk_id, cleanup_orphans=cleanup_orphans)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        
+        # Log the change
+        if document_id:
+            try:
+                change_log = get_change_log()
+                change_log.log_change(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    action="delete",
+                    before_content=original_content,
+                    after_content=None,
+                )
+            except Exception as log_err:
+                logger.warning("Failed to log chunk deletion: %s", log_err)
+        
+        # Invalidate document cache
+        if document_id:
+            _invalidate_document_cache(document_id)
+        
+        return {
+            "status": "success",
+            "deleted_chunk_id": chunk_id,
+            "document_id": document_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
+        logger.error("Failed to delete chunk %s: %s", chunk_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete chunk") from exc
+
+
+@router.post("/{document_id}/chunks/merge")
+async def merge_chunks(document_id: str, request: dict):
+    """Merge multiple chunks into one.
+    
+    The chunk with the lowest chunk_index becomes the target.
+    Other chunks are deleted after entity relationships are transferred.
+    
+    Request body:
+        {
+            "chunk_ids": ["chunk-1", "chunk-2", ...],
+            "merged_content": "combined text content"
+        }
+    """
+    try:
+        chunk_ids = request.get("chunk_ids")
+        merged_content = request.get("merged_content")
+        reasoning = request.get("reasoning")
+        
+        if not chunk_ids or not isinstance(chunk_ids, list) or len(chunk_ids) < 2:
+            raise HTTPException(
+                status_code=400, 
+                detail="'chunk_ids' must be a list with at least 2 chunk IDs"
+            )
+        
+        if not merged_content or not isinstance(merged_content, str):
+            raise HTTPException(
+                status_code=400, 
+                detail="'merged_content' field is required and must be a string"
+            )
+        
+        # Get original content of all chunks before merge
+        original_contents = {}
+        with graph_db.session_scope() as session:
+            for cid in chunk_ids:
+                chunk_data = session.run(
+                    "MATCH (c:Chunk {id: $chunk_id}) RETURN c.content as content",
+                    chunk_id=cid,
+                ).single()
+                if chunk_data:
+                    original_contents[cid] = chunk_data["content"]
+        
+        # Verify document exists
+        try:
+            graph_db.get_document_details(document_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        result = graph_db.merge_chunks(
+            doc_id=document_id,
+            chunk_ids=chunk_ids,
+            merged_content=merged_content,
+        )
+        
+        if not result:
+            raise HTTPException(
+                status_code=400, 
+                detail="Merge failed - some chunks may not exist or belong to a different document"
+            )
+        
+        # Log the merge
+        try:
+            change_log = get_change_log()
+            # Log as merge action with metadata about merged chunks
+            combined_before = "\n---\n".join(
+                f"[Chunk {cid}]: {original_contents.get(cid, '')}" 
+                for cid in chunk_ids
+            )
+            change_log.log_change(
+                document_id=document_id,
+                chunk_id=result["id"],
+                action="merge",
+                before_content=combined_before,
+                after_content=merged_content,
+                reasoning=reasoning,
+                metadata={"merged_chunk_ids": chunk_ids, "deleted_count": len(chunk_ids) - 1},
+            )
+        except Exception as log_err:
+            logger.warning("Failed to log chunk merge: %s", log_err)
+        
+        # Invalidate document cache
+        _invalidate_document_cache(document_id)
+        
+        return {
+            "status": "success",
+            "merged_chunk": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, ServiceUnavailable):
+            raise
+        logger.error("Failed to merge chunks for document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to merge chunks") from exc
+
+
+        raise HTTPException(status_code=500, detail="Failed to merge chunks") from exc
+
+
+@router.post("/chunks/restore")
+async def restore_document_chunk(
+    request: dict,
+):
+    """
+    Restore a deleted chunk.
+    """
+    try:
+        chunk_id = request.get("chunk_id")
+        document_id = request.get("document_id")
+        content = request.get("content")
+        chunk_index = request.get("chunk_index")
+        
+        if not all([chunk_id, document_id, content, chunk_index is not None]):
+            raise HTTPException(status_code=400, detail="Missing required fields")
+            
+        result = graph_db.restore_chunk(
+            chunk_id=chunk_id,
+            document_id=document_id,
+            content=content,
+            chunk_index=chunk_index
+        )
+        
+        if result:
+            _invalidate_document_cache(document_id)
+            return {"status": "success", "message": "Chunk restored"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to restore chunk")
+            
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to restore chunk: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to restore chunk") from exc
+
+
+@router.post("/chunks/unmerge")
+async def unmerge_document_chunks(
+    request: dict,
+):
+    """
+    Delete a merged chunk (step 1 of unmerge).
+    Original chunks must be restored via /chunks/restore calls.
+    """
+    try:
+        chunk_id = request.get("chunk_id")
+        document_id = request.get("document_id")
+        
+        if not chunk_id:
+            raise HTTPException(status_code=400, detail="Missing chunk_id")
+            
+        result = graph_db.unmerge_chunks(chunk_id)
+        
+        if result:
+            _invalidate_document_cache(document_id)
+            return {"status": "success", "message": "Merged chunk removed"}
+        else:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+            
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to unmerge chunk: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to unmerge chunk") from exc
+
+
+# ============================================================================
+# Chunk Change Log Endpoints
+# ============================================================================
+
+@router.get("/{document_id}/chunk-changes")
+async def get_chunk_changes(
+    document_id: str,
+    chunk_id: Optional[str] = Query(None, description="Filter by chunk ID"),
+    action: Optional[str] = Query(None, description="Filter by action type (edit, delete, merge)"),
+    limit: int = Query(50, ge=1, le=500, description="Maximum results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """Get chunk change history for a document.
+    
+    Returns paginated list of changes with optional filters.
+    """
+    try:
+        change_log = get_change_log()
+        changes = change_log.get_changes(
+            document_id=document_id,
+            chunk_id=chunk_id,
+            action=action,
+            limit=limit,
+            offset=offset,
+        )
+        total = change_log.get_changes_count(
+            document_id=document_id,
+            chunk_id=chunk_id,
+            action=action,
+        )
+        summary = change_log.get_action_summary(document_id=document_id)
+        
+        return {
+            "document_id": document_id,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(changes) < total,
+            "summary": summary,
+            "changes": changes,
+        }
+    except Exception as exc:
+        logger.error("Failed to get chunk changes for document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve change history") from exc
+
+
+@router.get("/{document_id}/chunk-changes/export")
+async def export_chunk_changes(
+    document_id: str,
+    include_content: bool = Query(True, description="Include before/after content in export"),
+):
+    """Export chunk changes as JSON for audit/analysis.
+    
+    Returns complete change history for the document.
+    """
+    try:
+        change_log = get_change_log()
+        export_data = change_log.export_changes(
+            document_id=document_id,
+            include_content=include_content,
+        )
+        return JSONResponse(content=export_data)
+    except Exception as exc:
+        logger.error("Failed to export chunk changes for document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to export change history") from exc
+
+
+@router.get("/{document_id}/chunk-suggestions")
+async def get_chunk_suggestions(
+    document_id: str,
+    max_suggestions: int = Query(10, ge=1, le=50, description="Maximum suggestions to return"),
+    min_confidence: float = Query(0.5, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+):
+    """Get AI-generated chunk improvement suggestions.
+    
+    Analyzes chunks using heuristic patterns to suggest:
+    - Deleting short/empty/placeholder chunks
+    - Merging consecutive short chunks
+    - Removing duplicate content
+    
+    Returns suggestions sorted by confidence (highest first).
+    """
+    try:
+        pattern_learner = get_pattern_learner()
+        suggestions = pattern_learner.get_suggestions(
+            document_id=document_id,
+            max_suggestions=max_suggestions,
+            min_confidence=min_confidence,
+        )
+        
+        # Also get history analysis if available
+        history = pattern_learner.analyze_from_history(document_id)
+        
+        return {
+            "document_id": document_id,
+            "total_suggestions": len(suggestions),
+            "suggestions": [s.to_dict() for s in suggestions],
+            "history_analysis": history,
+        }
+    except Exception as exc:
+        logger.error("Failed to get chunk suggestions for document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to generate suggestions") from exc
+
+
 @router.get("/{document_id}/preview")
 @router.head("/{document_id}/preview")
 async def get_document_preview(

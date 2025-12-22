@@ -34,6 +34,7 @@ import DocumentGraph from './DocumentGraph'
 import CommunitiesSection from './CommunitiesSection'
 import ChunkSimilaritiesSection from './ChunkSimilaritiesSection'
 import DocumentEmptyState from './DocumentEmptyState'
+import ChunkViewerModal from './ChunkViewerModal'
 
 interface PreviewState {
   url: string | null
@@ -119,6 +120,7 @@ export default function DocumentView() {
   const [isSavingDetails, setIsSavingDetails] = useState(false)
   const [settings, setSettings] = useState<{ enable_entity_extraction?: boolean } | null>(null)
   const [isChunksExpanded, setIsChunksExpanded] = useState(false)
+  const [isChunkViewerOpen, setIsChunkViewerOpen] = useState(false)
   const [isEntitiesExpanded, setIsEntitiesExpanded] = useState(false)
   const [isMetadataExpanded, setIsMetadataExpanded] = useState(false)
   const [loadingChunksData, setLoadingChunksData] = useState(false)
@@ -420,7 +422,7 @@ export default function DocumentView() {
   }, [isEntitiesExpanded, selectedDocumentId, summaryData?.id, documentData?.entities])
 
   // Check preview availability - depends on document ID only to avoid infinite loops
-  const documentId = documentData?.id
+  const documentId = documentData?.id || summaryData?.id || selectedDocumentId
   useEffect(() => {
     let isSubscribed = true
     const checkPreview = async () => {
@@ -1159,7 +1161,7 @@ export default function DocumentView() {
                     onKeyDown={handleTitleKeyDown}
                     disabled={isSavingDetails}
                     autoFocus
-                    className="w-full min-w-[220px] rounded-md border px-2 py-1 font-display"
+                    className="flex-1 min-w-[220px] rounded-md border px-2 py-1 font-display"
                     style={{
                       borderColor: 'var(--border)',
                       backgroundColor: 'var(--bg-primary)',
@@ -1419,6 +1421,15 @@ export default function DocumentView() {
                       {isActionPending ? <Loader size={14} label="Processing..." /> : 'Process chunks'}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setIsChunkViewerOpen(true)}
+                    className="px-2 py-1 rounded text-xs font-medium transition"
+                    style={{ backgroundColor: 'var(--accent-amber)', color: 'white' }}
+                    title="Open chunk editor"
+                  >
+                    Edit Chunks
+                  </button>
                   <span className="text-xs text-secondary-500 dark:text-secondary-400">{docChunkCount} entries</span>
                 </div>
               </header>
@@ -1821,6 +1832,19 @@ export default function DocumentView() {
           onClose={handleClosePreview}
         />
       )}
+
+      {/* Chunk Viewer Modal */}
+      <ChunkViewerModal
+        documentId={activeDocumentId || ''}
+        documentName={summaryData?.title || summaryData?.filename || documentData?.title}
+        isOpen={isChunkViewerOpen}
+        onClose={() => setIsChunkViewerOpen(false)}
+        onChunksChanged={() => {
+          // Refresh chunks list after edits
+          setDocumentData(null)
+          setIsChunksExpanded(false)
+        }}
+      />
     </div>
   )
 }

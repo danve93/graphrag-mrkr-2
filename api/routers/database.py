@@ -34,6 +34,7 @@ from ingestion.document_processor import EntityExtractionState, document_process
 from core.singletons import get_response_cache, get_blocking_executor, SHUTTING_DOWN
 from core.cache_metrics import cache_metrics
 from api.auth import require_admin
+from core.chunk_pattern_learner import get_pattern_learner
 
 logger = logging.getLogger(__name__)
 
@@ -1037,7 +1038,9 @@ async def clear_routing_metrics(
 
 
 @router.get("/stats", response_model=DatabaseStats)
-async def get_database_stats():
+async def get_database_stats(
+    include_suggestion_status: bool = Query(False, description="Check if docs have suggestion"),
+):
     """
     Get database statistics including document and chunk counts.
 
@@ -1048,6 +1051,15 @@ async def get_database_stats():
         stats = graph_db.get_database_stats()
 
         documents = stats.get("documents", [])
+        
+        if include_suggestion_status:
+            learner = get_pattern_learner()
+            for doc in documents:
+                doc_id = doc.get("document_id")
+                try:
+                    doc["has_suggestions"] = learner.has_suggestions(doc_id)
+                except Exception:
+                    doc["has_suggestions"] = False
 
         # Enrich documents with live queue state
         for doc in documents:
@@ -1435,7 +1447,9 @@ async def clear_database(request: ClearDatabaseRequest = ClearDatabaseRequest())
 
 
 @router.get("/documents")
-async def list_documents():
+async def list_documents(
+    include_suggestion_status: bool = Query(False, description="Check if docs have suggestion"),
+):
     """
     List all documents in the database.
 
@@ -1444,6 +1458,15 @@ async def list_documents():
     """
     try:
         documents = graph_db.list_documents()
+        
+        if include_suggestion_status:
+            learner = get_pattern_learner()
+            for doc in documents:
+                try:
+                    doc["has_suggestions"] = learner.has_suggestions(doc["id"])
+                except Exception:
+                    doc["has_suggestions"] = False
+                    
         return {"documents": documents}
 
     except Exception as e:

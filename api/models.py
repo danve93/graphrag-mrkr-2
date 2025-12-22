@@ -653,3 +653,32 @@ class ReindexJobResponse(BaseModel):
     job_id: str
     status_url: str
     status: str
+
+
+class CreatePatternRequest(BaseModel):
+    """Request model for creating a chunk pattern."""
+
+    name: str = Field(..., description="Pattern name")
+    description: Optional[str] = Field(None, description="What this pattern matches")
+    match_type: Literal["regex", "length", "content", "similarity"] = Field(
+        ..., description="Type of matching logic"
+    )
+    match_criteria: Dict[str, Any] = Field(
+        ..., description="Type-specific criteria (e.g. regex pattern)"
+    )
+    action: Literal["delete", "merge", "edit", "flag"] = Field(
+        ..., description="Action to take on match"
+    )
+    confidence: float = Field(0.7, ge=0.0, le=1.0, description="Confidence score 0-1")
+
+
+class UpdatePatternRequest(BaseModel):
+    """Request model for updating a chunk pattern."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    match_type: Optional[Literal["regex", "length", "content", "similarity"]] = None
+    match_criteria: Optional[Dict[str, Any]] = None
+    action: Optional[Literal["delete", "merge", "edit", "flag"]] = None
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    enabled: Optional[bool] = None

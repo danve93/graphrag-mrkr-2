@@ -111,6 +111,7 @@ export interface DocumentSummary {
   folder_id?: string | null
   folder_name?: string | null
   folder_order?: number | null
+  has_suggestions?: boolean
 }
 
 export interface ProcessingSummary {

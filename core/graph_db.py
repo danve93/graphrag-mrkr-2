@@ -444,6 +444,358 @@ class GraphDB:
                 metadata=metadata,
             )
 
+    def update_chunk_content(
+        self,
+        chunk_id: str,
+        new_content: str,
+        regenerate_embedding: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update chunk text content and optionally regenerate embedding.
+        
+        Args:
+            chunk_id: ID of the chunk to update
+            new_content: New text content for the chunk
+            regenerate_embedding: If True, regenerate embedding vector
+            
+        Returns:
+            Updated chunk data dict, or None if chunk not found
+        """
+        import hashlib
+        
+        with self.session_scope() as session:
+            # Check chunk exists and get document_id
+            result = session.run(
+                """
+                MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk {id: $chunk_id})
+                RETURN c.id as id, c.content as old_content, c.chunk_index as chunk_index,
+                       d.id as document_id
+                """,
+                chunk_id=chunk_id,
+            ).single()
+            
+            if not result:
+                logger.warning(f"Chunk not found: {chunk_id}")
+                return None
+            
+            document_id = result["document_id"]
+            chunk_index = result["chunk_index"]
+            
+            # Compute new content hash
+            content_hash = hashlib.sha256(new_content.encode()).hexdigest()[:16]
+            
+            # Generate new embedding if requested
+            new_embedding = None
+            if regenerate_embedding:
+                try:
+                    new_embedding = embedding_manager.get_embedding(new_content)
+                    logger.info(f"Regenerated embedding for chunk {chunk_id}")
+                except Exception as e:
+                    logger.error(f"Failed to regenerate embedding for chunk {chunk_id}: {e}")
+                    # Continue without embedding update
+            
+            # Update chunk content
+            update_query = """
+                MATCH (c:Chunk {id: $chunk_id})
+                SET c.content = $content,
+                    c.content_hash = $content_hash,
+                    c.updated_at = datetime()
+            """
+            params = {
+                "chunk_id": chunk_id,
+                "content": new_content,
+                "content_hash": content_hash,
+            }
+            
+            if new_embedding:
+                update_query += ", c.embedding = $embedding"
+                params["embedding"] = new_embedding
+            
+            update_query += " RETURN c.id as id, c.content as content, c.chunk_index as chunk_index"
+            
+            updated = session.run(update_query, **params).single()
+            
+            # Remove stale similarity relationships for this chunk
+            session.run(
+                """
+                MATCH (c:Chunk {id: $chunk_id})-[r:SIMILAR_TO]-()
+                DELETE r
+                """,
+                chunk_id=chunk_id,
+            )
+            
+            logger.info(f"Updated chunk {chunk_id} content (document: {document_id})")
+            
+            return {
+                "id": updated["id"],
+                "content": updated["content"],
+                "chunk_index": updated["chunk_index"],
+                "document_id": document_id,
+                "embedding_updated": new_embedding is not None,
+            }
+
+    def delete_chunk(self, chunk_id: str, cleanup_orphans: bool = True) -> bool:
+        """
+        Delete a chunk and optionally cleanup orphaned entities.
+        
+        Args:
+            chunk_id: ID of the chunk to delete
+            cleanup_orphans: If True, remove entities that have no remaining source chunks
+            
+        Returns:
+            True if chunk was deleted, False if not found
+        """
+        with self.session_scope() as session:
+            # Check chunk exists
+            exists = session.run(
+                "MATCH (c:Chunk {id: $chunk_id}) RETURN c.id",
+                chunk_id=chunk_id,
+            ).single()
+            
+            if not exists:
+                logger.warning(f"Chunk not found for deletion: {chunk_id}")
+                return False
+            
+            # Remove references to this chunk from Entity.source_chunks lists
+            session.run(
+                """
+                MATCH (e:Entity)
+                WHERE $chunk_id IN coalesce(e.source_chunks, [])
+                SET e.source_chunks = [s IN coalesce(e.source_chunks, []) WHERE s <> $chunk_id]
+                """,
+                chunk_id=chunk_id,
+            )
+            
+            # Delete CONTAINS_ENTITY relationships from this chunk
+            session.run(
+                """
+                MATCH (c:Chunk {id: $chunk_id})-[r:CONTAINS_ENTITY]->(e:Entity)
+                DELETE r
+                """,
+                chunk_id=chunk_id,
+            )
+            
+            # Delete similarity relationships
+            session.run(
+                """
+                MATCH (c:Chunk {id: $chunk_id})-[r:SIMILAR_TO]-()
+                DELETE r
+                """,
+                chunk_id=chunk_id,
+            )
+            
+            # Delete the chunk node
+            session.run(
+                """
+                MATCH (c:Chunk {id: $chunk_id})
+                DETACH DELETE c
+                """,
+                chunk_id=chunk_id,
+            )
+            
+            if cleanup_orphans:
+                # Delete entities that are now orphaned
+                result = session.run(
+                    """
+                    MATCH (e:Entity)
+                    WHERE (coalesce(e.source_chunks, []) = [] OR e.source_chunks IS NULL)
+                    AND NOT ( ()-[:CONTAINS_ENTITY]->(e) )
+                    WITH e, e.id as deleted_id
+                    DETACH DELETE e
+                    RETURN count(deleted_id) as orphan_count
+                    """,
+                )
+                orphan_count = result.single()["orphan_count"]
+                if orphan_count > 0:
+                    logger.info(f"Cleaned up {orphan_count} orphaned entities after deleting chunk {chunk_id}")
+            
+            logger.info(f"Deleted chunk {chunk_id}")
+            return True
+
+    def restore_chunk(
+        self,
+        chunk_id: str,
+        document_id: str,
+        content: str,
+        chunk_index: int,
+        embedding: List[float] = None
+    ) -> bool:
+        """
+        Restore a deleted chunk with its original ID.
+        
+        Args:
+            chunk_id: Original chunk ID to restore
+            document_id: Document ID it belongs to
+            content: Text content
+            chunk_index: Order index
+            embedding: Optional embedding vector
+        
+        Returns:
+            True if restored, False on failure
+        """
+        import hashlib
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        
+        with self.session_scope() as session:
+            # Re-create the chunk node with specific ID
+            query = """
+                MERGE (d:Document {id: $doc_id})
+                MERGE (c:Chunk {id: $chunk_id})
+                SET c.content = $content,
+                    c.chunk_index = $chunk_index,
+                    c.content_hash = $content_hash,
+                    c.updated_at = datetime()
+                MERGE (d)-[:HAS_CHUNK]->(c)
+            """
+            
+            params = {
+                "doc_id": document_id,
+                "chunk_id": chunk_id,
+                "content": content,
+                "chunk_index": chunk_index,
+                "content_hash": content_hash
+            }
+            
+            if embedding:
+                query += " SET c.embedding = $embedding"
+                params["embedding"] = embedding
+                
+            session.run(query, **params)
+            logger.info(f"Restored chunk {chunk_id} for document {document_id}")
+            return True
+
+    def unmerge_chunks(self, merged_chunk_id: str) -> bool:
+        """
+        Delete a merged chunk (part of unmerge operation).
+        
+        The restoration of original chunks is handled by separate calls 
+        to restore_chunk by the caller.
+        
+        Args:
+            merged_chunk_id: ID of the composite chunk to remove
+            
+        Returns:
+            True if deleted
+        """
+        # This is effectively a delete, but semantically distinct for logs/metrics if needed
+        return self.delete_chunk(merged_chunk_id, cleanup_orphans=True)
+
+    def merge_chunks(
+        self,
+        doc_id: str,
+        chunk_ids: List[str],
+        merged_content: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Merge multiple chunks into one.
+        
+        The first chunk in the list (lowest chunk_index) becomes the target.
+        Other chunks are deleted after their content is merged.
+        
+        Args:
+            doc_id: Document ID (for validation)
+            chunk_ids: List of chunk IDs to merge (minimum 2)
+            merged_content: The merged text content
+            
+        Returns:
+            The merged chunk data, or None if validation fails
+        """
+        if len(chunk_ids) < 2:
+            logger.error("merge_chunks requires at least 2 chunk IDs")
+            return None
+        
+        with self.session_scope() as session:
+            # Verify all chunks exist and belong to the same document
+            result = session.run(
+                """
+                MATCH (d:Document {id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
+                WHERE c.id IN $chunk_ids
+                RETURN c.id as id, c.chunk_index as chunk_index, c.content as content
+                ORDER BY c.chunk_index ASC
+                """,
+                doc_id=doc_id,
+                chunk_ids=chunk_ids,
+            )
+            
+            chunks = [dict(r) for r in result]
+            
+            if len(chunks) != len(chunk_ids):
+                found_ids = {c["id"] for c in chunks}
+                missing = set(chunk_ids) - found_ids
+                logger.error(f"Some chunks not found in document {doc_id}: {missing}")
+                return None
+            
+            # Target is the first chunk (lowest index)
+            target_chunk = chunks[0]
+            source_chunks = chunks[1:]
+            
+            # Update target chunk with merged content
+            updated = self.update_chunk_content(
+                chunk_id=target_chunk["id"],
+                new_content=merged_content,
+                regenerate_embedding=True,
+            )
+            
+            if not updated:
+                logger.error(f"Failed to update target chunk {target_chunk['id']}")
+                return None
+            
+            # Collect entity relationships from source chunks before deleting
+            for source in source_chunks:
+                # Transfer CONTAINS_ENTITY relationships to target
+                session.run(
+                    """
+                    MATCH (source:Chunk {id: $source_id})-[:CONTAINS_ENTITY]->(e:Entity)
+                    MATCH (target:Chunk {id: $target_id})
+                    WHERE NOT (target)-[:CONTAINS_ENTITY]->(e)
+                    MERGE (target)-[:CONTAINS_ENTITY]->(e)
+                    """,
+                    source_id=source["id"],
+                    target_id=target_chunk["id"],
+                )
+                
+                # Transfer source_chunks references in entities
+                session.run(
+                    """
+                    MATCH (e:Entity)
+                    WHERE $source_id IN coalesce(e.source_chunks, [])
+                    SET e.source_chunks = [s IN coalesce(e.source_chunks, []) WHERE s <> $source_id] + [$target_id]
+                    """,
+                    source_id=source["id"],
+                    target_id=target_chunk["id"],
+                )
+            
+            # Delete source chunks
+            deleted_count = 0
+            for source in source_chunks:
+                if self.delete_chunk(source["id"], cleanup_orphans=False):
+                    deleted_count += 1
+            
+            # Final orphan cleanup
+            session.run(
+                """
+                MATCH (e:Entity)
+                WHERE (coalesce(e.source_chunks, []) = [] OR e.source_chunks IS NULL)
+                AND NOT ( ()-[:CONTAINS_ENTITY]->(e) )
+                DETACH DELETE e
+                """,
+            )
+            
+            logger.info(
+                f"Merged {len(chunk_ids)} chunks into {target_chunk['id']} "
+                f"(deleted {deleted_count} source chunks)"
+            )
+            
+            return {
+                "id": target_chunk["id"],
+                "content": merged_content,
+                "chunk_index": target_chunk["chunk_index"],
+                "document_id": doc_id,
+                "merged_chunk_ids": chunk_ids,
+                "deleted_count": deleted_count,
+            }
+
+
     def merge_nodes(self, target_id: str, source_ids: List[str]) -> bool:
         """
         Merge source nodes into a target node. 

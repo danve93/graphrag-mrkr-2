@@ -148,8 +148,13 @@ export const api = {
   },
 
   // Database endpoints
-  async getStats() {
-    const response = await fetchWithAuth(`${API_URL}/api/database/stats`)
+  async getStats(includeSuggestionStatus: boolean = false) {
+    const params = new URLSearchParams()
+    if (includeSuggestionStatus) {
+      params.append('include_suggestion_status', 'true')
+    }
+    const queryString = params.toString() ? `?${params.toString()}` : ''
+    const response = await fetchWithAuth(`${API_URL}/api/database/stats${queryString}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -363,8 +368,13 @@ export const api = {
     return response.json()
   },
 
-  async getDocuments() {
-    const response = await fetchWithAuth(`${API_URL}/api/database/documents`)
+  async getDocuments(includeSuggestionStatus: boolean = false) {
+    const params = new URLSearchParams()
+    if (includeSuggestionStatus) {
+      params.append('include_suggestion_status', 'true')
+    }
+    const queryString = params.toString() ? `?${params.toString()}` : ''
+    const response = await fetchWithAuth(`${API_URL}/api/database/documents${queryString}`)
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
@@ -513,6 +523,277 @@ export const api = {
     if (!response.ok) {
       throw new Error(`API error: ${response.statusText}`)
     }
+    return response.json()
+  },
+
+  // Chunk CRUD operations
+  async updateChunkContent(chunkId: string, content: string, regenerateEmbedding: boolean = true): Promise<{
+    status: string
+    chunk: {
+      id: string
+      content: string
+      chunk_index: number
+      document_id: string
+      embedding_updated: boolean
+    }
+  }> {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/chunks/${chunkId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, regenerate_embedding: regenerateEmbedding }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async deleteChunk(chunkId: string, cleanupOrphans: boolean = true): Promise<{
+    status: string
+    deleted_chunk_id: string
+    document_id: string
+  }> {
+    const params = new URLSearchParams({ cleanup_orphans: String(cleanupOrphans) })
+    const response = await fetchWithAuth(`${API_URL}/api/documents/chunks/${chunkId}?${params}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async mergeChunks(documentId: string, chunkIds: string[], mergedContent: string): Promise<{
+    status: string
+    merged_chunk: {
+      id: string
+      content: string
+      chunk_index: number
+      document_id: string
+      merged_chunk_ids: string[]
+      deleted_count: number
+    }
+  }> {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/chunks/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chunk_ids: chunkIds, merged_content: mergedContent }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async restoreChunk(data: {
+    chunk_id: string
+    document_id: string
+    content: string
+    chunk_index: number
+  }): Promise<{ status: string; message: string }> {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/chunks/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async unmergeChunks(chunkId: string, documentId: string): Promise<{ status: string; message: string }> {
+    const response = await fetchWithAuth(`${API_URL}/api/documents/chunks/unmerge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chunk_id: chunkId, document_id: documentId }),
+    })
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // Chunk change history
+  async getChunkChanges(documentId: string, options?: {
+    chunkId?: string
+    action?: string
+    limit?: number
+    offset?: number
+  }): Promise<{
+    document_id: string
+    total: number
+    limit: number
+    offset: number
+    has_more: boolean
+    summary: Record<string, number>
+    changes: Array<{
+      id: number
+      document_id: string
+      chunk_id: string
+      action: string
+      before_content?: string
+      after_content?: string
+      reasoning?: string
+      metadata?: Record<string, any>
+      created_at: string
+      error?: string
+    }>
+  }> {
+    const query = new URLSearchParams()
+    if (options?.chunkId) query.append('chunk_id', options.chunkId)
+    if (options?.action) query.append('action', options.action)
+    if (options?.limit) query.append('limit', String(options.limit))
+    if (options?.offset) query.append('offset', String(options.offset))
+    const qs = query.toString()
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/chunk-changes${qs ? `?${qs}` : ''}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  async exportChunkChanges(documentId: string, includeContent: boolean = true): Promise<{
+    export_date: string
+    document_id: string
+    total_changes: number
+    changes: Array<Record<string, any>>
+  }> {
+    const response = await fetchWithAuth(
+      `${API_URL}/api/documents/${documentId}/chunk-changes/export?include_content=${includeContent}`
+    )
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // Chunk suggestions
+  async getChunkSuggestions(documentId: string, options?: {
+    maxSuggestions?: number
+    minConfidence?: number
+  }): Promise<{
+    document_id: string
+    total_suggestions: number
+    suggestions: Array<{
+      chunk_id: string
+      chunk_index: number
+      action: 'delete' | 'merge' | 'edit' | 'split'
+      confidence: number
+      reasoning: string
+      pattern_name: string
+      related_chunk_ids?: string[]
+      suggested_content?: string
+    }>
+    history_analysis: {
+      total_changes: number
+      action_counts?: Record<string, number>
+      patterns_found?: string[]
+      last_change?: string
+    }
+  }> {
+    const query = new URLSearchParams()
+    if (options?.maxSuggestions) query.append('max_suggestions', String(options.maxSuggestions))
+    if (options?.minConfidence) query.append('min_confidence', String(options.minConfidence))
+    const qs = query.toString()
+    const response = await fetchWithAuth(`${API_URL}/api/documents/${documentId}/chunk-suggestions${qs ? `?${qs}` : ''}`)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // Chunk Patterns CRUD
+  async getPatterns(options?: {
+    enabledOnly?: boolean
+    action?: string
+    includeBuiltin?: boolean
+  }): Promise<{
+    total: number
+    patterns: Array<{
+      id: string
+      name: string
+      description: string
+      match_type: string
+      match_criteria: Record<string, any>
+      action: string
+      confidence: number
+      is_builtin: boolean
+      enabled: boolean
+      usage_count: number
+      last_used?: string
+      created_at?: string
+      updated_at?: string
+    }>
+  }> {
+    const query = new URLSearchParams()
+    if (options?.enabledOnly) query.append('enabled_only', 'true')
+    if (options?.action) query.append('action', options.action)
+    if (options?.includeBuiltin !== undefined) query.append('include_builtin', String(options.includeBuiltin))
+    const qs = query.toString()
+    const response = await fetchWithAuth(`${API_URL}/api/patterns${qs ? `?${qs}` : ''}`)
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async getPattern(patternId: string): Promise<Record<string, any>> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns/${patternId}`)
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async createPattern(data: {
+    name: string
+    description?: string
+    match_type: string
+    match_criteria?: Record<string, any>
+    action: string
+    confidence?: number
+  }): Promise<{ status: string; pattern: Record<string, any> }> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async updatePattern(patternId: string, data: Record<string, any>): Promise<{ status: string; pattern: Record<string, any> }> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns/${patternId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async deletePattern(patternId: string): Promise<{ status: string; deleted_id: string }> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns/${patternId}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async togglePattern(patternId: string, enabled: boolean): Promise<{ status: string; pattern: Record<string, any> }> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns/${patternId}/toggle?enabled=${enabled}`, { method: 'POST' })
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async exportPatterns(includeBuiltin: boolean = false): Promise<Record<string, any>> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns/export/json?include_builtin=${includeBuiltin}`)
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
+    return response.json()
+  },
+
+  async importPatterns(data: Record<string, any>, overwrite: boolean = false): Promise<{ status: string; results: Record<string, number> }> {
+    const response = await fetchWithAuth(`${API_URL}/api/patterns/import/json?overwrite=${overwrite}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) throw new Error(`API error: ${response.statusText}`)
     return response.json()
   },
 

@@ -36,6 +36,7 @@ from api.routers import (
     ragas_metrics,
     ragas_control,
     system,
+    patterns,
 )
 import api.routers.admin.api_keys as api_keys
 import api.routers.admin_user_management as admin_user_management
@@ -274,6 +275,7 @@ app.include_router(admin_user_management.router, prefix="/api/admin/user-managem
 app.include_router(api_keys.router, prefix="/api/admin/api-keys", tags=["admin"])
 app.include_router(system.router, prefix="/api", tags=["system"])
 app.include_router(llm_metrics.router, prefix="/api/metrics", tags=["llm-metrics"])
+app.include_router(patterns.router, prefix="/api", tags=["patterns"])
 
 
 @app.get("/api/health")

@@ -48,11 +48,12 @@ const sectionCategories = [
     category: 'Ingestion Settings',
     sections: [
       { key: 'chunking', label: 'Chunking' },
+      { key: 'chunk_patterns', label: 'Chunk Patterns' },
       { key: 'pdf_processing', label: 'Document Conversion' },
+      { key: 'ocr_processing', label: 'OCR & Image Processing' },
       { key: 'entity_extraction', label: 'Entity Extraction' },
       { key: 'description_enhancement', label: 'Description Enhancement' },
       { key: 'graph_persistence', label: 'Graph Persistence' },
-      { key: 'ocr_processing', label: 'OCR & Image Processing' },
       { key: 'performance', label: 'Performance & Limits' },
     ],
   },

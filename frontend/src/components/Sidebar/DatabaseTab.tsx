@@ -12,9 +12,11 @@ import {
   Plus,
   ChevronUp,
   ChevronDown,
+  TriangleAlert,
 } from 'lucide-react'
 import Loader from '@/components/Utils/Loader'
 import { useChatStore } from '@/store/chatStore'
+import { useUIStore } from '@/store/uiStore'
 import { showToast } from '@/components/Toast/ToastContainer'
 import UploadUpdateDialog from '@/components/Document/UploadUpdateDialog'
 import FolderDeleteDialog from './FolderDeleteDialog'
@@ -45,6 +47,7 @@ export default function DatabaseTab() {
   const selectDocument = useChatStore((state) => state.selectDocument)
   const clearSelectedDocument = useChatStore((state) => state.clearSelectedDocument)
   const selectedDocumentId = useChatStore((state) => state.selectedDocumentId)
+  const showSuggestionIndicators = useUIStore((state) => state.showSuggestionIndicators)
 
   // Upload dialog state
   const [pendingFile, setPendingFile] = useState<File | null>(null)
@@ -215,6 +218,10 @@ export default function DatabaseTab() {
     }
   }, [])
 
+  useEffect(() => {
+    loadStats()
+  }, [showSuggestionIndicators])
+
   // Focus search input when entering search mode
   useEffect(() => {
     if (searchMode && searchInputRef.current) {
@@ -341,7 +348,7 @@ export default function DatabaseTab() {
   const loadStats = async () => {
     try {
       setLoading(true)
-      const data = await api.getStats()
+      const data = await api.getStats(showSuggestionIndicators)
       setStats(data)
       setProcessingState(data.processing || null)
       setEnableDeleteOps(data.enable_delete_operations ?? true)
@@ -1030,10 +1037,15 @@ export default function DatabaseTab() {
                           <p className="text-sm font-medium text-secondary-900 dark:text-secondary-50 truncate">
                             {getDocumentLabel(doc)}
                           </p>
-                          {activeFolderId === 'all' && doc.folder_name && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary-100 text-secondary-700 dark:bg-secondary-900 dark:text-secondary-300">
+                          {doc.folder_name && (
+                            <span className="ml-2 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-secondary-100 dark:bg-secondary-800 text-secondary-600 dark:text-secondary-400">
                               {doc.folder_name}
                             </span>
+                          )}
+                          {showSuggestionIndicators && doc.has_suggestions && (
+                            <div title="Has chunking suggestions" className="text-amber-500 animate-pulse">
+                              <TriangleAlert className="w-4 h-4" />
+                            </div>
                           )}
                         </div>
                         <p className={`text-xs mt-1 ${isStuck && (status === 'queued' || status === 'staged') ? 'text-red-600 dark:text-red-400' : 'text-secondary-600 dark:text-secondary-400'}`}>
@@ -1093,38 +1105,40 @@ export default function DatabaseTab() {
                       </div>
                     </div>
 
-                    {status === 'processing' && progress !== null && (
-                      <div className="w-full">
-                        <div className="flex justify-between text-[10px] mb-1">
-                          <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
-                            {isStuck ? 'Stuck - may need manual refresh' : (
-                              <>
-                                {formatStageLabel(doc.processing_stage)}
-                                {(doc.processing_stage === 'embedding' && (doc as any).chunk_progress > 0) ?
-                                  ` ${Math.round((doc as any).chunk_progress * 100)}%` : ''
-                                }
-                                {/* Show chunk count during entity extraction for granular progress */}
-                                {(['entity_extraction', 'llm_extraction', 'embedding_generation', 'database_operations', 'clustering', 'validation', 'starting'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).chunks_processed > 0) ?
-                                  ` (${(doc as any).chunks_processed}/${(doc as any).total_chunks || '?'})` : ''
-                                }
-                                {(!['classification', 'chunking', 'summarization', 'embedding', 'processing', 'queued', 'entity_extraction', 'llm_extraction'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).entity_progress > 0) ?
-                                  ` ${Math.round((doc as any).entity_progress * 100)}%` : ''
-                                }
-                              </>
-                            )}
-                          </span>
-                          <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
-                            {Math.round(progress)}%
-                          </span>
+                    {
+                      status === 'processing' && progress !== null && (
+                        <div className="w-full">
+                          <div className="flex justify-between text-[10px] mb-1">
+                            <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
+                              {isStuck ? 'Stuck - may need manual refresh' : (
+                                <>
+                                  {formatStageLabel(doc.processing_stage)}
+                                  {(doc.processing_stage === 'embedding' && (doc as any).chunk_progress > 0) ?
+                                    ` ${Math.round((doc as any).chunk_progress * 100)}%` : ''
+                                  }
+                                  {/* Show chunk count during entity extraction for granular progress */}
+                                  {(['entity_extraction', 'llm_extraction', 'embedding_generation', 'database_operations', 'clustering', 'validation', 'starting'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).chunks_processed > 0) ?
+                                    ` (${(doc as any).chunks_processed}/${(doc as any).total_chunks || '?'})` : ''
+                                  }
+                                  {(!['classification', 'chunking', 'summarization', 'embedding', 'processing', 'queued', 'entity_extraction', 'llm_extraction'].includes((doc.processing_stage || '').toLowerCase()) && (doc as any).entity_progress > 0) ?
+                                    ` ${Math.round((doc as any).entity_progress * 100)}%` : ''
+                                  }
+                                </>
+                              )}
+                            </span>
+                            <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
+                              {Math.round(progress)}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-secondary-200">
+                            <div
+                              className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : ''}`}
+                              style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--accent-primary)' }}
+                            />
+                          </div>
                         </div>
-                        <div className="h-1.5 w-full rounded-full bg-secondary-200">
-                          <div
-                            className={`h-1.5 rounded-full transition-all ${isStuck ? 'bg-red-500' : ''}`}
-                            style={{ width: `${progress}%`, backgroundColor: isStuck ? undefined : 'var(--accent-primary)' }}
-                          />
-                        </div>
-                      </div>
-                    )}
+                      )
+                    }
                   </div>
                 )
               })}
@@ -1157,31 +1171,37 @@ export default function DatabaseTab() {
       </div>
 
       {/* Upload Update Dialog */}
-      {showUploadDialog && pendingFile && (
-        <UploadUpdateDialog
-          file={pendingFile}
-          onClose={handleDialogClose}
-          onUploadNew={handleUploadNew}
-          onUpdateExisting={handleUpdateExisting}
-        />
-      )}
+      {
+        showUploadDialog && pendingFile && (
+          <UploadUpdateDialog
+            file={pendingFile}
+            onClose={handleDialogClose}
+            onUploadNew={handleUploadNew}
+            onUpdateExisting={handleUpdateExisting}
+          />
+        )
+      }
 
-      {folderDeleteTarget && (
-        <FolderDeleteDialog
-          folder={folderDeleteTarget}
-          onClose={() => setFolderDeleteTarget(null)}
-          onMoveToRoot={() => handleDeleteFolder('move_to_root')}
-          onDeleteDocuments={() => handleDeleteFolder('delete_documents')}
-          disableDeleteDocuments={!enableDeleteOps}
-        />
-      )}
+      {
+        folderDeleteTarget && (
+          <FolderDeleteDialog
+            folder={folderDeleteTarget}
+            onClose={() => setFolderDeleteTarget(null)}
+            onMoveToRoot={() => handleDeleteFolder('move_to_root')}
+            onDeleteDocuments={() => handleDeleteFolder('delete_documents')}
+            disableDeleteDocuments={!enableDeleteOps}
+          />
+        )
+      }
 
-      {showClearDialog && (
-        <ClearDatabaseDialog
-          onClose={() => setShowClearDialog(false)}
-          onConfirm={performClearDatabase}
-        />
-      )}
-    </div>
+      {
+        showClearDialog && (
+          <ClearDatabaseDialog
+            onClose={() => setShowClearDialog(false)}
+            onConfirm={performClearDatabase}
+          />
+        )
+      }
+    </div >
   )
 }
