@@ -47,6 +47,10 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: amber-backend
+    # Resource limits to prevent runaway CPU/memory usage
+    cpus: "0.80" # Limit to 80% of available CPU
+    mem_limit: 6g # Maximum 6GB memory
+    mem_reservation: 2g # Guaranteed 2GB memory
     env_file:
       - ./.env
     environment:

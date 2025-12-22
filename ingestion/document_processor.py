@@ -92,6 +92,52 @@ class DocumentProcessor:
             self._cleanup_stale_jobs()
             self._cleanup_orphaned_chunks()
 
+    def _create_neo4j_aware_cancellation_checker(
+        self, 
+        doc_id: str, 
+        in_memory_callback: Optional[Callable[[], bool]] = None
+    ) -> Callable[[], bool]:
+        """Create a cancellation checker that checks both in-memory and Neo4j status.
+        
+        This ensures cancellation works even after container restart when
+        in-memory state is lost but Neo4j status was updated.
+        
+        Args:
+            doc_id: Document ID to check in Neo4j
+            in_memory_callback: Optional in-memory is_cancelled callback
+            
+        Returns:
+            Callable that returns True if processing should be cancelled
+        """
+        last_check_time = [0.0]  # Use list to allow mutation in closure
+        cached_result = [False]
+        
+        def is_cancelled() -> bool:
+            # Check in-memory callback first (fast path)
+            if in_memory_callback and in_memory_callback():
+                return True
+            
+            # Check Neo4j status every 5 seconds to avoid excessive queries
+            current_time = time.time()
+            if current_time - last_check_time[0] < 5.0:
+                return cached_result[0]
+            
+            last_check_time[0] = current_time
+            
+            try:
+                doc_props = graph_db.get_document_metadata(doc_id)
+                status = doc_props.get("processing_status", "")
+                if status in ("cancelled", "failed", "completed"):
+                    logger.info(f"Neo4j shows {doc_id} is {status} - stopping processing")
+                    cached_result[0] = True
+                    return True
+            except Exception as e:
+                logger.debug(f"Failed to check Neo4j status for {doc_id}: {e}")
+            
+            return False
+        
+        return is_cancelled
+
     def _cleanup_stale_jobs(self):
         """Resume or fail documents stuck in processing from previous shutdown.
         
@@ -1303,35 +1349,70 @@ class DocumentProcessor:
                 logger.error(f"File not found: {file_path}")
                 return None
 
+            # Generate document ID BEFORE conversion so we can track progress
+            doc_id = document_id or self._generate_document_id(file_path)
+            metadata = self._extract_metadata(file_path, original_filename)
+            
+            # Set processing stage to "conversion" BEFORE calling converter
+            # This allows UI to show progress during the potentially long conversion
+            processing_state = {
+                "processing_status": "processing",
+                "processing_stage": "conversion",
+                "processing_progress": 2.0,
+                "processing_error": None,
+            }
+            processing_state.update(self._chunking_settings_snapshot())
+            graph_db.create_document_node(doc_id, {**metadata, **processing_state})
+            
+            # Notify callback about conversion stage
+            if progress_callback:
+                try:
+                    progress_callback(0, message="Converting document")
+                except TypeError:
+                    progress_callback(0)
+            
+            logger.info("Starting document conversion for %s (id: %s)", file_path.name, doc_id)
+
             # Convert the document to Markdown content using format-specific converters
             conversion_result = self.converter.convert(file_path, original_filename)
             if not conversion_result or not conversion_result.get("content"):
                 logger.warning("No content extracted from %s", file_path)
+                graph_db.create_document_node(doc_id, {
+                    "processing_status": "failed",
+                    "processing_error": "No content extracted from document"
+                })
                 return None
 
             content = conversion_result.get("content", "")
             docling_document = conversion_result.get("docling_document")
-
-            # Generate document ID and extract metadata
-            doc_id = document_id or self._generate_document_id(file_path)
-            metadata = self._extract_metadata(file_path, original_filename)
+            
+            # Update metadata with conversion results
             metadata.update(conversion_result.get("metadata", {}))
+            
+            # Check for conversion warning (e.g., Marker fallback for large PDFs)
+            conversion_warning = conversion_result.get("metadata", {}).get("conversion_warning")
+            if conversion_warning:
+                logger.warning("Conversion warning for %s: %s", file_path.name, conversion_warning)
+                metadata["conversion_warning"] = conversion_warning
 
             # Ensure content_primary_type is set (derive from file extension if missing)
             metadata["content_primary_type"] = metadata.get(
                 "content_primary_type"
             ) or self._derive_content_primary_type(metadata.get("file_extension"))
 
-            processing_state = {
-                "processing_status": "processing",
-                "processing_stage": "conversion",
+            # Update progress after successful conversion
+            graph_db.create_document_node(doc_id, {
+                "processing_stage": "post_conversion",
                 "processing_progress": 5.0,
-                "processing_error": None,
-            }
-            processing_state.update(self._chunking_settings_snapshot())
-
-            # Create document node
-            graph_db.create_document_node(doc_id, {**metadata, **processing_state})
+                **metadata
+            })
+            
+            # Notify callback about post-conversion stage
+            if progress_callback:
+                try:
+                    progress_callback(0, message="Post-conversion processing")
+                except TypeError:
+                    progress_callback(0)
 
             # Chunk the document with enhanced processing
             # Classification Stage
@@ -2393,6 +2474,21 @@ class DocumentProcessor:
 
             logger.info(f"Processing file chunks only: {file_path}")
 
+            processing_state = {
+                "processing_status": "processing",
+                "processing_stage": "conversion",
+                "processing_progress": 2.0,
+                "processing_error": None,
+            }
+            processing_state.update(self._chunking_settings_snapshot())
+            graph_db.create_document_node(doc_id, {**metadata, **processing_state})
+
+            if progress_callback:
+                try:
+                    progress_callback(0, message="Converting document")
+                except TypeError:
+                    progress_callback(0)
+
             conversion_result = self.converter.convert(file_path, original_filename)
             if not conversion_result or not conversion_result.get("content"):
                 logger.warning("No content extracted from %s", file_path)
@@ -2407,6 +2503,21 @@ class DocumentProcessor:
                 "content_primary_type"
             ) or self._derive_content_primary_type(metadata.get("file_extension"))
 
+            graph_db.create_document_node(
+                doc_id,
+                {
+                    "processing_stage": "post_conversion",
+                    "processing_progress": 5.0,
+                    **metadata,
+                },
+            )
+
+            if progress_callback:
+                try:
+                    progress_callback(0, message="Post-conversion processing")
+                except TypeError:
+                    progress_callback(0)
+
             # Create document node
             graph_db.create_document_node(
                 doc_id,
@@ -2415,7 +2526,7 @@ class DocumentProcessor:
                     **self._chunking_settings_snapshot(),
                     "processing_status": "processing",
                     "processing_stage": "chunking",
-                    "processing_progress": 15.0,
+                    "processing_progress": 25.0,
                 },
             )
 
@@ -2527,6 +2638,61 @@ class DocumentProcessor:
                 f"Summary extracted for {doc_id}: type={summary_data.get('document_type')}, "
                 f"hashtags={len(summary_data.get('hashtags', []))}"
             )
+
+            # Apply content quality filtering before embedding (if enabled)
+            if getattr(settings, "enable_content_filtering", False):
+                graph_db.create_document_node(
+                    doc_id,
+                    {"processing_stage": "content_filtering", "processing_progress": 68.0},
+                )
+                if progress_callback:
+                    try:
+                        progress_callback(0, message="Filtering content")
+                    except TypeError:
+                        progress_callback(0)
+                logger.info(f"Applying content quality filtering to {len(chunks)} chunks")
+                content_filter = get_content_filter()
+
+                chunks_to_filter = []
+                for chunk in chunks:
+                    chunk_metadata = chunk.get("metadata", {})
+
+                    # Add file type information for filter logic
+                    chunk_metadata["file_type"] = metadata.get("file_extension", "")
+
+                    # Mark conversation threads (if detected)
+                    chunk_metadata["is_conversation"] = False
+
+                    # Mark structured data
+                    file_ext = metadata.get("file_extension", "").lower()
+                    chunk_metadata["is_structured_data"] = file_ext in [".csv", ".xlsx", ".xls"]
+
+                    # Mark code files
+                    chunk_metadata["is_code"] = file_ext in [".py", ".js", ".java", ".cpp", ".html", ".css"]
+
+                    chunks_to_filter.append({
+                        "content": chunk.get("content", ""),
+                        "metadata": chunk_metadata,
+                        "original": chunk,
+                    })
+
+                filtered_chunks_data, filter_metrics = content_filter.filter_chunks(chunks_to_filter)
+                chunks = [item["original"] for item in filtered_chunks_data]
+
+                metrics_summary = filter_metrics.get_summary()
+                logger.info(
+                    f"Content filtering complete for {doc_id}: "
+                    f"{metrics_summary['passed_chunks']}/{metrics_summary['total_chunks']} chunks passed "
+                    f"({metrics_summary['pass_rate']:.1f}% pass rate, "
+                    f"{metrics_summary['filter_rate']:.1f}% filtered)"
+                )
+
+                if metrics_summary['filter_reasons']:
+                    logger.info(f"Filter reasons: {metrics_summary['filter_reasons']}")
+
+                content_filter.reset_metrics()
+            else:
+                logger.debug("Content filtering disabled, processing all chunks")
 
             # Process chunks asynchronously with configurable concurrency (embeddings + storing)
             graph_db.create_document_node(
@@ -2736,10 +2902,13 @@ class DocumentProcessor:
                 "Processing chunks",
             )
 
-            # Check for cancellation via callback
-            is_cancelled = None
+            # Check for cancellation via callback - use Neo4j-aware checker that survives container restart
+            in_memory_callback = None
             if progress_callback and hasattr(progress_callback, 'is_cancelled'):
-                is_cancelled = progress_callback.is_cancelled
+                in_memory_callback = progress_callback.is_cancelled
+            
+            # Create a cancellation checker that checks both in-memory AND Neo4j status
+            is_cancelled = self._create_neo4j_aware_cancellation_checker(doc_id, in_memory_callback)
 
             # Create progress callback for chunk-by-chunk updates during LLM extraction
             def llm_progress_callback(processed: int, total: int):

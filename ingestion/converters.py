@@ -191,19 +191,62 @@ class DocumentConverter:
             "metadata": {"conversion_pipeline": "html_raw"},
         }
 
+    def _get_pdf_page_count(self, file_path: Path) -> int:
+        """Get the number of pages in a PDF file efficiently."""
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(str(file_path))
+            return len(reader.pages)
+        except Exception as e:
+            logger.warning("Failed to get PDF page count for %s: %s", file_path, e)
+            return 0
+
     def convert(self, file_path: Path, original_filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Convert a document to Markdown content and metadata."""
 
         file_ext = file_path.suffix.lower()
         provider = self._resolve_conversion_provider()
+        
+        # Explicitly check PDF page count for Docling/Marker decision
+        if file_ext == ".pdf":
+            page_count = self._get_pdf_page_count(file_path)
+            docling_limit = getattr(settings, "docling_max_pages", 50)
+            
+            # User Feedback: Check page count BEFORE invoking Docling
+            if provider == "docling" and page_count > docling_limit:
+                logger.info(
+                    "PDF %s has %d pages (limit: %d). Switching from Docling to Marker.",
+                    file_path.name,
+                    page_count,
+                    docling_limit
+                )
+                provider = "marker"
+                # Add warning about the switch for the UI
+                # Note: We can't easily pass this warning out unless we attach it to the result later.
+                # Since we switch provider, we'll try marker below.
+
         if self._should_use_docling(provider, file_ext):
             docling_result = self._convert_with_docling(file_path)
-            if docling_result:
+            
+            # Additional fallback check in case docling fails internally or returns fallback signal
+            if docling_result and docling_result.get("use_marker_fallback"):
+                logger.warning(
+                    "Docling signaled Marker fallback for %s: %s",
+                    file_path.name,
+                    docling_result.get("metadata", {}).get("conversion_warning", "Large PDF")
+                )
+                # Fall through to try marker
+                provider = "marker"
+            
+            elif docling_result and docling_result.get("content"):
                 return docling_result
-            if file_ext not in self.loaders:
+            elif file_ext not in self.loaders:
                 logger.warning("Docling conversion failed for %s and no fallback loader exists", file_path)
                 return None
-            logger.warning("Docling conversion failed for %s; falling back to native loader", file_path)
+            else:
+                 logger.warning("Docling conversion failed for %s; falling back to native loader", file_path)
+                 # Fall through to native loader if docling failed completely
+
         loader = self.loaders.get(file_ext)
         if not loader:
             logger.warning("No converter found for extension %s", file_ext)

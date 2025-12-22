@@ -51,6 +51,30 @@ async def get_clustered_graph(
         if community_id is None and node_type is None:
             limit = min(limit, 25)
 
+    if document_id:
+        try:
+            doc_meta = graph_db.get_document_metadata(document_id)
+        except Exception as exc:
+            logger.exception("Failed to load document metadata for graph: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to load document metadata")
+
+        if not doc_meta:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        status = (doc_meta.get("processing_status") or "").lower()
+        if status in {"processing", "queued", "staged", "cancelled", "failed", "error"}:
+            return GraphResponse(nodes=[], edges=[], communities=[], node_types=[])
+
+        try:
+            if graph_db.get_document_entity_count(document_id) == 0:
+                return GraphResponse(nodes=[], edges=[], communities=[], node_types=[])
+        except Exception as exc:
+            logger.debug(
+                "Failed to check entity count for %s before graph load: %s",
+                document_id,
+                exc,
+            )
+
     try:
         graph = graph_db.get_clustered_graph(
             community_id=community_id,

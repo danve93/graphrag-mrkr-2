@@ -58,6 +58,7 @@ _global_processing_state: Dict[str, Any] = {
     "progress_percentage": 0.0,
     "queue_length": 0,
 }
+_active_document_jobs: Dict[str, str] = {}
 
 _ENTITY_STAGE_FRACTIONS = {
     EntityExtractionState.STARTING: 0.05,
@@ -88,27 +89,38 @@ def _calculate_overall_progress(progress: ProcessProgress) -> float:
     """
     stage = (progress.stage or "").lower()
     
-    # Phase 1: Preparation (0-20%) with refined sub-stage interpolation
+    # Phase 0: Conversion (0-4%) - Document conversion/extraction stage
+    if stage == "conversion":
+        # Conversion: 0-2%
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 0.0 + (sub_progress * 2.0) if sub_progress else 1.0
+    
+    if stage == "post_conversion":
+        # Post-conversion: 2-4%
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 2.0 + (sub_progress * 2.0) if sub_progress else 3.0
+    
+    # Phase 1: Preparation (4-20%) with refined sub-stage interpolation
     # Issue S3: Use fractional progress within sub-stages when available
     if stage == "classification":
-        # Classification: 0-4%
-        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
-        return 0.0 + (sub_progress * 4.0) if sub_progress else 2.0
-    
-    if stage == "content_filtering":
-        # Content filtering: 4-8% (Issue S4)
+        # Classification: 4-8%
         sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
         return 4.0 + (sub_progress * 4.0) if sub_progress else 6.0
     
-    if stage == "chunking":
-        # Chunking: 8-14%
+    if stage == "content_filtering":
+        # Content filtering: 8-12%
         sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
-        return 8.0 + (sub_progress * 6.0) if sub_progress else 11.0
+        return 8.0 + (sub_progress * 4.0) if sub_progress else 10.0
+    
+    if stage == "chunking":
+        # Chunking: 12-16%
+        sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
+        return 12.0 + (sub_progress * 4.0) if sub_progress else 14.0
     
     if stage == "summarization":
-        # Summarization: 14-20%
+        # Summarization: 16-20%
         sub_progress = getattr(progress, 'sub_progress', 0.0) or 0.0
-        return 14.0 + (sub_progress * 6.0) if sub_progress else 17.0
+        return 16.0 + (sub_progress * 4.0) if sub_progress else 18.0
         
     # Phase 2: Embedding (20-80%)
     # This phase is driven by chunk_progress (0.0 to 1.0)
@@ -156,8 +168,63 @@ def _update_queue_positions() -> None:
     )
 
 
-def _mark_document_status(doc_id: str, status: str, stage: str, progress_value: float) -> None:
+def _sync_progress_from_neo4j(progress: ProcessProgress) -> None:
+    """Sync the processing stage from Neo4j document node to in-memory progress.
+    
+    This ensures early stages (conversion, post_conversion, classification, etc.)
+    are visible in the UI even when the background worker hasn't called the callback yet.
+    """
+    if not progress.document_id:
+        return
+    
+    try:
+        # Query the document's processing stage directly from Neo4j
+        doc_props = graph_db.get_document_metadata(progress.document_id)
+        if not doc_props:
+            return
+            
+        neo4j_stage = doc_props.get("processing_stage")
+        
+        if neo4j_stage:
+            # Update the stage if Neo4j has a more specific/different stage
+            # Prioritize Neo4j stage for early stages that the callback might miss
+            early_stages = {"conversion", "post_conversion", "classification", "content_filtering"}
+            if neo4j_stage in early_stages or progress.stage in {None, "Starting", "chunking"}:
+                progress.stage = neo4j_stage
+            
+        # Recalculate overall progress with updated stage
+        progress.progress_percentage = _calculate_overall_progress(progress)
+        
+    except Exception as e:
+        # Don't let sync failures break progress reporting
+        logger.debug(f"Failed to sync progress from Neo4j for {progress.document_id}: {e}")
+
+
+
+def _should_update_document_status(doc_id: str, job_id: Optional[str]) -> bool:
+    if not job_id:
+        return True
+    active_job = _active_document_jobs.get(doc_id)
+    return active_job is None or active_job == job_id
+
+
+def _mark_document_status(
+    doc_id: str,
+    status: str,
+    stage: str,
+    progress_value: float,
+    job_id: Optional[str] = None,
+) -> None:
     """Persist processing status directly on the document node."""
+
+    if not _should_update_document_status(doc_id, job_id):
+        logger.debug(
+            "Skipping status update for %s from job %s (active=%s)",
+            doc_id,
+            job_id,
+            _active_document_jobs.get(doc_id),
+        )
+        return
 
     try:
         graph_db.create_document_node(
@@ -171,6 +238,59 @@ def _mark_document_status(doc_id: str, status: str, stage: str, progress_value: 
         )
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.debug("Failed to update processing metadata for %s: %s", doc_id, exc)
+
+
+async def _cancel_existing_document_jobs(
+    document_id: Optional[str],
+    replacement_file_id: Optional[str] = None,
+) -> None:
+    if not document_id:
+        return
+
+    if replacement_file_id:
+        _active_document_jobs[document_id] = replacement_file_id
+
+    existing_file_ids = {
+        fid
+        for fid, staged in _staged_documents.items()
+        if staged.document_id == document_id
+    }
+    existing_file_ids.update(
+        fid
+        for fid, progress in _progress_percentage.items()
+        if progress.document_id == document_id
+    )
+
+    if not existing_file_ids:
+        return
+
+    for fid in existing_file_ids:
+        progress = _progress_percentage.get(fid)
+        if progress:
+            progress.cancelled = True
+            progress.status = "cancelled"
+            progress.stage = "cancelled"
+            progress.error = "superseded_by_new_upload"
+        _staged_documents.pop(fid, None)
+        _progress_percentage.pop(fid, None)
+
+    async with _queue_lock:
+        for fid in existing_file_ids:
+            if fid in _processing_queue:
+                _processing_queue.remove(fid)
+
+    _update_queue_positions()
+
+    try:
+        _mark_document_status(
+            document_id,
+            "cancelled",
+            "cancelled",
+            0.0,
+            job_id=replacement_file_id,
+        )
+    except Exception:
+        pass
 
 
 def restore_processing_state() -> int:
@@ -439,7 +559,7 @@ async def _process_single_job(file_id: str) -> None:
                 document_id=staged_doc.document_id,
                 filename=staged_doc.filename,
                 status="processing",
-                stage="chunking" if staged_doc.mode != "entities_only" else "entity_extraction",
+                stage="conversion" if staged_doc.mode != "entities_only" else "entity_extraction",
                 mode=staged_doc.mode,
                 queue_position=0,
                 chunks_processed=0,
@@ -465,11 +585,14 @@ async def _process_single_job(file_id: str) -> None:
             staged_doc.document_id = doc_id
         progress.document_id = doc_id
 
-        stage_name = "entity_extraction" if staged_doc.mode == "entities_only" else "chunking"
+        stage_name = "entity_extraction" if staged_doc.mode == "entities_only" else "conversion"
         progress.stage = stage_name
         progress.status = "processing"
         progress.error = None
         progress.queue_position = 0
+
+        if doc_id:
+            _active_document_jobs[doc_id] = file_id
 
         _global_processing_state.update(
             {
@@ -484,7 +607,13 @@ async def _process_single_job(file_id: str) -> None:
         )
 
         if doc_id:
-            _mark_document_status(doc_id, "processing", stage_name, progress.progress_percentage)
+            _mark_document_status(
+                doc_id,
+                "processing",
+                stage_name,
+                progress.progress_percentage,
+                job_id=file_id,
+            )
 
         success = False
         try:
@@ -503,7 +632,13 @@ async def _process_single_job(file_id: str) -> None:
                     progress.stage = "entity_extraction"
                     _global_processing_state["current_stage"] = "entity_extraction"
                     if doc_id:
-                        _mark_document_status(doc_id, "processing", "entity_extraction", progress.progress_percentage)
+                        _mark_document_status(
+                            doc_id,
+                            "processing",
+                            "entity_extraction",
+                            progress.progress_percentage,
+                            job_id=file_id,
+                        )
                     success = await _run_entity_job(file_id, staged_doc, progress)
 
         finally:
@@ -516,15 +651,33 @@ async def _process_single_job(file_id: str) -> None:
                     progress.entity_progress = 1.0 if progress.entity_progress not in (None, 0.0) else progress.entity_progress
                 progress.progress_percentage = 100.0
                 if doc_id:
-                    _mark_document_status(doc_id, "completed", "completed", 100.0)
+                    _mark_document_status(
+                        doc_id,
+                        "completed",
+                        "completed",
+                        100.0,
+                        job_id=file_id,
+                    )
             else:
-                if progress.status != "error":
-                    progress.status = "error"
-                    if not progress.error:
-                        progress.error = "Processing failed"
-                progress.progress_percentage = min(progress.progress_percentage, 99.0)
-                if doc_id:
-                    _mark_document_status(doc_id, "error", progress.stage or "error", progress.progress_percentage)
+                if progress.status == "cancelled":
+                    progress.progress_percentage = min(progress.progress_percentage, 99.0)
+                else:
+                    if progress.status != "error":
+                        progress.status = "error"
+                        if not progress.error:
+                            progress.error = "Processing failed"
+                    progress.progress_percentage = min(progress.progress_percentage, 99.0)
+                    if doc_id:
+                        _mark_document_status(
+                            doc_id,
+                            "error",
+                            progress.stage or "error",
+                            progress.progress_percentage,
+                            job_id=file_id,
+                        )
+
+            if doc_id and _active_document_jobs.get(doc_id) == file_id:
+                _active_document_jobs.pop(doc_id, None)
 
             if staged_doc.mode in {"full", "chunks_only", "entities_only"}:
                 _staged_documents.pop(file_id, None)
@@ -541,7 +694,7 @@ async def _process_single_job(file_id: str) -> None:
                 }
             )
 
-            if progress.status in {"completed", "error"}:
+            if progress.status in {"completed", "error", "cancelled"}:
                 asyncio.create_task(_cleanup_progress_entry(file_id))
 
 
@@ -596,13 +749,21 @@ async def _run_chunk_job(
     ) -> None:
         if message:
             progress.message = message
-            if "classification" in message.lower():
+            msg_lower = message.lower()
+            if "conversion" in msg_lower or "converting" in msg_lower:
+                if "post" in msg_lower:
+                    progress.stage = "post_conversion"
+                else:
+                    progress.stage = "conversion"
+            elif "classification" in msg_lower:
                 progress.stage = "classification"
-            elif "summary" in message.lower() or "abstract" in message.lower():
+            elif "summary" in msg_lower or "abstract" in msg_lower:
                 progress.stage = "summarization"
-            elif "embedding" in message.lower():
+            elif "content_filter" in msg_lower or "filtering" in msg_lower:
+                progress.stage = "content_filtering"
+            elif "embedding" in msg_lower:
                 progress.stage = "embedding"
-            elif "chunking" in message.lower():
+            elif "chunking" in msg_lower:
                 progress.stage = "chunking"
         
         progress.chunks_processed = chunks_processed
@@ -689,7 +850,10 @@ async def _run_entity_job(
     ) -> None:
         progress.entity_state = state.value
         progress.stage = state.value  # Update stage for granular UI feedback
-        progress.entity_progress = _ENTITY_STAGE_FRACTIONS.get(state, fraction)
+        if fraction and fraction > 0:
+            progress.entity_progress = min(1.0, max(0.0, fraction))
+        else:
+            progress.entity_progress = _ENTITY_STAGE_FRACTIONS.get(state, 0.0)
         if info:
             progress.message = info
             # Parse chunk counts from info message like "Extracting entities (123/456 chunks)"
@@ -798,11 +962,13 @@ async def _enqueue_processing_jobs(file_ids: List[str]) -> List[str]:
                 enqueued.append(file_id)
 
             if staged_doc.document_id:
+                _active_document_jobs[staged_doc.document_id] = file_id
                 _mark_document_status(
                     staged_doc.document_id,
                     "queued",
                     "queued",
                     0.0,
+                    job_id=file_id,
                 )
 
         _update_queue_positions()
@@ -1100,6 +1266,43 @@ async def delete_document(document_id: str):
             except Exception as e:
                 logger.warning(f"Failed to delete physical file {file_path_to_delete}: {e}")
 
+        # CLEANUP IN-MEMORY STATE (Fix for UI persistence bug)
+        # Find file_id associated with this document_id
+        file_id_to_remove = None
+        for fid, doc in _staged_documents.items():
+            if doc.document_id == document_id:
+                file_id_to_remove = fid
+                break
+        
+        # If we didn't find it in staged docs, check progress map directly
+        if not file_id_to_remove:
+             for fid, prog in _progress_percentage.items():
+                if prog.document_id == document_id:
+                    file_id_to_remove = fid
+                    break
+
+        if file_id_to_remove:
+            _staged_documents.pop(file_id_to_remove, None)
+            _progress_percentage.pop(file_id_to_remove, None)
+            
+            # Remove from queue if present
+            async with _queue_lock:
+                if file_id_to_remove in _processing_queue:
+                    _processing_queue.remove(file_id_to_remove)
+            
+            # Reset global state if this was the current file
+            if _global_processing_state.get("current_file_id") == file_id_to_remove:
+                 _global_processing_state.update({
+                    "is_processing": False,
+                    "current_file_id": None,
+                    "current_document_id": None,
+                    "current_filename": None,
+                    "current_stage": None,
+                    "progress_percentage": 0.0,
+                })
+            
+            logger.info(f"Cleaned up in-memory state for file_id {file_id_to_remove}")
+
         try:
             get_response_cache().clear()
             try:
@@ -1192,6 +1395,24 @@ async def clear_database(request: ClearDatabaseRequest = ClearDatabaseRequest())
                 logger.info("Purged staged_uploads directory after clear_database")
         except Exception as e:
             logger.warning(f"Failed to purge staged_uploads: {e}")
+
+        # CLEANUP IN-MEMORY STATE (Fix for UI persistence bug)
+        if request.clearKnowledgeBase:
+            _staged_documents.clear()
+            _progress_percentage.clear()
+            async with _queue_lock:
+                _processing_queue.clear()
+            
+            _global_processing_state.update({
+                "is_processing": False,
+                "current_file_id": None,
+                "current_document_id": None,
+                "current_filename": None,
+                "current_stage": None,
+                "progress_percentage": 0.0,
+                "queue_length": 0
+            })
+            logger.info("Cleared in-memory processing state")
 
         try:
             get_response_cache().clear()
@@ -1405,7 +1626,13 @@ async def stage_document(file: UploadFile = File(...)):
 
         document_id = document_processor.compute_document_id(file_path)
 
+        await _cancel_existing_document_jobs(
+            document_id=document_id,
+            replacement_file_id=file_id,
+        )
+
         metadata = document_processor.build_metadata(file_path, filename)
+        
         metadata.setdefault("uploaded_at", time.time())
         metadata["original_filename"] = filename
         metadata["processing_status"] = "staged"
@@ -1436,6 +1663,10 @@ async def stage_document(file: UploadFile = File(...)):
 
         # Automatically enqueue for processing
         enqueued = await _enqueue_processing_jobs([file_id])
+        
+        # Issue #5: Background task to drain queue if not running
+        # if enqueued:
+        #    _ensure_worker_running()
         
         return StageDocumentResponse(
             file_id=file_id,
@@ -1594,6 +1825,13 @@ async def get_all_progress_percentage():
         List of processing progress
     """
     progress_list = list(_progress_percentage.values())
+    
+    # Sync stage from Neo4j for documents in early stages
+    # This ensures conversion, post_conversion, etc. are visible even if callback hasn't fired
+    for progress in progress_list:
+        if progress.status == "processing" and progress.document_id:
+            _sync_progress_from_neo4j(progress)
+    
     pending_progress = [
         progress
         for progress in progress_list
@@ -1645,7 +1883,7 @@ async def reprocess_document_chunks(document_id: str):
     )
     _staged_documents[file_id] = staged_doc
 
-    _mark_document_status(document_id, "queued", "queued", 0.0)
+    _mark_document_status(document_id, "queued", "queued", 0.0, job_id=file_id)
 
     enqueued = await _enqueue_processing_jobs([file_id])
 
@@ -1696,7 +1934,13 @@ async def reprocess_document_entities(document_id: str):
     )
     _staged_documents[file_id] = staged_doc
 
-    _mark_document_status(document_id, "queued", "entity_extraction", 0.0)
+    _mark_document_status(
+        document_id,
+        "queued",
+        "entity_extraction",
+        0.0,
+        job_id=file_id,
+    )
 
     enqueued = await _enqueue_processing_jobs([file_id])
 

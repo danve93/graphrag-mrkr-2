@@ -603,6 +603,17 @@
           "tooltip": "Select the conversion engine for ingestion. Marker is PDF-only (non-PDF files use built-in loaders). Docling supports more formats (PDF, Office, HTML, images, WebVTT, audio like MP3/WAV) and is used for all supported files when selected."
         },
         {
+          "key": "docling_max_pages",
+          "label": "Docling Max Pages",
+          "value": 50,
+          "options": null,
+          "min": 10,
+          "max": 500,
+          "step": 10,
+          "type": "slider",
+          "tooltip": "Maximum PDF pages for Docling conversion. PDFs larger than this automatically use Marker instead for stable processing. Docling excels at smaller documents with structure preservation; Marker handles large documents more reliably. A warning will be shown when Marker is used as fallback."
+        },
+        {
           "key": "marker_output_format",
           "label": "Marker Output Format",
           "value": "markdown",

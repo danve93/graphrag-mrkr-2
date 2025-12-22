@@ -98,16 +98,14 @@ export default function GraphView() {
     const ro = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect()
       // Subtract header/padding roughly
-      const availableHeight = typeof window !== 'undefined' ? Math.floor(window.innerHeight - rect.top - 32) : rect.height
-      const height = Math.max(200, Math.min(Math.floor(rect.height), availableHeight))
+      const height = Math.max(200, Math.floor(rect.height))
       setDimensions({ width: Math.max(200, Math.floor(rect.width)), height })
     })
     ro.observe(el)
 
     // Initial size
     const r = el.getBoundingClientRect()
-    const available = typeof window !== 'undefined' ? Math.floor(window.innerHeight - r.top - 32) : r.height
-    setDimensions({ width: Math.max(200, Math.floor(r.width)), height: Math.max(200, Math.min(Math.floor(r.height), available)) })
+    setDimensions({ width: Math.max(200, Math.floor(r.width)), height: Math.max(200, Math.floor(r.height)) })
 
     return () => ro.disconnect()
   }, [containerRef])

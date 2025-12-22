@@ -872,6 +872,24 @@ class Settings(BaseSettings):
         description="API key for Marker LLM service from environment (MARKER_LLM_API_KEY or OPENAI_API_KEY). Never store in config files."
     )
 
+    # Docling Large Document Handling
+    docling_max_pages_per_batch: int = Field(
+        default=200,
+        description="Maximum pages per batch when processing large PDFs with docling (prevents memory issues)"
+    )
+    docling_document_timeout: int = Field(
+        default=300,
+        description="Timeout in seconds for docling document processing (5 minutes default)"
+    )
+    docling_enable_batching: bool = Field(
+        default=True,
+        description="Enable page-range batching for large PDFs in docling"
+    )
+    docling_max_pages: int = Field(
+        default=50,
+        description="Maximum PDF pages for docling. Larger PDFs fall back to Marker for stable processing."
+    )
+
     # Issue #35: Configurable regex patterns for technical query detection
     technical_term_patterns: Dict[str, str] = Field(
         default_factory=lambda: {
@@ -1035,6 +1053,7 @@ def apply_rag_tuning_overrides(settings_instance: "Settings") -> None:
         "marker_strip_existing_ocr": "marker_strip_existing_ocr",
         "marker_pdftext_workers": "marker_pdftext_workers",
         "marker_llm_model": "marker_llm_model",
+        "docling_max_pages": "docling_max_pages",
         # === Retrieval Fusion & Ranking ===
         "enable_rrf": "enable_rrf",
         "rrf_k": "rrf_k",

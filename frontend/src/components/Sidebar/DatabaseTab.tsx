@@ -677,6 +677,24 @@ export default function DatabaseTab() {
     return null
   }
 
+  const formatStageLabel = (stage?: string | null) => {
+    const normalized = (stage || '').toLowerCase()
+    if (!normalized) return 'Processing'
+    if (normalized === 'conversion' || normalized === 'post_conversion') return 'Preparing document'
+    if (normalized === 'classification') return 'Classifying document'
+    if (normalized === 'content_filtering') return 'Filtering content'
+    if (normalized === 'chunking') return 'Chunking content'
+    if (normalized === 'summarization') return 'Generating abstract'
+    if (normalized === 'embedding') return 'Embedding'
+    if (normalized === 'entity_extraction') return 'Entity extraction'
+    if (normalized === 'llm_extraction') return 'LLM extraction'
+    if (normalized === 'embedding_generation') return 'Embedding entities'
+    if (normalized === 'database_operations') return 'Linking entities'
+    if (normalized === 'clustering') return 'Clustering'
+    if (normalized === 'validation') return 'Validating'
+    return stage || 'Processing'
+  }
+
   const filteredDocuments = getFilteredDocuments()
   const isManualReorder = sortMode === 'manual' && activeFolderId !== 'all'
   const reorderDisabled = isReordering || !!searchQuery.trim()
@@ -1081,7 +1099,7 @@ export default function DatabaseTab() {
                           <span className={isStuck ? 'text-red-600' : 'text-secondary-500 dark:text-secondary-400'}>
                             {isStuck ? 'Stuck - may need manual refresh' : (
                               <>
-                                {doc.processing_stage || 'Processing'}
+                                {formatStageLabel(doc.processing_stage)}
                                 {(doc.processing_stage === 'embedding' && (doc as any).chunk_progress > 0) ?
                                   ` ${Math.round((doc as any).chunk_progress * 100)}%` : ''
                                 }
